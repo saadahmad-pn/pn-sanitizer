@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "./scripts/check-prompt.py",
+        "matcher": "UserPromptSubmit",
+        "failClosed": true,
+        "timeout": 10
+      }
+    ]
+  }
+}

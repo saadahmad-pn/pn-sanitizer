@@ -1,0 +1,11 @@
+{
+  "name": "pn-sanitizer",
+  "description": "Snantizer: blocks disallowed prompts before they reach the agent, checked against a local prompt-check API via a beforeSubmitPrompt hook.",
+  "version": "0.1.0",
+  "author": {
+    "name": "saadahmad-pn"
+  },
+  "repository": "https://github.com/saadahmad-pn/pn-sanitizer",
+  "license": "MIT",
+  "keywords": ["hooks", "security", "prompt-guard"]
+}

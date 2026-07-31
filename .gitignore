@@ -1,0 +1,12 @@
+
+# Added by pn-plugin — generated, workspace-local agent context
+.cursor/rules/pn-plugin.mdc
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+*.egg-info/
+.pytest_cache/
+.venv/
+server/
