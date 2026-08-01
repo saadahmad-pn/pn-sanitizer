@@ -4,7 +4,7 @@
     "beforeSubmitPrompt": [
       {
         "command": "./scripts/check-prompt.py",
-        "matcher": "UserPromptSubmit",
+        "matcher": "",
         "failClosed": true,
         "timeout": 10
       }
