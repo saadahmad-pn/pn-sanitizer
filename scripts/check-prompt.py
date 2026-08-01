@@ -9,8 +9,8 @@ import urllib.error
 import urllib.request
 
 # TODO: staging hardcode — move to config/env once this is stable.
-BASE_URL = "https://pn.staging.paradigmnetworks.ai"
-ACCESS_TOKEN = "YOUR_ACCESS_TOKEN"
+BASE_URL = "https://4053-182-188-110-200.ngrok-free.app"
+ACCESS_TOKEN = "z4YVGVOvMK3qDSujRXCBPFy0JpEiit42nATXjQ2WDId6J8Bm8v"
 
 SCAN_URL = f"{BASE_URL}/api/v1/codedefense/scan"
 TIMEOUT_SECONDS = 5.0

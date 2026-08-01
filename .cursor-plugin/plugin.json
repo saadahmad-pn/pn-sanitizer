@@ -7,5 +7,6 @@
   },
   "repository": "https://github.com/saadahmad-pn/pn-sanitizer",
   "license": "MIT",
-  "keywords": ["hooks", "security", "prompt-guard"]
+  "keywords": ["hooks", "security", "prompt-guard"],
+  "hooks": "hooks/hooks.json"
 }
