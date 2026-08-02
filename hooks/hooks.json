@@ -8,6 +8,14 @@
         "failClosed": true,
         "timeout": 10
       }
+    ],
+    "preToolUse": [
+      {
+        "command": "./scripts/check-write.py",
+        "matcher": "Write",
+        "failClosed": true,
+        "timeout": 20
+      }
     ]
   }
 }
