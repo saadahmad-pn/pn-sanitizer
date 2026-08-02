@@ -3,17 +3,20 @@
 
 from __future__ import annotations
 
+import datetime
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
 # TODO: staging hardcode — move to config/env once this is stable.
-BASE_URL = "https://2c33-182-188-110-200.ngrok-free.app"
+BASE_URL = "https://81c0-182-188-110-200.ngrok-free.app"
 ACCESS_TOKEN = "qq7RGA3VmrbJ33HKmuC5139ZFMtoMaAOh6jGvOfCIJ6APV3qwk"
 
 SCAN_URL = f"{BASE_URL}/api/v1/codedefense/scan"
 TIMEOUT_SECONDS = 5.0
+DESKTOP_LOG_PATH = os.path.expanduser("~/Desktop/pn-sanitizer-hook.log")
 
 
 def allow(message: str | None = None) -> dict:
@@ -25,6 +28,30 @@ def allow(message: str | None = None) -> dict:
 
 def deny(message: str) -> dict:
     return {"continue": False, "user_message": message}
+
+
+def desktop_log(payload: dict, extra: dict) -> None:
+    try:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(DESKTOP_LOG_PATH, "a") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"hook: beforeSubmitPrompt  |  {now}\n")
+            f.write(f"{'='*60}\n")
+            f.write(json.dumps({**extra, "payload": payload}, indent=2))
+            f.write("\n")
+    except OSError:
+        pass
+
+
+def desktop_log_response(response: dict) -> None:
+    try:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(DESKTOP_LOG_PATH, "a") as f:
+            f.write(f"--- API Response  |  {now} ---\n")
+            f.write(json.dumps(response, indent=2))
+            f.write("\n")
+    except OSError:
+        pass
 
 
 def build_multipart_body(fields: dict) -> tuple[bytes, str]:
@@ -52,6 +79,8 @@ def main() -> int:
 
     prompt = payload.get("prompt") or ""
 
+    desktop_log(payload, {"prompt_len": len(prompt)})
+
     body, content_type = build_multipart_body({"text": prompt})
     request = urllib.request.Request(
         SCAN_URL,
@@ -66,14 +95,15 @@ def main() -> int:
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Server is reachable but returned an error status (e.g. 401, 500).
+        # Fail closed — this is a misconfiguration, not transient unavailability.
+        print(json.dumps(deny(f"CodeDefense API returned HTTP {exc.code}: {exc.reason}. Prompt blocked.")))
+        return 0
     except urllib.error.URLError as exc:
         # Server unreachable (connection refused, DNS failure, host down, etc.)
         # Fail open: don't block prompts just because the guard is offline.
-        print(
-            json.dumps(
-                allow(f"CodeDefense API unreachable ({SCAN_URL}): {exc.reason}. Allowing prompt.")
-            )
-        )
+        print(json.dumps(allow(f"CodeDefense API unreachable ({SCAN_URL}): {exc.reason}. Allowing prompt.")))
         return 0
     except TimeoutError:
         # Server didn't respond within TIMEOUT_SECONDS. Fail open.
@@ -83,6 +113,8 @@ def main() -> int:
         # Server responded but body wasn't valid JSON. Fail open.
         print(json.dumps(allow("CodeDefense API returned invalid JSON. Allowing prompt.")))
         return 0
+
+    desktop_log_response(result)
 
     action = result.get("action_to_take", "allow")
     message = result.get("message") or "Prompt blocked by CodeDefense."

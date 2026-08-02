@@ -3,7 +3,7 @@
   "hooks": {
     "beforeSubmitPrompt": [
       {
-        "command": "$CURSOR_PLUGIN_ROOT/scripts/check-prompt.py",
+        "command": "${CURSOR_PLUGIN_ROOT}/scripts/check-prompt.py",
         "matcher": "",
         "failClosed": true,
         "timeout": 10
@@ -11,8 +11,8 @@
     ],
     "preToolUse": [
       {
-        "command": "$CURSOR_PLUGIN_ROOT/scripts/check-write.py",
-        "matcher": "Write",
+        "command": "${CURSOR_PLUGIN_ROOT}/scripts/check-write.py",
+        "matcher": "Write|Edit",
         "failClosed": true,
         "timeout": 20
       }
