@@ -1,19 +1,26 @@
 {
   "hooks": {
-    "beforeSubmitPrompt": [
+    "BeforeSubmitPrompt": [
       {
-        "command": "${CURSOR_PLUGIN_ROOT}/scripts/check-prompt.py",
-        "matcher": "",
-        "failClosed": true,
-        "timeout": 10
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/check-prompt.py",
+            "timeout": 10
+          }
+        ]
       }
     ],
-    "preToolUse": [
+    "PreToolUse": [
       {
-        "command": "${CURSOR_PLUGIN_ROOT}/scripts/check-write.py",
         "matcher": "Write|Edit",
-        "failClosed": true,
-        "timeout": 20
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/check-write.py",
+            "timeout": 20
+          }
+        ]
       }
     ]
   }
