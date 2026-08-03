@@ -1,6 +1,6 @@
 {
   "hooks": {
-    "BeforeSubmitPrompt": [
+    "beforeSubmitPrompt": [
       {
         "hooks": [
           {
