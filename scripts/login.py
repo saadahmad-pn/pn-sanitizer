@@ -24,6 +24,8 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -159,6 +161,42 @@ def exchange_code(base_url: str, code: str, code_verifier: str, redirect_uri: st
     return parsed
 
 
+def open_browser(url: str) -> bool:
+    """Best-effort browser open, returns whether it likely succeeded.
+
+    Prefers the OS's native URL opener (`open` on macOS, `xdg-open` on Linux)
+    over Python's `webbrowser` module. On macOS, `webbrowser` drives specific
+    browsers via AppleScript/Apple Events (`osascript -e 'tell application
+    "Google Chrome" to ...'`), which requires an Automation permission grant
+    in System Settings that a non-interactive process (e.g. a script launched
+    by an agent's shell tool) has no way to obtain — it fails noisily with
+    errAETargetAddressNotPermitted (-10661) for every browser it tries. The
+    native opener just asks LaunchServices/xdg to open the URL with the
+    default handler, which doesn't send Apple Events to a named app and so
+    doesn't hit that restriction.
+    """
+    native_opener = (
+        "open" if sys.platform == "darwin" else "xdg-open" if sys.platform.startswith("linux") else None
+    )
+    if native_opener and shutil.which(native_opener):
+        try:
+            result = subprocess.run(
+                [native_opener, url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    try:
+        return webbrowser.open(url)
+    except Exception:
+        return False
+
+
 def normalize_base_url(base_url: str) -> str:
     parsed = urllib.parse.urlparse(base_url)
     if not parsed.scheme or not parsed.netloc:
@@ -199,7 +237,7 @@ def main() -> int:
 
     print(f"Opening your browser to log in to {base_url} ...")
     print(f"If it doesn't open automatically, visit:\n  {authorize_url}")
-    opened = webbrowser.open(authorize_url)
+    opened = open_browser(authorize_url)
     if not opened:
         print("(Could not auto-open a browser — use the URL above.)")
 
