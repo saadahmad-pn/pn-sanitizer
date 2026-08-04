@@ -36,6 +36,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pn_config
 
+# When stdout isn't a TTY (always true when a script is launched by an agent's
+# shell tool rather than typed at an interactive prompt), CPython fully
+# buffers stdout instead of line-buffering it. Without this, the "visit this
+# URL" print below can sit in the buffer — invisible to whoever is watching
+# the command's output — until the process exits or times out, long after
+# it's useful. Force line buffering so every print() is flushed immediately,
+# regardless of how this script is invoked (no reliance on the caller passing
+# `-u` or setting `PYTHONUNBUFFERED`).
+sys.stdout.reconfigure(line_buffering=True)
+
 CALLBACK_TIMEOUT_SECONDS = 120.0
 TOKEN_TIMEOUT_SECONDS = 15.0
 
