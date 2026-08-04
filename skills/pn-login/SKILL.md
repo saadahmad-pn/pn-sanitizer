@@ -37,13 +37,21 @@ description: Log this workspace in to PN (Paradigm Networks) so CodeDefense-gate
    If this prints `CONFIGURED`, PN is already set up — tell the user they're
    already logged in and stop here.
 
-2. **Ask the user for their PN base URL**, conversationally, e.g.:
-   > "I need your PN base URL to log in — something like
-   > `https://acme.paradigmnetworks.ai`. What's yours?"
+2. **Ask the user for their PN base URL using the `AskQuestion` tool**,
+   not a plain chat message — its built-in "Other" choice lets the user type
+   their actual URL directly rather than replying in free text:
+   - prompt: "What's your PN base URL? (e.g. `https://acme.paradigmnetworks.ai`)"
+   - options: something like `"Skip PN login for now"` and
+     `"I think I'm already logged in — recheck"` (real options besides
+     "Other", since `AskQuestion` requires at least two)
+   - the user's own base URL comes back through the automatic "Other" free-text
+     option — that's the expected path for most users, since there's no way
+     to offer their actual org URL as a canned choice.
 
 3. **Validate the answer looks like a URL** before proceeding: it should
    start with `http://` or `https://` and have a host. If it doesn't, ask
-   again rather than guessing what they meant.
+   again (via `AskQuestion`, same as step 2) rather than guessing what they
+   meant.
 
 4. **Locate `login.py`.** Unlike the check above, running the login script
    does require its actual path, since it needs `pn_config.py` next to it.

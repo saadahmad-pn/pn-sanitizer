@@ -37,10 +37,17 @@ if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNA
   needed. (This only checks presence, not validity — an expired token that
   fails to refresh is already handled by `check-prompt.py`/`check-response.py`
   failing open/closed on their own, so don't try to validate the token here.)
-- `NOT_CONFIGURED` → PN is **not** configured. Ask the user for their PN base
-  URL (e.g. `https://acme.paradigmnetworks.ai`) before proceeding with their
-  request, then run the `pn-login` skill to log in. Do not invent, guess, or
-  reuse a base URL from another project or example.
+- `NOT_CONFIGURED` → PN is **not** configured. Ask for the base URL using the
+  `AskQuestion` tool rather than a plain chat question — the built-in "Other"
+  choice lets the user type their actual URL directly instead of replying in
+  free text, e.g.:
+  - prompt: "What's your PN base URL? (e.g. `https://acme.paradigmnetworks.ai`)"
+  - options: `"Skip PN login for now"`, `"I think I'm already logged in — recheck"`
+  - the user's own URL comes back via the automatic "Other" option; do not
+    invent, guess, or reuse a base URL from another project or example.
+
+  Once you have it, proceed with their request only after running the
+  `pn-login` skill to log in (unless they chose to skip).
 
 Do not treat an allowed prompt or a "CodeDefense API unreachable" message as
 proof that PN is configured — `check-prompt.py` and `check-response.py` fail
