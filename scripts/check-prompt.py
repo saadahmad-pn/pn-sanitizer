@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
-# TODO: staging hardcode — move to config/env once this is stable.
-BASE_URL = "https://2c33-182-188-110-200.ngrok-free.app"
-ACCESS_TOKEN = "qq7RGA3VmrbJ33HKmuC5139ZFMtoMaAOh6jGvOfCIJ6APV3qwk"
+import pn_config
 
-SCAN_URL = f"{BASE_URL}/api/v1/codedefense/scan"
+# SNANTIZER_SCAN_URL, if set, overrides the computed scan URL outright.
+SCAN_URL_OVERRIDE = os.environ.get("SNANTIZER_SCAN_URL")
 TIMEOUT_SECONDS = 5.0
 
 
@@ -52,13 +52,31 @@ def main() -> int:
 
     prompt = payload.get("prompt") or ""
 
+    config = pn_config.resolve_config()
+    if config is None:
+        # Not configured (no env override, no valid stored login, or a
+        # refresh failed). Treat this exactly like "scanner unreachable":
+        # fail open so a not-yet-logged-in developer isn't blocked.
+        print(
+            json.dumps(
+                allow(
+                    "PN is not configured (no login found). Allowing prompt — run the "
+                    "pn-login skill to authenticate CodeDefense."
+                )
+            )
+        )
+        return 0
+
+    base_url, access_token = config
+    scan_url = SCAN_URL_OVERRIDE or f"{base_url}/api/v1/codedefense/scan"
+
     body, content_type = build_multipart_body({"text": prompt})
     request = urllib.request.Request(
-        SCAN_URL,
+        scan_url,
         data=body,
         headers={
             "Content-Type": content_type,
-            "Authorization": f"Bearer {ACCESS_TOKEN}",
+            "Authorization": f"Bearer {access_token}",
         },
         method="POST",
     )
@@ -71,7 +89,7 @@ def main() -> int:
         # Fail open: don't block prompts just because the guard is offline.
         print(
             json.dumps(
-                allow(f"CodeDefense API unreachable ({SCAN_URL}): {exc.reason}. Allowing prompt.")
+                allow(f"CodeDefense API unreachable ({scan_url}): {exc.reason}. Allowing prompt.")
             )
         )
         return 0

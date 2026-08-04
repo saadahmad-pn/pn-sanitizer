@@ -13,9 +13,10 @@ import sys
 import urllib.error
 import urllib.request
 
-BASE_URL = os.environ.get("SNANTIZER_BASE_URL", "https://pn.staging.paradigmnetworks.ai")
-ACCESS_TOKEN = os.environ.get("SNANTIZER_TOKEN", "")
-SCAN_URL = os.environ.get("SNANTIZER_SCAN_URL") or f"{BASE_URL}/api/v1/codedefense/scan"
+import pn_config
+
+# SNANTIZER_SCAN_URL, if set, overrides the computed scan URL outright.
+SCAN_URL_OVERRIDE = os.environ.get("SNANTIZER_SCAN_URL")
 TIMEOUT_SECONDS = float(os.environ.get("SNANTIZER_TIMEOUT", "5"))
 TRANSCRIPT_BYTES = int(os.environ.get("SNANTIZER_TRANSCRIPT_BYTES", "4000"))
 
@@ -91,15 +92,15 @@ def read_transcript(path: str) -> str:
         return ""
 
 
-def scan(text: str) -> tuple[str, str]:
+def scan(text: str, scan_url: str, access_token: str) -> tuple[str, str]:
     """Returns (action_to_take, message). Raises on transport failure."""
     body, content_type = build_multipart_body({"text": text})
     request = urllib.request.Request(
-        SCAN_URL,
+        scan_url,
         data=body,
         headers={
             "Content-Type": content_type,
-            "Authorization": f"Bearer {ACCESS_TOKEN}",
+            "Authorization": f"Bearer {access_token}",
         },
         method="POST",
     )
@@ -134,8 +135,21 @@ def main() -> int:
         print(json.dumps(allow()))
         return 0
 
+    config = pn_config.resolve_config()
+    if config is None:
+        # Not configured (no env override, no valid stored login, or a
+        # refresh failed). Route through the same on_scan_failure path as a
+        # genuinely unreachable scanner, since FAILURE_MODE already encodes
+        # the right open/closed policy for "no verdict available".
+        log("[preToolUse] NOT CONFIGURED — no env override or valid login found")
+        print(json.dumps(on_scan_failure("PN not configured — run the pn-login skill")))
+        return 0
+
+    base_url, access_token = config
+    scan_url = SCAN_URL_OVERRIDE or f"{base_url}/api/v1/codedefense/scan"
+
     try:
-        action, message = scan(scan_text)
+        action, message = scan(scan_text, scan_url, access_token)
     except urllib.error.HTTPError as exc:
         # 401/403/429/5xx. A misconfigured or rejecting scanner must not look
         # identical to a clean scan.
