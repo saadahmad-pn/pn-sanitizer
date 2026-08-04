@@ -1,0 +1,48 @@
+---
+description: Verify PN login before the first prompt in a session relies on CodeDefense gating
+alwaysApply: true
+---
+
+# PN (Paradigm Networks) login check
+
+This plugin (`pn-sanitizer`) gates every prompt and tool call through CodeDefense,
+which requires this workspace to be logged in to PN. Two other mechanisms try to
+surface a missing login, but **neither reliably reaches you (the agent) on the
+first message of a session**, so this rule is the backstop:
+
+- `check-session.py` (`sessionStart`) injects context asking you to request the
+  base URL, but `sessionStart` is fire-and-forget — the agent loop doesn't wait
+  for or enforce it, so it can race with (or miss) the user's first message.
+- `check-prompt.py` (`beforeSubmitPrompt`) only supports `continue` /
+  `user_message` output fields. `user_message` is a UI-level notice to the
+  human when a prompt is blocked — it is never injected into your context, so
+  an "allowed" prompt with PN unconfigured gives you no signal to act on.
+
+## What to do
+
+On the **first user message of a session**, before doing anything else, check
+whether PN is already configured:
+
+```bash
+python3 -c "import sys; sys.path.insert(0, '<plugin-root>/scripts'); import pn_config; print(pn_config.get_valid_access_token())"
+```
+
+(substitute the actual plugin root path — the directory containing this
+plugin's `scripts/` folder).
+
+- If it prints a tuple (not `None`), PN is already configured. Proceed with
+  the user's request normally — no further action needed.
+- If it prints `None`, PN is **not** configured. Ask the user for their PN
+  base URL (e.g. `https://acme.paradigmnetworks.ai`) before proceeding with
+  their request, then run the `pn-login` skill to log in. Do not invent,
+  guess, or reuse a base URL from another project or example.
+
+Do not treat an allowed prompt or a "CodeDefense API unreachable" message as
+proof that PN is configured — `check-prompt.py` and `check-response.py` fail
+open on purpose, so prompts and tool calls can proceed even when there's no
+login at all.
+
+You only need to do this once per session — after you've confirmed PN is
+configured (or completed a login), don't repeat the check on later messages
+unless the user asks to log in again or a hook message reports the login
+expired.

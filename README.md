@@ -23,14 +23,16 @@ pn-sanitizer/
 ├── skills/
 │   └── pn-login/
 │       └── SKILL.md       # tells the agent how to run login.py
+├── rules/
+│   └── pn-login-check.mdc # always-on backstop that asks for the base URL
 └── server/                 # companion FastAPI service (not installed by the plugin)
     ├── main.py
     └── requirements.txt
 ```
 
-Only `hooks/`, `scripts/`, and `skills/` are loaded when the plugin is
-installed. `server/` is a companion service you run separately — the hook has nothing to
-check prompts against without it.
+Only `hooks/`, `scripts/`, `skills/`, and `rules/` are loaded when the plugin
+is installed. `server/` is a companion service you run separately — the hook
+has nothing to check prompts against without it.
 
 ## 1. Run the check API
 
@@ -78,7 +80,11 @@ login instead of any hardcoded or manually-pasted token:
 1. Open a chat in Cursor. The `sessionStart` hook (`scripts/check-session.py`)
    checks whether this machine already has a valid stored login
    (`~/.pn/credentials.json`). If not, it tells the agent to ask you for your
-   PN base URL.
+   PN base URL. `sessionStart` is fire-and-forget per Cursor's hooks contract
+   (it can race with — or miss — your very first message), and
+   `beforeSubmitPrompt` has no way to inject context into the agent at all,
+   so `rules/pn-login-check.mdc` (always-on) is the reliable backstop that
+   actually guarantees the agent checks and asks on turn one.
 2. Give the agent your PN base URL, e.g. `https://acme.paradigmnetworks.ai`.
    The agent runs the `pn-login` skill, which invokes:
    ```bash

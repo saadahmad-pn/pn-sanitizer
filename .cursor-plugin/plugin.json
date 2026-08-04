@@ -9,5 +9,6 @@
   "license": "MIT",
   "keywords": ["hooks", "security", "prompt-guard"],
   "hooks": "hooks/hooks.json",
-  "skills": "skills/*/SKILL.md"
+  "skills": "skills/*/SKILL.md",
+  "rules": "rules/*.mdc"
 }
