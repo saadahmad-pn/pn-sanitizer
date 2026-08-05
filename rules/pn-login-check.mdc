@@ -37,10 +37,12 @@ if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNA
   needed. (This only checks presence, not validity — an expired token that
   fails to refresh is already handled by `check-prompt.py`/`check-response.py`
   failing open/closed on their own, so don't try to validate the token here.)
-- `NOT_CONFIGURED` → PN is **not** configured. Ask for the base URL using the
-  `AskQuestion` tool rather than a plain chat question — the built-in "Other"
-  choice lets the user type their actual URL directly instead of replying in
-  free text, e.g.:
+- `NOT_CONFIGURED` → PN is **not** configured. You must invoke the
+  `AskQuestion` tool itself to ask for the base URL — actually call the tool,
+  do not just type the prompt and options into a chat message as text or a
+  bulleted list. Writing it out in prose produces none of the clickable UI or
+  free-text "Other" field; it just looks like a plain question to the user,
+  which is exactly what this is meant to avoid. Call it with:
   - prompt: "What's your PN base URL? (e.g. `https://acme.paradigmnetworks.ai`)"
   - options: `"I'm not sure what my base URL is"`, `"I think I'm already logged in — recheck"`
   - the user's own URL comes back via the automatic "Other" option; do not

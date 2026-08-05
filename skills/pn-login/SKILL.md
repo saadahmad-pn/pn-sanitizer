@@ -44,9 +44,14 @@ if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNA
 
 ### 2. Get the base URL
 
-Ask with the `AskQuestion` tool rather than a plain chat message — its
-built-in "Other" choice lets the user type their URL directly instead of
-answering in free text:
+**Actually invoke the `AskQuestion` tool for this — do not ask in a plain
+chat message.** Typing the prompt and options into your reply as text (even
+as a bulleted list) is not the same thing: it skips the tool entirely, so the
+user just sees a paragraph instead of clickable options with a free-text
+"Other" field to type their URL into. If you're not making a tool call here,
+you're doing it wrong.
+
+Call `AskQuestion` with:
 
 - prompt: `What's your PN base URL? (e.g. https://acme.paradigmnetworks.ai)`
 - options: `I'm not sure what my base URL is` and
@@ -56,9 +61,10 @@ answering in free text:
 
 Validate the answer once it comes back: it should start with `http://` or
 `https://` and include a host. If it clearly doesn't, ask exactly one
-follow-up to correct it. If it still doesn't parse after that, proceed with
-it anyway — `login.py` validates the URL itself and will report a clear
-error if it's truly malformed. Don't keep re-asking past that point.
+follow-up (also via `AskQuestion`) to correct it. If it still doesn't parse
+after that, proceed with it anyway — `login.py` validates the URL itself and
+will report a clear error if it's truly malformed. Don't keep re-asking past
+that point.
 
 ### 3. Locate `login.py`
 
