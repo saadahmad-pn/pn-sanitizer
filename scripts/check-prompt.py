@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 # TODO: staging hardcode — move to config/env once this is stable.
-BASE_URL = "https://81c0-182-188-110-200.ngrok-free.app"
+BASE_URL = "https://ed4d-182-188-110-200.ngrok-free.app"
 ACCESS_TOKEN = "qq7RGA3VmrbJ33HKmuC5139ZFMtoMaAOh6jGvOfCIJ6APV3qwk"
 
 SCAN_URL = f"{BASE_URL}/api/v1/codedefense/scan"
