@@ -14,87 +14,96 @@ description: Log this workspace in to PN (Paradigm Networks) so CodeDefense-gate
 - The user asks to log in, re-authenticate, or switch to a different PN
   organization.
 
-## What NOT to do
+## What not to do
 
-- Do not invent, guess, or reuse a base URL from another project, example, or
+- Don't invent, guess, or reuse a base URL from another project, example, or
   training data. The base URL (e.g. `https://acme.paradigmnetworks.ai`) is
   specific to the user's organization and **must come from the user**.
-- Do not fabricate a successful login. Only report success if the CLI script
-  below exits 0.
-- Do not paste or ask for access tokens directly — this flow is a browser
-  login, not manual token entry.
+- Don't fabricate a successful login. Only report success once `login.py`
+  actually exits `0`.
+- Don't ask for or accept an access token directly — this is a browser login,
+  not manual token entry.
+- Don't loop the base-URL question more than once. Validate, correct at most
+  one mistake, then move on (see step 2).
 
 ## Workflow
 
-1. **Check if this is actually needed.** If you already know login is
-   missing (from a hook message), skip straight to step 2. Otherwise,
-   sanity-check with a plain shell command — don't try to locate this
-   plugin's own `scripts/` directory for this check, there's no environment
-   variable that tells you where the plugin is installed:
-   ```bash
-   if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
-   ```
-   If this prints `CONFIGURED`, PN is already set up — tell the user they're
-   already logged in and stop here.
+### 1. Check whether login is actually needed
 
-2. **Ask the user for their PN base URL using the `AskQuestion` tool**,
-   not a plain chat message — its built-in "Other" choice lets the user type
-   their actual URL directly rather than replying in free text:
-   - prompt: "What's your PN base URL? (e.g. `https://acme.paradigmnetworks.ai`)"
-   - options: something like `"Skip PN login for now"` and
-     `"I think I'm already logged in — recheck"` (real options besides
-     "Other", since `AskQuestion` requires at least two)
-   - the user's own base URL comes back through the automatic "Other" free-text
-     option — that's the expected path for most users, since there's no way
-     to offer their actual org URL as a canned choice.
+Skip this if you already know login is missing (e.g. from a hook message).
+Otherwise, confirm with a plain shell check — don't try to locate this
+plugin's own `scripts/` directory for this, there's no environment variable
+that tells you where the plugin is installed, so path-guessing isn't
+reliable:
 
-3. **Validate the answer looks like a URL** before proceeding: it should
-   start with `http://` or `https://` and have a host. If it doesn't, ask
-   again (via `AskQuestion`, same as step 2) rather than guessing what they
-   meant.
+```bash
+if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
+```
 
-4. **Locate `login.py`.** Unlike the check above, running the login script
-   does require its actual path, since it needs `pn_config.py` next to it.
-   Find it rather than guessing:
-   ```bash
-   find ~/.cursor/plugins -path "*/pn-sanitizer/scripts/login.py" 2>/dev/null
-   ```
-   (covers both marketplace installs under `~/.cursor/plugins/cache/` and
-   local installs under `~/.cursor/plugins/local/`). If more than one match
-   comes back, prefer the one under `local/` if present.
+`CONFIGURED` → tell the user they're already logged in and stop here.
 
-5. **Run the login script in the background** — do not block the whole
-   turn on it, since it can take up to 2 minutes and you need to relay the
-   authorize URL to the user right away:
-   ```bash
-   python3 <path-from-step-4> --base-url <the-url-the-user-gave-you>
-   ```
-   Launch this as a backgrounded/non-blocking command, then read its output
-   after a couple of seconds — it prints the authorize URL immediately (it's
-   line-buffered specifically so this works even when not attached to a
-   TTY).
+### 2. Get the base URL
 
-   **Do not assume the browser will auto-open.** In a sandboxed/headless
-   shell environment (which is what's running this command), automatic
-   browser launching commonly fails — on macOS this shows up as `osascript`
-   / `errAETargetAddressNotPermitted (-10661)` noise, which is expected and
-   harmless, not something to debug. Treat manual opening as the normal
-   path, not a fallback: as soon as you see the authorize URL in the output,
-   give it to the user immediately and ask them to open it now, rather than
-   waiting to see whether auto-open worked first.
+Ask with the `AskQuestion` tool rather than a plain chat message — its
+built-in "Other" choice lets the user type their URL directly instead of
+answering in free text:
 
-   Each run binds a fresh local port and generates a new URL/state — a URL
-   from a previous (timed-out or killed) run will not work. If you have to
-   retry, always relay the newest URL, not one from an earlier attempt.
+- prompt: `What's your PN base URL? (e.g. https://acme.paradigmnetworks.ai)`
+- options: `I'm not sure what my base URL is` and
+  `I think I'm already logged in — recheck`
+  (two real, non-"Other" options are required by the tool; the user's actual
+  URL comes back through "Other", which is the expected path for most users)
 
-6. **Wait for the result** (up to ~2 minutes) and check the script's actual
-   exit code — don't infer success from the user saying "I logged in" alone,
-   since the local callback server has to actually receive the redirect.
+Validate the answer once it comes back: it should start with `http://` or
+`https://` and include a host. If it clearly doesn't, ask exactly one
+follow-up to correct it. If it still doesn't parse after that, proceed with
+it anyway — `login.py` validates the URL itself and will report a clear
+error if it's truly malformed. Don't keep re-asking past that point.
 
-7. **Relay the outcome in plain language**:
-   - Exit code 0 → tell the user they're logged in and PN hooks are now
-     active; no further action needed.
-   - Non-zero exit → tell the user login failed, share the error message the
-     script printed (timeout, denied, network error, etc.), and offer to
-     retry with a fresh run (new URL) — they'll need to click through
-     promptly this time, since the window is fixed at ~2 minutes per run.
+### 3. Locate `login.py`
+
+Running the script (unlike the check in step 1) needs its real path, since
+it needs `pn_config.py` next to it:
+
+```bash
+find ~/.cursor/plugins -path "*/pn-sanitizer/scripts/login.py" 2>/dev/null
+```
+
+This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
+installs (`~/.cursor/plugins/local/`). If both come back, prefer `local/`.
+
+### 4. Run the login script
+
+```bash
+python3 <path-from-step-3> --base-url <the-url-from-step-2>
+```
+
+Run it in the background rather than blocking the turn on it — it can take
+up to a minute, and you need to relay its output as soon as it appears
+(`login.py` flushes its output immediately, so read it after a couple of
+seconds rather than waiting for the process to exit).
+
+The script already knows whether it's running in a sandboxed agent shell and
+adjusts itself accordingly — it will either open a browser for the user or
+print a link for them to open manually, and tell you which. Just relay
+whatever it printed verbatim; don't add your own caveats about browsers
+possibly failing to open, and don't try alternate ways to launch a browser
+yourself.
+
+Each run binds a fresh local port and generates a new URL — a URL from an
+earlier (timed-out or killed) run will not work. If you retry, always relay
+the newest URL.
+
+### 5. Wait for the result
+
+Give it up to a minute, then check the script's actual exit code — don't
+infer success just because the user says "done," since the local callback
+server has to actually receive the redirect.
+
+### 6. Relay the outcome
+
+- Exit `0` → PN is configured and the CodeDefense-gated hooks are active. No
+  further action needed.
+- Non-zero → share the error the script printed (timeout, denied, network
+  error, etc.) and offer to retry with a fresh run. If retrying, remind the
+  user they'll need to click through within the one-minute window.

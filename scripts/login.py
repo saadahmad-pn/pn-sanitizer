@@ -46,7 +46,7 @@ import pn_config
 # `-u` or setting `PYTHONUNBUFFERED`).
 sys.stdout.reconfigure(line_buffering=True)
 
-CALLBACK_TIMEOUT_SECONDS = 120.0
+CALLBACK_TIMEOUT_SECONDS = 60.0
 TOKEN_TIMEOUT_SECONDS = 15.0
 
 SUCCESS_HTML = b"""<!doctype html>
@@ -171,20 +171,37 @@ def exchange_code(base_url: str, code: str, code_verifier: str, redirect_uri: st
     return parsed
 
 
+def running_in_cursor_agent_sandbox() -> bool:
+    """True when this script is running inside Cursor's sandboxed agent shell.
+
+    Cursor sets `CURSOR_AGENT=1` for every command it runs on an agent's
+    behalf, and `CURSOR_SANDBOX` (e.g. `seatbelt` on macOS) when that command
+    is additionally sandboxed. That sandbox blocks the IPC a GUI browser
+    launch needs — Apple Events for AppleScript-driven opens, and the
+    LaunchServices call behind the plain `open`/`xdg-open` commands both fail
+    the same way (`errAETargetAddressNotPermitted`, -10661) regardless of
+    which API is used. There's no in-process way to detect this other than
+    trying and having it fail, so we check these env vars instead and skip
+    straight to the manual-open path — it's the same outcome either way, just
+    without the noise and the wasted round trip.
+    """
+    return bool(os.environ.get("CURSOR_SANDBOX")) or os.environ.get("CURSOR_AGENT") == "1"
+
+
 def open_browser(url: str) -> bool:
     """Best-effort browser open, returns whether it likely succeeded.
 
-    Prefers the OS's native URL opener (`open` on macOS, `xdg-open` on Linux)
-    over Python's `webbrowser` module. On macOS, `webbrowser` drives specific
-    browsers via AppleScript/Apple Events (`osascript -e 'tell application
-    "Google Chrome" to ...'`), which requires an Automation permission grant
-    in System Settings that a non-interactive process (e.g. a script launched
-    by an agent's shell tool) has no way to obtain — it fails noisily with
-    errAETargetAddressNotPermitted (-10661) for every browser it tries. The
-    native opener just asks LaunchServices/xdg to open the URL with the
-    default handler, which doesn't send Apple Events to a named app and so
-    doesn't hit that restriction.
+    Skips straight to `False` inside Cursor's agent sandbox (see
+    `running_in_cursor_agent_sandbox`) rather than attempting and failing.
+    Otherwise prefers the OS's native URL opener (`open` on macOS, `xdg-open`
+    on Linux) — which just asks LaunchServices/xdg to open the URL with the
+    default handler — over Python's `webbrowser` module, which drives
+    specific browsers via AppleScript/Apple Events and requires an Automation
+    permission grant that a non-interactive process has no way to obtain.
     """
+    if running_in_cursor_agent_sandbox():
+        return False
+
     native_opener = (
         "open" if sys.platform == "darwin" else "xdg-open" if sys.platform.startswith("linux") else None
     )
@@ -245,11 +262,15 @@ def main() -> int:
         )
     )
 
-    print(f"Opening your browser to log in to {base_url} ...")
-    print(f"If it doesn't open automatically, visit:\n  {authorize_url}")
-    opened = open_browser(authorize_url)
-    if not opened:
-        print("(Could not auto-open a browser — use the URL above.)")
+    if running_in_cursor_agent_sandbox():
+        print(f"Open this URL to log in to {base_url}:")
+        print(f"  {authorize_url}")
+    elif open_browser(authorize_url):
+        print(f"Opened your browser to log in to {base_url}.")
+    else:
+        print(f"Couldn't open a browser automatically — open this URL to log in to {base_url}:")
+        print(f"  {authorize_url}")
+    print(f"Waiting up to {int(CALLBACK_TIMEOUT_SECONDS)}s for you to complete login...")
 
     deadline = time.monotonic() + CALLBACK_TIMEOUT_SECONDS
     result = wait_for_callback(server, deadline)
