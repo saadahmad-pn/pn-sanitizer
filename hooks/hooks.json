@@ -1,6 +1,14 @@
 {
   "version": 1,
   "hooks": {
+    "sessionStart": [
+      {
+        "command": "./scripts/check-session.py",
+        "matcher": "",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
     "beforeSubmitPrompt": [
       {
         "command": "python ${CURSOR_PLUGIN_ROOT}/scripts/check-prompt.py",
