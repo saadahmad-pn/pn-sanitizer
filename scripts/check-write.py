@@ -13,24 +13,23 @@ import datetime
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.request
 
-# TODO: staging hardcode — move to config/env once this is stable.
-BASE_URL = "https://ed4d-182-188-110-200.ngrok-free.app"
-ACCESS_TOKEN = "qq7RGA3VmrbJ33HKmuC5139ZFMtoMaAOh6jGvOfCIJ6APV3qwk"
+import pn_config
 
-SCAN_URL = f"{BASE_URL}/api/v1/codedefense/scan"
-TIMEOUT_SECONDS = 17.0  # 3s headroom before hooks.json timeout=20 fires (failClosed)
+# SNANTIZER_SCAN_URL, if set, overrides the computed scan URL outright.
+SCAN_URL_OVERRIDE = os.environ.get("SNANTIZER_SCAN_URL")
+TIMEOUT_SECONDS = float(os.environ.get("SNANTIZER_TIMEOUT", "5"))
+TRANSCRIPT_BYTES = int(os.environ.get("SNANTIZER_TRANSCRIPT_BYTES", "4000"))
+
+# When the scanner cannot give a verdict, do we allow or deny?
+# "open" allows writes if API is unreachable (availability-first).
+# "closed" denies writes if API unreachable (governance-first, more secure).
+FAILURE_MODE = os.environ.get("SNANTIZER_FAILURE_MODE", "closed").lower()
 
 AUDIT_LOG_PATH = os.path.expanduser("~/.pn-sanitizer/audit.jsonl")
 DESKTOP_LOG_PATH = os.path.expanduser("~/Desktop/pn-sanitizer-hook.log")
-TRANSCRIPT_BYTES = 4000
-
-# If the scan API is unreachable/times out/returns bad JSON: True = allow the
-# write through (loudly flagged as unscanned). False = deny the write outright.
-FAIL_OPEN = True
 
 STOP_INSTRUCTION = (
     "A security scan blocked this write due to a detected policy violation. "
@@ -86,7 +85,7 @@ def build_multipart_body(fields: dict) -> tuple[bytes, str]:
 def audit_log(entry: dict) -> None:
     try:
         os.makedirs(os.path.dirname(AUDIT_LOG_PATH), exist_ok=True)
-        entry = {"timestamp": time.time(), **entry}
+        entry = {"timestamp": datetime.datetime.now().isoformat(), **entry}
         with open(AUDIT_LOG_PATH, "a") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError:
@@ -115,6 +114,15 @@ def desktop_log_response(response: dict) -> None:
             f.write("\n")
     except OSError:
         pass
+
+
+def on_scan_failure(reason: str) -> dict:
+    if FAILURE_MODE == "open":
+        return allow(f"CodeDefense unavailable ({reason}). Write allowed WITHOUT a security scan.")
+    return deny(
+        f"CodeDefense unavailable ({reason}). Write blocked.",
+        f"The security scan API is unavailable ({reason}). Do not retry this write."
+    )
 
 
 def main() -> int:
@@ -148,13 +156,23 @@ def main() -> int:
         print(json.dumps(allow()))
         return 0
 
+    config = pn_config.resolve_config()
+    if config is None:
+        reason = "PN not configured — run the pn-login skill"
+        audit_log({"file_path": file_path, "decision": "deny" if FAILURE_MODE == "closed" else "allow", "reason": "not_configured", "detail": reason})
+        print(json.dumps(on_scan_failure(reason)))
+        return 0
+
+    base_url, access_token = config
+    scan_url = SCAN_URL_OVERRIDE or f"{base_url}/api/v1/codedefense/scan"
+
     body, content_type = build_multipart_body({"text": scan_text})
     request = urllib.request.Request(
-        SCAN_URL,
+        scan_url,
         data=body,
         headers={
             "Content-Type": content_type,
-            "Authorization": f"Bearer {ACCESS_TOKEN}",
+            "Authorization": f"Bearer {access_token}",
         },
         method="POST",
     )
@@ -163,38 +181,38 @@ def main() -> int:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        # Server is reachable but returned an error status (e.g. 401, 500).
-        # Treat as fail-closed regardless of FAIL_OPEN \u2014 this is a misconfiguration,
-        # not transient unavailability.
         reason = f"HTTP {exc.code} {exc.reason}"
-        msg = f"\u26a0\ufe0f CodeDefense API returned {reason} \u2014 write blocked until the API error is resolved."
+        msg = f"CodeDefense API returned {reason} — write blocked until the API error is resolved."
         audit_log({"file_path": file_path, "decision": "deny", "reason": "http_error", "detail": reason})
         print(json.dumps(deny(msg, f"{msg} Do not retry. Report this API error to the user.")))
         return 0
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        reason = getattr(exc, "reason", None) or str(exc) or "unknown error"
-        warning = f"\u26a0\ufe0f CodeDefense API unreachable ({reason}). Write allowed WITHOUT a security scan."
-        audit_log(
-            {
-                "file_path": file_path,
-                "decision": "allow" if FAIL_OPEN else "deny",
-                "reason": "api_error",
-                "detail": str(reason),
-            }
-        )
-        if FAIL_OPEN:
-            print(json.dumps(allow(warning)))
-        else:
-            print(
-                json.dumps(
-                    deny(
-                        warning.replace("allowed WITHOUT", "denied — no"),
-                        "The security scan API is unreachable and this workspace is "
-                        "configured to fail closed. Stop this task and report the "
-                        "API error to the user; do not retry.",
-                    )
-                )
-            )
+    except urllib.error.URLError as exc:
+        reason = str(getattr(exc, "reason", None) or exc) or "connection failed"
+        audit_log({
+            "file_path": file_path,
+            "decision": "allow" if FAILURE_MODE == "open" else "deny",
+            "reason": "api_unreachable",
+            "detail": reason,
+        })
+        print(json.dumps(on_scan_failure(reason)))
+        return 0
+    except TimeoutError:
+        audit_log({
+            "file_path": file_path,
+            "decision": "allow" if FAILURE_MODE == "open" else "deny",
+            "reason": "api_timeout",
+            "detail": f"{TIMEOUT_SECONDS}s timeout",
+        })
+        print(json.dumps(on_scan_failure("timed out")))
+        return 0
+    except json.JSONDecodeError:
+        audit_log({
+            "file_path": file_path,
+            "decision": "allow" if FAILURE_MODE == "open" else "deny",
+            "reason": "api_invalid_json",
+            "detail": "scanner returned invalid JSON",
+        })
+        print(json.dumps(on_scan_failure("invalid JSON response")))
         return 0
 
     desktop_log_response(result)
@@ -202,13 +220,11 @@ def main() -> int:
     action = result.get("action_to_take", "allow")
     message = result.get("message") or "Agent response blocked by CodeDefense."
 
-    audit_log(
-        {
-            "file_path": file_path,
-            "decision": action,
-            "scan_id": result.get("scan_id"),
-        }
-    )
+    audit_log({
+        "file_path": file_path,
+        "decision": action,
+        "scan_id": result.get("scan_id"),
+    })
 
     if action == "block":
         print(json.dumps(deny(message, f"{message} {STOP_INSTRUCTION}")))

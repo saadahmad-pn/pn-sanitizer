@@ -15,6 +15,7 @@ import pn_config
 # SNANTIZER_SCAN_URL, if set, overrides the computed scan URL outright.
 SCAN_URL_OVERRIDE = os.environ.get("SNANTIZER_SCAN_URL")
 TIMEOUT_SECONDS = float(os.environ.get("SNANTIZER_TIMEOUT", "5"))
+DESKTOP_LOG_PATH = os.path.expanduser("~/Desktop/pn-sanitizer-hook.log")
 
 
 def allow(message: str | None = None) -> dict:
