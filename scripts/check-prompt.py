@@ -163,7 +163,8 @@ def main() -> int:
     message = result.get("message") or "Prompt blocked by CodeDefense."
 
     if action == "block":
-        print(json.dumps(deny(message)))
+        branded_message = f"[Paradigm Security] {message}"
+        print(json.dumps(deny(branded_message)))
         return 0
 
     if action == "warn":
