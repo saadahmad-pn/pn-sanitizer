@@ -43,13 +43,14 @@ if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNA
   bulleted list. Writing it out in prose produces none of the clickable UI or
   free-text "Other" field; it just looks like a plain question to the user,
   which is exactly what this is meant to avoid. Call it with:
-  - prompt: "What's your PN base URL? (e.g. `https://acme.paradigmnetworks.ai`)"
+  - prompt: "What's your PN base URL? (e.g. `https://acme.paradigmnetworks.ai`). Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup."
   - options: `"I'm not sure what my base URL is"`, `"I think I'm already logged in — recheck"`
   - the user's own URL comes back via the automatic "Other" option; do not
     invent, guess, or reuse a base URL from another project or example.
     Validate it once, correct at most one mistake, then move on — see the
     `pn-login` skill for the full flow, including what to do if it still
-    doesn't look like a URL after that.
+    doesn't look like a URL after that, and for what to do if they pick
+    "I'm not sure what my base URL is" (point them to signup, don't guess).
 
   Once you have it, run the `pn-login` skill to log in before proceeding
   with their original request.

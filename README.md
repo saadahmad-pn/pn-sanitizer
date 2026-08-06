@@ -86,6 +86,7 @@ login instead of any hardcoded or manually-pasted token:
    so `rules/pn-login-check.mdc` (always-on) is the reliable backstop that
    actually guarantees the agent checks and asks on turn one.
 2. Give the agent your PN base URL, e.g. `https://acme.paradigmnetworks.ai`.
+   Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup.
    The agent runs the `pn-login` skill, which invokes:
    ```bash
    python3 scripts/login.py --base-url https://acme.paradigmnetworks.ai
