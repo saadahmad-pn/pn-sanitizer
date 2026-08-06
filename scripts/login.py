@@ -270,6 +270,12 @@ def main() -> int:
     else:
         print(f"Couldn't open a browser automatically — open this URL to log in to {base_url}:")
         print(f"  {authorize_url}")
+    print(
+        "If that link takes you to the main PN dashboard instead of a "
+        "'You're logged in' confirmation, you weren't signed in to PN in "
+        "that browser yet — sign in there, then open the exact same link "
+        "again (no need to re-run this command) to finish."
+    )
     print(f"Waiting up to {int(CALLBACK_TIMEOUT_SECONDS)}s for you to complete login...")
 
     deadline = time.monotonic() + CALLBACK_TIMEOUT_SECONDS
