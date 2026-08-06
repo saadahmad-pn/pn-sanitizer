@@ -16,6 +16,7 @@ import pn_config
 SCAN_URL_OVERRIDE = os.environ.get("SNANTIZER_SCAN_URL")
 TIMEOUT_SECONDS = float(os.environ.get("SNANTIZER_TIMEOUT", "5"))
 DESKTOP_LOG_PATH = os.path.expanduser("~/Desktop/pn-sanitizer-hook.log")
+DEBUG_LOG_PATH = os.path.expanduser("~/.pn-sanitizer/check-prompt.log")
 
 
 def allow(message: str | None = None) -> dict:
@@ -49,6 +50,16 @@ def desktop_log_response(response: dict) -> None:
             f.write(f"--- API Response  |  {now} ---\n")
             f.write(json.dumps(response, indent=2))
             f.write("\n")
+    except OSError:
+        pass
+
+
+def debug_log(message: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(DEBUG_LOG_PATH), exist_ok=True)
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        with open(DEBUG_LOG_PATH, "a") as f:
+            f.write(f"[{now}] {message}\n")
     except OSError:
         pass
 
@@ -96,6 +107,10 @@ def main() -> int:
     base_url, access_token = config
     scan_url = SCAN_URL_OVERRIDE or f"{base_url}/api/v1/codedefense/scan"
 
+    debug_log(f"Scanning prompt | base_url={base_url} | scan_url={scan_url} | prompt_len={len(prompt)}")
+    debug_log(f"Request body: {prompt[:200]}{'...' if len(prompt) > 200 else ''}")
+    debug_log(f"Timeout: {TIMEOUT_SECONDS}s")
+
     body, content_type = build_multipart_body({"text": prompt})
     request = urllib.request.Request(
         scan_url,
@@ -108,28 +123,37 @@ def main() -> int:
     )
 
     try:
+        debug_log(f"Sending POST request to {scan_url}")
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode("utf-8"))
+        debug_log(f"API response received | action={result.get('action_to_take', 'allow')}")
     except urllib.error.HTTPError as exc:
         # Server is reachable but returned an error status (e.g. 401, 500).
         # Fail closed — this is a misconfiguration, not transient unavailability.
-        print(json.dumps(deny(f"CodeDefense API returned HTTP {exc.code}: {exc.reason}. Prompt blocked.")))
+        error_msg = f"HTTP {exc.code}: {exc.reason}"
+        debug_log(f"API error | {error_msg}")
+        print(json.dumps(deny(f"CodeDefense API returned {error_msg}. Prompt blocked.")))
         return 0
     except urllib.error.URLError as exc:
         # Server unreachable (connection refused, DNS failure, host down, etc.)
         # Fail open: don't block prompts just because the guard is offline.
+        error_msg = f"{scan_url} unreachable: {exc.reason}"
+        debug_log(f"API unreachable | {error_msg}")
         print(
             json.dumps(
-                allow(f"CodeDefense API unreachable ({scan_url}): {exc.reason}. Allowing prompt.")
+                allow(f"CodeDefense API unreachable: {exc.reason}. Allowing prompt.")
             )
         )
         return 0
     except TimeoutError:
         # Server didn't respond within TIMEOUT_SECONDS. Fail open.
-        print(json.dumps(allow("CodeDefense API timed out. Allowing prompt.")))
+        error_msg = f"Timeout after {TIMEOUT_SECONDS}s"
+        debug_log(f"API timeout | {error_msg} | url={scan_url}")
+        print(json.dumps(allow(f"CodeDefense API timed out ({TIMEOUT_SECONDS}s). Allowing prompt.")))
         return 0
     except json.JSONDecodeError:
         # Server responded but body wasn't valid JSON. Fail open.
+        debug_log(f"API invalid JSON response | url={scan_url}")
         print(json.dumps(allow("CodeDefense API returned invalid JSON. Allowing prompt.")))
         return 0
 

@@ -166,6 +166,14 @@ def main() -> int:
     base_url, access_token = config
     scan_url = SCAN_URL_OVERRIDE or f"{base_url}/api/v1/codedefense/scan"
 
+    desktop_log({**payload, "scan_details": {
+        "base_url": base_url,
+        "scan_url": scan_url,
+        "scan_text_len": len(scan_text),
+        "timeout": TIMEOUT_SECONDS,
+        "failure_mode": FAILURE_MODE,
+    }})
+
     body, content_type = build_multipart_body({"text": scan_text})
     request = urllib.request.Request(
         scan_url,
@@ -178,39 +186,53 @@ def main() -> int:
     )
 
     try:
+        desktop_log({"request_details": {
+            "url": scan_url,
+            "method": "POST",
+            "content_type": content_type,
+            "body_preview": scan_text[:200] + ("..." if len(scan_text) > 200 else ""),
+        }})
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode("utf-8"))
+        desktop_log({"response_status": "success", "action": result.get("action_to_take", "allow")})
     except urllib.error.HTTPError as exc:
         reason = f"HTTP {exc.code} {exc.reason}"
         msg = f"CodeDefense API returned {reason} — write blocked until the API error is resolved."
-        audit_log({"file_path": file_path, "decision": "deny", "reason": "http_error", "detail": reason})
+        desktop_log({"error": reason, "url": scan_url, "error_type": "http_error"})
+        audit_log({"file_path": file_path, "decision": "deny", "reason": "http_error", "detail": reason, "scan_url": scan_url})
         print(json.dumps(deny(msg, f"{msg} Do not retry. Report this API error to the user.")))
         return 0
     except urllib.error.URLError as exc:
         reason = str(getattr(exc, "reason", None) or exc) or "connection failed"
+        desktop_log({"error": reason, "url": scan_url, "error_type": "unreachable"})
         audit_log({
             "file_path": file_path,
             "decision": "allow" if FAILURE_MODE == "open" else "deny",
             "reason": "api_unreachable",
             "detail": reason,
+            "scan_url": scan_url,
         })
         print(json.dumps(on_scan_failure(reason)))
         return 0
     except TimeoutError:
+        desktop_log({"error": f"Timeout after {TIMEOUT_SECONDS}s", "url": scan_url, "error_type": "timeout"})
         audit_log({
             "file_path": file_path,
             "decision": "allow" if FAILURE_MODE == "open" else "deny",
             "reason": "api_timeout",
             "detail": f"{TIMEOUT_SECONDS}s timeout",
+            "scan_url": scan_url,
         })
-        print(json.dumps(on_scan_failure("timed out")))
+        print(json.dumps(on_scan_failure(f"timed out after {TIMEOUT_SECONDS}s")))
         return 0
     except json.JSONDecodeError:
+        desktop_log({"error": "Invalid JSON response", "url": scan_url, "error_type": "invalid_json"})
         audit_log({
             "file_path": file_path,
             "decision": "allow" if FAILURE_MODE == "open" else "deny",
             "reason": "api_invalid_json",
             "detail": "scanner returned invalid JSON",
+            "scan_url": scan_url,
         })
         print(json.dumps(on_scan_failure("invalid JSON response")))
         return 0

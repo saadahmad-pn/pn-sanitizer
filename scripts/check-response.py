@@ -148,21 +148,36 @@ def main() -> int:
     base_url, access_token = config
     scan_url = SCAN_URL_OVERRIDE or f"{base_url}/api/v1/codedefense/scan"
 
+    log(f"[preToolUse] Scanning response | base_url={base_url}")
+    log(f"[preToolUse] scan_url={scan_url} | scan_text_len={len(scan_text)}")
+    log(f"[preToolUse] Request preview: {scan_text[:200]}{'...' if len(scan_text) > 200 else ''}")
+    log(f"[preToolUse] Timeout: {TIMEOUT_SECONDS}s")
+
     try:
+        log(f"[preToolUse] Sending POST request to {scan_url}")
         action, message = scan(scan_text, scan_url, access_token)
+        log(f"[preToolUse] API response received | action={action!r}")
     except urllib.error.HTTPError as exc:
         # 401/403/429/5xx. A misconfigured or rejecting scanner must not look
         # identical to a clean scan.
-        print(json.dumps(on_scan_failure(f"HTTP {exc.code} {exc.reason}")))
+        error_msg = f"HTTP {exc.code} {exc.reason}"
+        log(f"[preToolUse] API error | {error_msg} | url={scan_url}")
+        print(json.dumps(on_scan_failure(error_msg)))
         return 0
     except urllib.error.URLError as exc:
-        print(json.dumps(on_scan_failure(f"unreachable: {exc.reason}")))
+        error_msg = f"unreachable: {exc.reason}"
+        log(f"[preToolUse] API unreachable | {error_msg} | url={scan_url}")
+        print(json.dumps(on_scan_failure(error_msg)))
         return 0
     except TimeoutError:
-        print(json.dumps(on_scan_failure("timed out")))
+        error_msg = f"timed out after {TIMEOUT_SECONDS}s"
+        log(f"[preToolUse] API timeout | {error_msg} | url={scan_url}")
+        print(json.dumps(on_scan_failure(error_msg)))
         return 0
     except json.JSONDecodeError:
-        print(json.dumps(on_scan_failure("scanner returned invalid JSON")))
+        error_msg = "scanner returned invalid JSON"
+        log(f"[preToolUse] API invalid JSON | {error_msg} | url={scan_url}")
+        print(json.dumps(on_scan_failure(error_msg)))
         return 0
 
     log(f"[preToolUse] verdict={action!r} message={message!r}")
