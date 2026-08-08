@@ -36,7 +36,7 @@ pn_save_credentials() {
     --arg base_url "$base_url" \
     --arg access_token "$access_token" \
     --arg refresh_token "$refresh_token" \
-    --arg expires_at "$expires_at" \
+    --argjson expires_at "$expires_at" \
     '{base_url: $base_url, access_token: $access_token, refresh_token: $refresh_token, expires_at: $expires_at}')
 
   # Write with secure temp file to avoid race conditions
@@ -99,7 +99,7 @@ pn_get_valid_access_token() {
   base_url=$(echo "$creds" | jq -r '.base_url')
   access_token=$(echo "$creds" | jq -r '.access_token')
   refresh_token=$(echo "$creds" | jq -r '.refresh_token')
-  expires_at=$(echo "$creds" | jq -r '.expires_at')
+  expires_at=$(echo "$creds" | jq -r '.expires_at | floor')
 
   local now
   now=$(date +%s)

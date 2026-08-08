@@ -301,7 +301,7 @@ main() {
 
   access_token=$(echo "$token_response" | jq -r '.access_token')
   refresh_token=$(echo "$token_response" | jq -r '.refresh_token // ""')
-  expires_in=$(echo "$token_response" | jq -r '.expires_in // 3600')
+  expires_in=$(echo "$token_response" | jq -r '(.expires_in // 3600) | floor')
 
   # Calculate expiry timestamp
   local expires_at
