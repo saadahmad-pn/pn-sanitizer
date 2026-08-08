@@ -123,14 +123,14 @@ pn_get_valid_access_token() {
 
   new_access_token=$(echo "$refreshed" | jq -r '.access_token')
   new_refresh_token=$(echo "$refreshed" | jq -r '.refresh_token')
-  expires_in=$(echo "$refreshed" | jq -r '.expires_in')
+  expires_in=$(echo "$refreshed" | jq -r '.expires_in | floor')
 
   if [[ -z "$new_access_token" ]] || [[ -z "$new_refresh_token" ]]; then
     return 1
   fi
 
   local new_expires_at
-  new_expires_at=$((now + expires_in))
+  new_expires_at=$((now + ${expires_in%.*}))
 
   pn_save_credentials "$base_url" "$new_access_token" "$new_refresh_token" "$new_expires_at" || return 1
 
