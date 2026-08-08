@@ -99,7 +99,7 @@ main() {
   # Return verdict
   case "$action" in
     block)
-      local branded_message="[Paradigm CodeDefense] $message"
+      local branded_message="[Paradigm] $message"
       json_deny "$branded_message"
       ;;
     warn)

@@ -1,15 +1,15 @@
 ---
 name: pn-login
-description: Log this workspace in to PN (Paradigm Networks) so CodeDefense-gated hooks (check-prompt.py, check-response.py) work. Use when PN isn't configured yet — e.g. the sessionStart hook injected a "PN is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to PN, switch PN orgs, or re-authenticate.
+description: Log this workspace in to PN (Paradigm Networks) so CodeDefense-gated hooks (check-prompt.sh, check-response.sh) work. Use when PN isn't configured yet — e.g. the sessionStart hook injected a "PN is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to PN, switch PN orgs, or re-authenticate.
 ---
 
 # PN login
 
 ## When to use this
 
-- The `sessionStart` hook (`scripts/check-session.py`) injected context saying
+- The `sessionStart` hook (`scripts/check-session.sh`) injected context saying
   PN is not configured for this workspace.
-- `check-prompt.py` or `check-response.py` reported "not configured" / "no
+- `check-prompt.sh` or `check-response.sh` reported "not configured" / "no
   login found" in a `user_message`.
 - The user asks to log in, re-authenticate, or switch to a different PN
   organization.
@@ -19,7 +19,7 @@ description: Log this workspace in to PN (Paradigm Networks) so CodeDefense-gate
 - Don't invent, guess, or reuse a base URL from another project, example, or
   training data. The base URL (e.g. `https://acme.paradigmnetworks.ai`) is
   specific to the user's organization and **must come from the user**.
-- Don't fabricate a successful login. Only report success once `login.py`
+- Don't fabricate a successful login. Only report success once `login.sh`
   actually exits `0`.
 - Don't ask for or accept an access token directly — this is a browser login,
   not manual token entry.
@@ -68,17 +68,17 @@ question in a loop. Once they say they have it, ask again with the same
 Validate the answer once it comes back: it should start with `http://` or
 `https://` and include a host. If it clearly doesn't, ask exactly one
 follow-up (also via `AskQuestion`) to correct it. If it still doesn't parse
-after that, proceed with it anyway — `login.py` validates the URL itself and
+after that, proceed with it anyway — `login.sh` validates the URL itself and
 will report a clear error if it's truly malformed. Don't keep re-asking past
 that point.
 
-### 3. Locate `login.py`
+### 3. Locate `login.sh`
 
 Running the script (unlike the check in step 1) needs its real path, since
-it needs `pn_config.py` next to it:
+it needs `pn_config.sh` next to it:
 
 ```bash
-find ~/.cursor/plugins -path "*/pn-sanitizer/scripts/login.py" 2>/dev/null
+find ~/.cursor/plugins -path "*/pn-sanitizer/scripts/login.sh" 2>/dev/null
 ```
 
 This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
@@ -87,12 +87,12 @@ installs (`~/.cursor/plugins/local/`). If both come back, prefer `local/`.
 ### 4. Run the login script
 
 ```bash
-python3 <path-from-step-3> --base-url <the-url-from-step-2>
+bash <path-from-step-3> --base-url <the-url-from-step-2>
 ```
 
 Run it in the background rather than blocking the turn on it — it can take
 up to a minute, and you need to relay its output as soon as it appears
-(`login.py` flushes its output immediately, so read it after a couple of
+(`login.sh` flushes its output immediately, so read it after a couple of
 seconds rather than waiting for the process to exit).
 
 The script already knows whether it's running in a sandboxed agent shell and
