@@ -116,16 +116,9 @@ main() {
     echo ""
   } >> "$DESKTOP_LOG_PATH" 2>/dev/null || true
 
-  # Build multipart body
-  local body
-  body=$(build_multipart_body "text" "$scan_text")
-
-  local content_type
-  content_type=$(multipart_content_type)
-
-  # POST to API
+  # POST to API (curl -F handles multipart encoding automatically)
   local response
-  response=$(http_post_form "$scan_url" "$body" "$access_token" "$content_type" "$TIMEOUT_SECONDS")
+  response=$(http_post_form "$scan_url" "$scan_text" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
 
   # Handle curl errors

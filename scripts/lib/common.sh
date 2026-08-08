@@ -63,20 +63,18 @@ http_post() {
 
 http_post_form() {
   local url="$1"
-  local form_data="$2"
+  local text_data="$2"
   local auth_token="$3"
   local timeout="${4:-5}"
 
   local headers=()
-  headers+=(-H "Content-Type: multipart/form-data")
-
   if [[ -n "$auth_token" ]]; then
     headers+=(-H "Authorization: Bearer $auth_token")
   fi
 
   curl -s -X POST "$url" \
     "${headers[@]}" \
-    --data-binary "$form_data" \
+    -F "text=$text_data" \
     --max-time "$timeout" \
     2>/dev/null
 

@@ -52,19 +52,12 @@ main() {
   log_debug "Request body: ${prompt:0:200}$([ ${#prompt} -gt 200 ] && echo '...' || true)" "$DEBUG_LOG_PATH"
   log_debug "Timeout: ${TIMEOUT_SECONDS}s" "$DEBUG_LOG_PATH"
 
-  # Build multipart body
-  local body
-  body=$(build_multipart_body "text" "$prompt")
-
-  local content_type
-  content_type=$(multipart_content_type)
-
   # Log request details
   log_debug "Sending POST request to $scan_url" "$DEBUG_LOG_PATH"
 
-  # POST to API
+  # POST to API (curl -F handles multipart encoding automatically)
   local response
-  response=$(http_post_form "$scan_url" "$body" "$access_token" "$content_type" "$TIMEOUT_SECONDS")
+  response=$(http_post_form "$scan_url" "$prompt" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
 
   # Handle curl errors
