@@ -1,6 +1,6 @@
 ---
 name: pn-login
-description: Log this workspace in to PN (Paradigm Networks) so CodeDefense-gated hooks (check-prompt.sh, check-response.sh) work. Use when PN isn't configured yet — e.g. the sessionStart hook injected a "PN is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to PN, switch PN orgs, or re-authenticate.
+description: Log this workspace in to PN (Paradigm Networks) so Paradigm (check-prompt.sh, check-response.sh) work. Use when PN isn't configured yet — e.g. the sessionStart hook injected a "PN is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to PN, switch PN orgs, or re-authenticate.
 ---
 
 # PN login
@@ -114,7 +114,7 @@ server has to actually receive the redirect.
 
 ### 6. Relay the outcome
 
-- Exit `0` → PN is configured and the CodeDefense-gated hooks are active. No
+- Exit `0` → PN is configured and the Paradigm are active. No
   further action needed.
 - Non-zero → share the error the script printed (timeout, denied, network
   error, etc.) and offer to retry with a fresh run. If retrying, remind the
