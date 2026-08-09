@@ -51,66 +51,71 @@ wait_for_callback() {
   local port="$1"
   local deadline="$2"
 
-  local callback_data=""
+  local CODE=""
+  local STATE=""
+  local ERROR=""
 
+  # Use netcat with explicit response handling
+  # Accept ONE connection on the port, send response, capture request
+  local request_file="/tmp/callback_request_$$.txt"
+
+  # Create response body
+  local response_body="<!doctype html><html><head><title>PN login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2></body></html>"
+  local response_len=${#response_body}
+
+  # Build full HTTP response
+  {
+    echo -ne "HTTP/1.1 200 OK\r\n"
+    echo -ne "Content-Type: text/html\r\n"
+    echo -ne "Content-Length: $response_len\r\n"
+    echo -ne "Connection: close\r\n"
+    echo -ne "\r\n"
+    echo -ne "$response_body"
+  } | nc -l 127.0.0.1 "$port" > "$request_file" 2>&1 &
+
+  local nc_pid=$!
+  sleep 0.2
+
+  # Wait for request to arrive
   while [[ $(date +%s) -lt $deadline ]]; do
-    # Use timeout to prevent hanging forever
-    local remaining=$((deadline - $(date +%s)))
-    if [[ $remaining -le 0 ]]; then
-      break
+    if [[ -s "$request_file" ]]; then
+      # Parse request
+      local request_line
+      request_line=$(head -1 "$request_file")
+
+      if [[ "$request_line" =~ ^GET\ /callback\?(.*)\ HTTP ]]; then
+        local query_string="${BASH_REMATCH[1]}"
+
+        # Parse query parameters
+        IFS='&' read -ra params <<<"$query_string"
+        for param in "${params[@]}"; do
+          local key="${param%%=*}"
+          local value="${param#*=}"
+          case "$key" in
+            code) CODE="$value" ;;
+            state) STATE="$value" ;;
+            error) ERROR="$value" ;;
+          esac
+        done
+
+        # Clean up
+        kill $nc_pid 2>/dev/null || true
+        wait $nc_pid 2>/dev/null || true
+        rm -f "$request_file"
+
+        if [[ -n "$CODE" ]] || [[ -n "$ERROR" ]]; then
+          echo "$CODE $STATE $ERROR"
+          return 0
+        fi
+      fi
     fi
-
-    # Listen for one request
-    local request_response
-    request_response=$(timeout "$remaining" nc -l 127.0.0.1 "$port" 2>/dev/null || true)
-
-    if [[ -z "$request_response" ]]; then
-      sleep 0.1
-      continue
-    fi
-
-    # Extract the GET line and parse query string
-    local get_line
-    get_line=$(echo "$request_response" | head -1)
-
-    if [[ ! "$get_line" =~ "GET /callback" ]]; then
-      # Not our callback, send 404 and continue
-      echo -e "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n" | nc -q 1 127.0.0.1 "$port" 2>/dev/null || true
-      continue
-    fi
-
-    # Extract query string
-    local query_string
-    query_string=$(echo "$get_line" | sed 's/.*?//; s/ .*//')
-
-    # Parse query parameters
-    IFS='&' read -ra params <<<"$query_string"
-    for param in "${params[@]}"; do
-      local key="${param%%=*}"
-      local value="${param#*=}"
-      case "$key" in
-        code) CODE="$value" ;;
-        state) STATE="$value" ;;
-        error) ERROR="$value" ;;
-        error_description) ERROR_DESC="$value" ;;
-      esac
-    done
-
-    # Send response
-    if [[ -n "$ERROR" ]]; then
-      local error_msg="${ERROR_DESC:-$ERROR}"
-      local html="<!doctype html><html><head><title>PN login failed</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>Login failed.</h2><p>$error_msg</p><p>You can close this tab and go back to Cursor.</p></body></html>"
-      echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${#html}\r\n\r\n$html" | nc -q 1 127.0.0.1 "$port" 2>/dev/null || true
-    else
-      local html="<!doctype html><html><head><title>PN login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2><p>You can close this tab and go back to Cursor.</p></body></html>"
-      echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${#html}\r\n\r\n$html" | nc -q 1 127.0.0.1 "$port" 2>/dev/null || true
-    fi
-
-    # Return the data we got
-    echo "$CODE $STATE $ERROR"
-    return 0
+    sleep 0.1
   done
 
+  # Timeout
+  kill $nc_pid 2>/dev/null || true
+  wait $nc_pid 2>/dev/null || true
+  rm -f "$request_file"
   return 1
 }
 
@@ -219,20 +224,18 @@ main() {
   local state
   state=$(openssl rand -hex 24)
 
-  # Find available port
+  # Find available port (start from 8000, skip system ports)
   local port
-  port=$(netstat -tln 2>/dev/null | grep 127.0.0.1 | awk '{print $4}' | awk -F: '{print $NF}' | sort -n | tail -1)
-  port=$((port + 1))
-  if [[ $port -lt 1024 ]]; then
-    port=9999
-  fi
+  port=8000
 
-  # Try to find a truly free port
-  for try_port in $(seq "$port" 65000); do
-    if ! nc -z 127.0.0.1 "$try_port" 2>/dev/null; then
-      port=$try_port
+  # Try to find a free port by attempting to connect to it
+  # If connection fails, port is free
+  while [[ $port -lt 65000 ]]; do
+    # Try to connect; if it fails, port is available
+    if ! nc -z 127.0.0.1 "$port" 2>/dev/null; then
       break
     fi
+    port=$((port + 1))
   done
 
   local redirect_uri="http://127.0.0.1:${port}/callback"
