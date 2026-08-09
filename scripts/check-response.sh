@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
-source "$SCRIPT_DIR/lib/multipart.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
