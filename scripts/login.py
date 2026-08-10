@@ -254,6 +254,7 @@ def main() -> int:
         + urllib.parse.urlencode(
             {
                 "client_id": pn_config.CLIENT_ID,
+                "response_type": "code",
                 "code_challenge": code_challenge,
                 "code_challenge_method": "S256",
                 "redirect_uri": redirect_uri,
