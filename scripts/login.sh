@@ -243,6 +243,7 @@ main() {
   # Build authorization URL
   local authorize_url="${base_url%/}/api/v1/plugin/authorize?"
   authorize_url+="client_id=$(urlencode_strict "$CLIENT_ID")"
+  authorize_url+="&response_type=code"
   authorize_url+="&code_challenge=$(urlencode_strict "$code_challenge")"
   authorize_url+="&code_challenge_method=S256"
   authorize_url+="&redirect_uri=$(urlencode_strict "$redirect_uri")"
