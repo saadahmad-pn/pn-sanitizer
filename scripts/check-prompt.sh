@@ -13,7 +13,6 @@ source "$SCRIPT_DIR/pn_config.sh"
 # Configuration from environment
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-5}"
-DESKTOP_LOG_PATH="${HOME}/Desktop/pn-sanitizer-hook.log"
 DEBUG_LOG_PATH="${HOME}/.pn-sanitizer/check-prompt.log"
 
 main() {
@@ -87,13 +86,6 @@ main() {
 
   log_debug "API response received | action=$action" "$DEBUG_LOG_PATH"
 
-  # Log response for desktop
-  mkdir -p "$(dirname "$DESKTOP_LOG_PATH")" 2>/dev/null || true
-  {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') --- API Response ---"
-    echo "$response" | jq . 2>/dev/null || echo "$response"
-    echo ""
-  } >> "$DESKTOP_LOG_PATH" 2>/dev/null || true
 
   # Return verdict
   case "$action" in

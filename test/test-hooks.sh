@@ -113,32 +113,6 @@ else
 fi
 
 echo ""
-echo -e "${BLUE}=== Integration Tests: check-response.sh ===${NC}"
-
-test_case "check-response.sh allows when not configured with failure_mode=open"
-rm -f "$HOME/.pn/credentials.json"
-export SNANTIZER_FAILURE_MODE="open"
-payload='{"tool_name": "Any", "agent_message": "response text"}'
-result=$("$SCRIPTS_DIR/check-response.sh" <<< "$payload")
-assert_json_valid "$result" "Valid JSON output"
-assert_json_field_equals "$result" "permission" "allow" "Allows with failure_mode=open"
-unset SNANTIZER_FAILURE_MODE
-
-test_case "check-response.sh denies when not configured with failure_mode=closed"
-rm -f "$HOME/.pn/credentials.json"
-export SNANTIZER_FAILURE_MODE="closed"
-payload='{"tool_name": "Any", "agent_message": "response text"}'
-result=$("$SCRIPTS_DIR/check-response.sh" <<< "$payload")
-assert_json_valid "$result" "Valid JSON output"
-assert_json_field_equals "$result" "permission" "deny" "Denies with failure_mode=closed"
-unset SNANTIZER_FAILURE_MODE
-
-test_case "check-response.sh with empty scan text"
-payload='{"tool_name": "Any", "agent_message": "", "transcript_path": ""}'
-result=$("$SCRIPTS_DIR/check-response.sh" <<< "$payload")
-assert_json_valid "$result" "Valid JSON output"
-assert_json_field_equals "$result" "permission" "allow" "Allows when nothing to scan"
-
 echo ""
 test_summary
 FINAL_RESULT=$?

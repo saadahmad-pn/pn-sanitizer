@@ -1,6 +1,6 @@
 ---
 name: pn-login
-description: Log this workspace in to PN (Paradigm Networks) so Paradigm (check-prompt.sh, check-response.sh) work. Use when PN isn't configured yet — e.g. the sessionStart hook injected a "PN is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to PN, switch PN orgs, or re-authenticate.
+description: Log this workspace in to PN (Paradigm Networks) so Paradigm security checks work. Use when PN isn't configured yet — e.g. the sessionStart hook injected a "PN is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to PN, switch PN orgs, or re-authenticate.
 ---
 
 # PN login
@@ -9,7 +9,7 @@ description: Log this workspace in to PN (Paradigm Networks) so Paradigm (check-
 
 - The `sessionStart` hook (`scripts/check-session.sh`) injected context saying
   PN is not configured for this workspace.
-- `check-prompt.sh` or `check-response.sh` reported "not configured" / "no
+- `check-prompt.sh` reported "not configured" / "no
   login found" in a `user_message`.
 - The user asks to log in, re-authenticate, or switch to a different PN
   organization.

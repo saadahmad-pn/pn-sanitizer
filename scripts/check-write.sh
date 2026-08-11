@@ -18,7 +18,6 @@ FAILURE_MODE="${SNANTIZER_FAILURE_MODE:-closed}"
 FAILURE_MODE=$(echo "$FAILURE_MODE" | tr '[:upper:]' '[:lower:]')
 
 AUDIT_LOG_PATH="${HOME}/.pn-sanitizer/audit.jsonl"
-DESKTOP_LOG_PATH="${HOME}/Desktop/pn-sanitizer-hook.log"
 
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
@@ -62,14 +61,6 @@ main() {
     scan_text="$transcript_content"
   fi
 
-  # Log desktop details
-  {
-    echo "$(date '+%Y-%m-%d %H:%M:%S')"
-    echo "hook: preToolUse"
-    echo "tool: $tool_name, file_path: $file_path"
-    echo "agent_message_len: ${#agent_message}, transcript_len: ${#transcript_content}, scan_len: ${#scan_text}"
-    echo ""
-  } >> "$DESKTOP_LOG_PATH" 2>/dev/null || true
 
   # If nothing to scan, allow
   if [[ -z "$scan_text" ]]; then
@@ -106,14 +97,6 @@ main() {
     scan_url="${base_url%/}/api/v1/codedefense/scan"
   fi
 
-  # Log request details
-  {
-    echo "scan_url: $scan_url"
-    echo "scan_text_len: ${#scan_text}"
-    echo "timeout: ${TIMEOUT_SECONDS}s"
-    echo "failure_mode: $FAILURE_MODE"
-    echo ""
-  } >> "$DESKTOP_LOG_PATH" 2>/dev/null || true
 
   # POST to API (curl -F handles multipart encoding automatically)
   local response
@@ -184,12 +167,6 @@ main() {
   message=$(echo "$response" | jq -r '.message // "Agent response blocked by CodeDefense."')
   scan_id=$(echo "$response" | jq -r '.scan_id // ""')
 
-  # Log response for desktop
-  {
-    echo "--- API Response ---"
-    echo "$response" | jq . 2>/dev/null || echo "$response"
-    echo ""
-  } >> "$DESKTOP_LOG_PATH" 2>/dev/null || true
 
   # Audit log the decision
   audit_log_entry=$(jq -n \
