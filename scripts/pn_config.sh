@@ -138,18 +138,24 @@ pn_get_valid_access_token() {
   return 0
 }
 
-# Resolve config: env vars take precedence, then file
+# Resolve config: new PN_* names take precedence, then SNANTIZER_* names, then file
 pn_resolve_config() {
-  local env_base_var="${1:-SNANTIZER_BASE_URL}"
-  local env_token_var="${2:-SNANTIZER_TOKEN}"
-
   local env_base
   local env_token
 
-  env_base="${!env_base_var:-}"
-  env_token="${!env_token_var:-}"
+  # Check new variable names first (PN_BASE_URL, PN_TOKEN)
+  env_base="${PN_BASE_URL:-}"
+  env_token="${PN_TOKEN:-}"
 
-  # Env vars take precedence
+  if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
+    echo "$env_base $env_token"
+    return 0
+  fi
+
+  # Fall back to legacy names (SNANTIZER_BASE_URL, SNANTIZER_TOKEN)
+  env_base="${SNANTIZER_BASE_URL:-}"
+  env_token="${SNANTIZER_TOKEN:-}"
+
   if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
     echo "$env_base $env_token"
     return 0
