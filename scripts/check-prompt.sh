@@ -15,10 +15,37 @@ SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-5}"
 DEBUG_LOG_PATH="${HOME}/.pn-sanitizer/check-prompt.log"
 
+# PN_PROMPT_FAILURE_MODE (marketplace setting: block/allow) takes precedence;
+# SNANTIZER_PROMPT_FAILURE_MODE (legacy shared-host override: closed/open) is
+# the fallback. Defaults to "open" (unlike check-write.sh's PN_FAILURE_MODE,
+# which defaults to "closed"). This only governs failures below that happen
+# *after* pn_resolve_config succeeds — i.e. the user is already logged in.
+# "PN not configured" and "jq missing" always allow unconditionally,
+# regardless of this setting, so a not-yet-logged-in user (or a machine
+# without jq) can never get stuck on their first message.
+RAW_PROMPT_FAILURE_MODE=$(echo "${PN_PROMPT_FAILURE_MODE:-${SNANTIZER_PROMPT_FAILURE_MODE:-allow}}" | tr '[:upper:]' '[:lower:]')
+case "$RAW_PROMPT_FAILURE_MODE" in
+  block|closed) PROMPT_FAILURE_MODE="closed" ;;
+  *)            PROMPT_FAILURE_MODE="open" ;;
+esac
+
 main() {
-  # Read and validate JSON from stdin
-  local payload
-  payload=$(cat 2>/dev/null)
+  # Read and validate JSON from stdin (skip if nothing is piped in — avoids
+  # hanging when invoked without a payload, e.g. manual testing)
+  local payload=""
+  if [[ ! -t 0 ]]; then
+    payload=$(cat 2>/dev/null)
+  fi
+
+  # jq is required for everything below. Always fail open here regardless of
+  # PROMPT_FAILURE_MODE — jq could be missing before the user has ever logged
+  # in, so this must stay unconditional for the same reason "not configured"
+  # does below. Uses a hand-written literal since the JSON helpers themselves
+  # depend on jq.
+  if ! command_exists jq; then
+    echo '{"continue": true, "user_message": "CodeDefense hook dependency (jq) is missing. Allowing prompt. Install jq to enable scanning (see the plugin README)."}'
+    return 0
+  fi
 
   if ! echo "$payload" | jq empty 2>/dev/null; then
     json_deny "CodeDefense hook received invalid JSON input."
@@ -53,28 +80,43 @@ main() {
   # Log request details
   log_debug "Sending POST request to $scan_url" "$DEBUG_LOG_PATH"
 
-  # POST to API (curl -F handles multipart encoding automatically)
+  # POST to API (--form-string sends this as a literal value, not a file
+  # reference, even if it happens to start with "@")
   local response
   response=$(http_post_form "$scan_url" "$prompt" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
 
-  # Handle curl errors
+  # Handle curl errors. These three branches run only after pn_resolve_config
+  # already succeeded (the user is logged in), so it's safe to honor
+  # PROMPT_FAILURE_MODE here — no onboarding deadlock risk.
   if [[ $curl_exit -eq 28 ]]; then
     # Timeout
     log_debug "API timeout | after ${TIMEOUT_SECONDS}s | url=$scan_url" "$DEBUG_LOG_PATH"
-    json_allow "CodeDefense API timed out (${TIMEOUT_SECONDS}s). Allowing prompt."
+    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+      json_deny "CodeDefense API timed out (${TIMEOUT_SECONDS}s). Prompt blocked."
+    else
+      json_allow "CodeDefense API timed out (${TIMEOUT_SECONDS}s). Allowing prompt."
+    fi
     return 0
   elif [[ $curl_exit -ne 0 ]]; then
     # Connection error
     log_debug "API unreachable | curl exit=$curl_exit | url=$scan_url" "$DEBUG_LOG_PATH"
-    json_allow "CodeDefense API unreachable. Allowing prompt."
+    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+      json_deny "CodeDefense API unreachable. Prompt blocked."
+    else
+      json_allow "CodeDefense API unreachable. Allowing prompt."
+    fi
     return 0
   fi
 
   # Validate response is JSON
   if ! echo "$response" | jq empty 2>/dev/null; then
     log_debug "API invalid JSON response | url=$scan_url" "$DEBUG_LOG_PATH"
-    json_allow "CodeDefense API returned invalid JSON. Allowing prompt."
+    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+      json_deny "CodeDefense API returned invalid JSON. Prompt blocked."
+    else
+      json_allow "CodeDefense API returned invalid JSON. Allowing prompt."
+    fi
     return 0
   fi
 

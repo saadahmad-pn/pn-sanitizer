@@ -74,7 +74,7 @@ http_post_form() {
 
   curl -s -X POST "$url" \
     "${headers[@]}" \
-    -F "text=$text_data" \
+    --form-string "text=$text_data" \
     --max-time "$timeout" \
     2>/dev/null
 

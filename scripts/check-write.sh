@@ -1,5 +1,6 @@
 #!/bin/bash
-# preToolUse hook: scan agent response before Write/Edit tool calls
+# preToolUse hook: scan agent response before Write tool calls
+# (Cursor has no separate "Edit" tool_name; all file modifications use "Write".)
 # Returns {permission: "allow"/"deny", user_message: "...", agent_message: "..."}
 
 set -o pipefail
@@ -14,18 +15,43 @@ source "$SCRIPT_DIR/pn_config.sh"
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-5}"
 TRANSCRIPT_BYTES="${SNANTIZER_TRANSCRIPT_BYTES:-4000}"
-FAILURE_MODE="${SNANTIZER_FAILURE_MODE:-closed}"
-FAILURE_MODE=$(echo "$FAILURE_MODE" | tr '[:upper:]' '[:lower:]')
+# PN_FAILURE_MODE (marketplace setting: block/allow) takes precedence;
+# SNANTIZER_FAILURE_MODE (legacy shared-host override: closed/open) is the fallback.
+RAW_FAILURE_MODE=$(echo "${PN_FAILURE_MODE:-${SNANTIZER_FAILURE_MODE:-block}}" | tr '[:upper:]' '[:lower:]')
+case "$RAW_FAILURE_MODE" in
+  allow|open) FAILURE_MODE="open" ;;
+  *)          FAILURE_MODE="closed" ;;
+esac
 
 AUDIT_LOG_PATH="${HOME}/.pn-sanitizer/audit.jsonl"
 
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
 main() {
-  # Read and validate JSON from stdin
-  local payload
-  payload=$(cat 2>/dev/null)
+  # Read and validate JSON from stdin (skip if nothing is piped in — avoids
+  # hanging when invoked without a payload, e.g. manual testing)
+  local payload=""
+  if [[ ! -t 0 ]]; then
+    payload=$(cat 2>/dev/null)
+  fi
 
+  # jq is required for everything below; route through the same FAILURE_MODE
+  # decision as an unreachable scanner, using hand-written literals since the
+  # JSON helpers (and audit_log) themselves depend on jq.
+  if ! command_exists jq; then
+    if [[ "$FAILURE_MODE" == "open" ]]; then
+      echo '{"permission": "allow", "user_message": "CodeDefense hook dependency (jq) is missing. Write allowed WITHOUT a security scan. Install jq to enable scanning (see the plugin README)."}'
+    else
+      echo '{"permission": "deny", "user_message": "CodeDefense hook dependency (jq) is missing. Write blocked.", "agent_message": "The security scan dependency (jq) is missing on this machine. Do not retry this write. Ask the user to install jq (see the plugin README), then try again."}'
+    fi
+    return 0
+  fi
+
+  # Deliberately always allow here, unlike the FAILURE_MODE-driven branches
+  # below: a malformed payload usually signals a Cursor integration/encoding
+  # quirk, not an unreachable scanner. Routing it through FAILURE_MODE would
+  # mean an affected machine gets every single write blocked persistently,
+  # which is worse than a transient scanner outage.
   if ! echo "$payload" | jq empty 2>/dev/null; then
     json_permission_allow "Write-guard hook received invalid JSON input."
     return 0
@@ -35,8 +61,8 @@ main() {
   local tool_name
   tool_name=$(echo "$payload" | jq -r '.tool_name // ""')
 
-  # Only scan Write and Edit tools
-  if [[ "$tool_name" != "Write" ]] && [[ "$tool_name" != "Edit" ]]; then
+  # Only scan Write tool calls
+  if [[ "$tool_name" != "Write" ]]; then
     json_permission_allow
     return 0
   fi
@@ -98,7 +124,8 @@ main() {
   fi
 
 
-  # POST to API (curl -F handles multipart encoding automatically)
+  # POST to API (--form-string sends this as a literal value, not a file
+  # reference, even if it happens to start with "@")
   local response
   response=$(http_post_form "$scan_url" "$scan_text" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?

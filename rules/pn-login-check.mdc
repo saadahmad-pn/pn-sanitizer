@@ -10,10 +10,10 @@ which requires this workspace to be logged in to PN. Two other mechanisms try to
 surface a missing login, but **neither reliably reaches you (the agent) on the
 first message of a session**, so this rule is the backstop:
 
-- `check-session.py` (`sessionStart`) injects context asking you to request the
+- `check-session.sh` (`sessionStart`) injects context asking you to request the
   base URL, but `sessionStart` is fire-and-forget — the agent loop doesn't wait
   for or enforce it, so it can race with (or miss) the user's first message.
-- `check-prompt.py` (`beforeSubmitPrompt`) only supports `continue` /
+- `check-prompt.sh` (`beforeSubmitPrompt`) only supports `continue` /
   `user_message` output fields. `user_message` is a UI-level notice to the
   human when a prompt is blocked — it is never injected into your context, so
   an "allowed" prompt with PN unconfigured gives you no signal to act on.
@@ -23,7 +23,7 @@ first message of a session**, so this rule is the backstop:
 On the **first user message of a session**, before doing anything else, check
 whether PN is already configured. Do this with a plain shell command — do
 **not** try to locate this plugin's own `scripts/` directory to import
-`pn_config.py`; the plugin can be installed anywhere (`~/.cursor/plugins/...`)
+`pn_config.sh`; the plugin can be installed anywhere (`~/.cursor/plugins/...`)
 and there is no environment variable that tells you where, so path-guessing
 is unreliable. The credentials file lives at a fixed, well-known path
 regardless of install location:
@@ -35,7 +35,7 @@ if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNA
 - `CONFIGURED` → PN already has a stored login (or a shared-host env override
   is set). Proceed with the user's request normally — no further action
   needed. (This only checks presence, not validity — an expired token that
-  fails to refresh is already handled by `check-prompt.py`/`check-response.py`
+  fails to refresh is already handled by `check-prompt.sh`/`check-write.sh`
   failing open/closed on their own, so don't try to validate the token here.)
 - `NOT_CONFIGURED` → PN is **not** configured. You must invoke the
   `AskQuestion` tool itself to ask for the base URL — actually call the tool,
@@ -56,7 +56,7 @@ if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNA
   with their original request.
 
 Do not treat an allowed prompt or a "CodeDefense API unreachable" message as
-proof that PN is configured — `check-prompt.py` and `check-response.py` fail
+proof that PN is configured — `check-prompt.sh` and `check-write.sh` fail
 open on purpose, so prompts and tool calls can proceed even when there's no
 login at all.
 

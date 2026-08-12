@@ -34,15 +34,16 @@ urlencode_strict() {
   echo -n "$string" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().rstrip()))" 2>/dev/null || \
   echo -n "$string" | python3 -c "import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null || \
   {
-    # Fallback: bash-only encoding (not perfect but works for most cases)
-    local i="${string//\%/\%25}"
-    i="${i//\ /\%20}"
-    i="${i//?/\%21}"
-    i="${i//:/\%3A}"
-    i="${i////\%2F}"
-    i="${i//&/\%26}"
-    i="${i//=/\%3D}"
-    echo -n "$i"
+    # Fallback: pure-bash percent-encoding (used when python3 is unavailable)
+    local result="" c hex i
+    for (( i = 0; i < ${#string}; i++ )); do
+      c="${string:i:1}"
+      case "$c" in
+        [a-zA-Z0-9.~_-]) result+="$c" ;;
+        *) printf -v hex '%%%02X' "'$c"; result+="$hex" ;;
+      esac
+    done
+    echo -n "$result"
   }
 }
 
@@ -193,6 +194,11 @@ normalize_base_url() {
 }
 
 main() {
+  if ! command -v jq &>/dev/null; then
+    echo "error: jq is required but not found. Install it (macOS: brew install jq; Linux: apt-get/dnf/pacman install jq), then try again." >&2
+    return 1
+  fi
+
   # Parse arguments
   local base_url=""
 

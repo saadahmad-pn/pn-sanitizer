@@ -18,7 +18,8 @@ fi
 
 # Fail open: any error just returns empty context
 main() {
-  # Check if jq is available
+  # Check if jq is available. Build this message by hand (no json_session_context)
+  # since that helper — and every jq_* helper — itself depends on jq.
   if ! command_exists jq; then
     local instructions
     read -r -d '' instructions <<'EOF' || true
@@ -31,7 +32,7 @@ Linux:  sudo apt-get install jq  (Debian/Ubuntu)
 
 After installation, restart your session.
 EOF
-    json_session_context "$instructions"
+    echo "{\"additional_context\": \"${instructions//$'\n'/\\n}\"}"
     return 0
   fi
 

@@ -22,7 +22,7 @@
     ],
     "preToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write",
         "command": "bash ./scripts/check-write.sh",
         "timeout": 20
       }
