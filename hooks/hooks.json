@@ -17,7 +17,7 @@
     "beforeSubmitPrompt": [
       {
         "command": "bash ./scripts/check-prompt.sh",
-        "timeout": 10
+        "timeout": 20
       }
     ],
     "preToolUse": [
