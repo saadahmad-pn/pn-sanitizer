@@ -12,7 +12,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
-TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-5}"
+TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
 DEBUG_LOG_PATH="${HOME}/.pn-sanitizer/check-prompt.log"
 
 # PN_PROMPT_FAILURE_MODE (marketplace setting: block/allow) takes precedence;

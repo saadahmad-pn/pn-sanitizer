@@ -13,7 +13,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
-TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-5}"
+TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
 TRANSCRIPT_BYTES="${SNANTIZER_TRANSCRIPT_BYTES:-4000}"
 # PN_FAILURE_MODE (marketplace setting: block/allow) takes precedence;
 # SNANTIZER_FAILURE_MODE (legacy shared-host override: closed/open) is the fallback.
