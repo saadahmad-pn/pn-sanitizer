@@ -29,7 +29,7 @@ is unreliable. The credentials file lives at a fixed, well-known path
 regardless of install location:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PN_BASE_URL" ] && [ -n "$PN_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
 ```
 
 - `CONFIGURED` → PN already has a stored login (or a shared-host env override

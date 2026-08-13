@@ -198,6 +198,14 @@ main() {
     echo "error: jq is required but not found. Install it (macOS: brew install jq; Linux: apt-get/dnf/pacman install jq), then try again." >&2
     return 1
   fi
+  if ! command -v openssl &>/dev/null; then
+    echo "error: openssl is required but not found. It's needed to generate the login's PKCE challenge. Install it, then try again." >&2
+    return 1
+  fi
+  if ! command -v nc &>/dev/null; then
+    echo "error: nc (netcat) is required but not found. It's needed to receive the login callback. Install it, then try again." >&2
+    return 1
+  fi
 
   # Parse arguments
   local base_url=""
@@ -311,7 +319,13 @@ main() {
 
   access_token=$(echo "$token_response" | jq -r '.access_token')
   refresh_token=$(echo "$token_response" | jq -r '.refresh_token // ""')
-  expires_in=$(echo "$token_response" | jq -r '(.expires_in // 3600) | floor')
+  expires_in=$(echo "$token_response" | jq -r '(.expires_in // 3600) | floor' 2>/dev/null)
+
+  # Guard against a non-numeric expires_in (malformed/unexpected API response)
+  # crashing the arithmetic below outright.
+  if ! [[ "$expires_in" =~ ^[0-9]+$ ]]; then
+    expires_in=3600
+  fi
 
   # Calculate expiry timestamp
   local expires_at

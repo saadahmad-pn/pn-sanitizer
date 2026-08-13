@@ -1,7 +1,7 @@
 {
   "name": "pn-sanitizer",
   "displayName": "Paradigm Networks Security Scanner",
-  "description": "Paradigm Networks security scanner: gates prompts via beforeSubmitPrompt and file writes (Write + Edit) via preToolUse, scanning each against the CodeDefense API before allowing them through.",
+  "description": "Paradigm Networks' CodeDefense scanner for Cursor: automatically checks prompts and file changes for security risks — like destructive commands or unsafe code — before they're allowed through.",
   "version": "0.1.0",
   "author": {
     "name": "saadahmad-pn"
@@ -12,6 +12,7 @@
   "license": "MIT",
   "category": "security",
   "keywords": ["hooks", "security", "prompt-guard"],
+  "tags": ["CodeDefense", "policy", "compliance"],
   "hooks": "hooks/hooks.json",
   "variables": {
     "type": "object",

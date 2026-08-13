@@ -72,13 +72,27 @@ http_post_form() {
     headers+=(-H "Authorization: Bearer $auth_token")
   fi
 
+  # Appends the HTTP status as a trailing line (curl's -w token); the
+  # caller must split it off the captured output — see http_post_split_status().
+  # A global set here would NOT reach the caller: this function always runs
+  # inside a $(...) subshell, and subshell variable assignments don't persist
+  # past it. curl is the last command, so its own exit status becomes this
+  # function's return value automatically.
   curl -s -X POST "$url" \
     "${headers[@]}" \
     --form-string "text=$text_data" \
     --max-time "$timeout" \
+    -w $'\n%{http_code}' \
     2>/dev/null
+}
 
-  return $?
+# Splits the combined body+status output of http_post_form. Must be called
+# as a plain function call (never via $(...)) so HTTP_POST_BODY/HTTP_POST_STATUS
+# persist in the caller's own shell instead of vanishing with a subshell.
+http_post_split_status() {
+  local raw="$1"
+  HTTP_POST_BODY="${raw%$'\n'*}"
+  HTTP_POST_STATUS="${raw##*$'\n'}"
 }
 
 # Logging helpers
@@ -92,7 +106,16 @@ log_debug() {
   fi
 
   local timestamp
-  timestamp=$(date '+%Y-%m-%d %H:%M:%S.%3N')
+  timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+
+  # %3N (milliseconds) is a GNU date extension; BSD date (macOS) just echoes
+  # the literal text back instead of erroring, so only append it if it
+  # actually produced 3 digits.
+  local ms
+  ms=$(date '+%3N' 2>/dev/null)
+  if [[ "$ms" =~ ^[0-9]{3}$ ]]; then
+    timestamp="${timestamp}.${ms}"
+  fi
 
   mkdir -p "$(dirname "$log_path")" 2>/dev/null || true
   echo "[$timestamp] $message" >> "$log_path"

@@ -40,9 +40,9 @@ main() {
   # JSON helpers (and audit_log) themselves depend on jq.
   if ! command_exists jq; then
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      echo '{"permission": "allow", "user_message": "CodeDefense hook dependency (jq) is missing. Write allowed WITHOUT a security scan. Install jq to enable scanning (see the plugin README)."}'
+      echo '{"permission": "allow", "user_message": "A required tool (jq) is missing on this machine. Write allowed WITHOUT a security scan. Install jq to enable scanning (see the plugin README)."}'
     else
-      echo '{"permission": "deny", "user_message": "CodeDefense hook dependency (jq) is missing. Write blocked.", "agent_message": "The security scan dependency (jq) is missing on this machine. Do not retry this write. Ask the user to install jq (see the plugin README), then try again."}'
+      echo '{"permission": "deny", "user_message": "A required tool (jq) is missing on this machine. Write blocked.", "agent_message": "A required tool (jq) is missing on this machine. Do not retry this write. Ask the user to install jq (see the plugin README), then try again."}'
     fi
     return 0
   fi
@@ -53,7 +53,7 @@ main() {
   # mean an affected machine gets every single write blocked persistently,
   # which is worse than a transient scanner outage.
   if ! echo "$payload" | jq empty 2>/dev/null; then
-    json_permission_allow "Write-guard hook received invalid JSON input."
+    json_permission_allow "Received invalid input."
     return 0
   fi
 
@@ -107,9 +107,9 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable ($reason). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service is unavailable ($reason). Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable ($reason). Write blocked." "The security scan API is unavailable ($reason). Do not retry this write."
+      json_permission_deny "The scanning service is unavailable ($reason). Write blocked." "The scanning service is unavailable ($reason). Do not retry this write."
     fi
     return 0
   }
@@ -127,8 +127,11 @@ main() {
   # POST to API (--form-string sends this as a literal value, not a file
   # reference, even if it happens to start with "@")
   local response
-  response=$(http_post_form "$scan_url" "$scan_text" "$access_token" "$TIMEOUT_SECONDS")
+  local raw_response
+  raw_response=$(http_post_form "$scan_url" "$scan_text" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
+  http_post_split_status "$raw_response"
+  response="$HTTP_POST_BODY"
 
   # Handle curl errors
   if [[ $curl_exit -eq 28 ]]; then
@@ -143,9 +146,9 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable (timed out after ${TIMEOUT_SECONDS}s). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable (timed out after ${TIMEOUT_SECONDS}s). Write blocked." "The security scan API is unavailable (timed out after ${TIMEOUT_SECONDS}s). Do not retry this write."
+      json_permission_deny "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Write blocked." "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Do not retry this write."
     fi
     return 0
   elif [[ $curl_exit -ne 0 ]]; then
@@ -160,9 +163,31 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable (connection failed). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service is unavailable (connection failed). Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable (connection failed). Write blocked." "The security scan API is unavailable (connection failed). Do not retry this write."
+      json_permission_deny "The scanning service is unavailable (connection failed). Write blocked." "The scanning service is unavailable (connection failed). Do not retry this write."
+    fi
+    return 0
+  fi
+
+  # Reject non-2xx responses (expired/invalid token, server error, etc.)
+  # before treating the body as a real verdict — a valid-JSON error body
+  # would otherwise default to "allow" via the // fallback below and
+  # silently mask the actual failure.
+  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
+    audit_log_entry=$(jq -n \
+      --arg file_path "$file_path" \
+      --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
+      --arg reason "api_http_error" \
+      --arg detail "HTTP ${HTTP_POST_STATUS}" \
+      --arg scan_url "$scan_url" \
+      '{file_path: $file_path, decision: $decision, reason: $reason, detail: $detail, scan_url: $scan_url}')
+    audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
+
+    if [[ "$FAILURE_MODE" == "open" ]]; then
+      json_permission_allow "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Write allowed WITHOUT a security scan."
+    else
+      json_permission_deny "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Write blocked." "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Do not retry this write."
     fi
     return 0
   fi
@@ -179,9 +204,9 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable (invalid JSON response). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service returned an invalid response. Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable (invalid JSON response). Write blocked." "The security scan API is unavailable (invalid JSON response). Do not retry this write."
+      json_permission_deny "The scanning service returned an invalid response. Write blocked." "The scanning service returned an invalid response. Do not retry this write."
     fi
     return 0
   fi

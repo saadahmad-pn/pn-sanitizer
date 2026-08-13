@@ -99,7 +99,14 @@ pn_get_valid_access_token() {
   base_url=$(echo "$creds" | jq -r '.base_url')
   access_token=$(echo "$creds" | jq -r '.access_token')
   refresh_token=$(echo "$creds" | jq -r '.refresh_token')
-  expires_at=$(echo "$creds" | jq -r '.expires_at | floor')
+  expires_at=$(echo "$creds" | jq -r '.expires_at | floor' 2>/dev/null)
+
+  # Guard against a corrupted/malformed credentials file crashing the
+  # arithmetic below outright — treat an unparseable value as already
+  # expired so it forces a refresh rather than blindly trusting it.
+  if ! [[ "$expires_at" =~ ^[0-9]+$ ]]; then
+    expires_at=0
+  fi
 
   local now
   now=$(date +%s)
@@ -123,14 +130,17 @@ pn_get_valid_access_token() {
 
   new_access_token=$(echo "$refreshed" | jq -r '.access_token')
   new_refresh_token=$(echo "$refreshed" | jq -r '.refresh_token')
-  expires_in=$(echo "$refreshed" | jq -r '.expires_in | floor')
+  expires_in=$(echo "$refreshed" | jq -r '.expires_in | floor' 2>/dev/null)
 
-  if [[ -z "$new_access_token" ]] || [[ -z "$new_refresh_token" ]]; then
+  # A non-numeric expires_in means the refresh response itself is malformed —
+  # treat this the same as a failed refresh rather than crash on arithmetic
+  # or persist a bogus expiry to disk.
+  if [[ -z "$new_access_token" ]] || [[ -z "$new_refresh_token" ]] || ! [[ "$expires_in" =~ ^[0-9]+$ ]]; then
     return 1
   fi
 
   local new_expires_at
-  new_expires_at=$((now + ${expires_in%.*}))
+  new_expires_at=$((now + expires_in))
 
   pn_save_credentials "$base_url" "$new_access_token" "$new_refresh_token" "$new_expires_at" || return 1
 

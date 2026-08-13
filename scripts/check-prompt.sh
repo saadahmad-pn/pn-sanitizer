@@ -43,12 +43,12 @@ main() {
   # does below. Uses a hand-written literal since the JSON helpers themselves
   # depend on jq.
   if ! command_exists jq; then
-    echo '{"continue": true, "user_message": "CodeDefense hook dependency (jq) is missing. Allowing prompt. Install jq to enable scanning (see the plugin README)."}'
+    echo '{"continue": true, "user_message": "A required tool (jq) is missing on this machine. Allowing prompt. Install jq to enable scanning (see the plugin README)."}'
     return 0
   fi
 
   if ! echo "$payload" | jq empty 2>/dev/null; then
-    json_deny "CodeDefense hook received invalid JSON input."
+    json_deny "Received invalid input. Prompt blocked."
     return 0
   fi
 
@@ -83,8 +83,11 @@ main() {
   # POST to API (--form-string sends this as a literal value, not a file
   # reference, even if it happens to start with "@")
   local response
-  response=$(http_post_form "$scan_url" "$prompt" "$access_token" "$TIMEOUT_SECONDS")
+  local raw_response
+  raw_response=$(http_post_form "$scan_url" "$prompt" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
+  http_post_split_status "$raw_response"
+  response="$HTTP_POST_BODY"
 
   # Handle curl errors. These three branches run only after pn_resolve_config
   # already succeeded (the user is logged in), so it's safe to honor
@@ -93,18 +96,32 @@ main() {
     # Timeout
     log_debug "API timeout | after ${TIMEOUT_SECONDS}s | url=$scan_url" "$DEBUG_LOG_PATH"
     if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-      json_deny "CodeDefense API timed out (${TIMEOUT_SECONDS}s). Prompt blocked."
+      json_deny "The scanning service timed out (${TIMEOUT_SECONDS}s). Prompt blocked."
     else
-      json_allow "CodeDefense API timed out (${TIMEOUT_SECONDS}s). Allowing prompt."
+      json_allow "The scanning service timed out (${TIMEOUT_SECONDS}s). Allowing prompt."
     fi
     return 0
   elif [[ $curl_exit -ne 0 ]]; then
     # Connection error
     log_debug "API unreachable | curl exit=$curl_exit | url=$scan_url" "$DEBUG_LOG_PATH"
     if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-      json_deny "CodeDefense API unreachable. Prompt blocked."
+      json_deny "The scanning service is unreachable. Prompt blocked."
     else
-      json_allow "CodeDefense API unreachable. Allowing prompt."
+      json_allow "The scanning service is unreachable. Allowing prompt."
+    fi
+    return 0
+  fi
+
+  # Reject non-2xx responses (expired/invalid token, server error, etc.)
+  # before treating the body as a real verdict — a valid-JSON error body
+  # (e.g. {"error": "unauthorized"}) would otherwise default to "allow" via
+  # the // fallback below and silently mask the actual failure.
+  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
+    log_debug "API HTTP error | status=$HTTP_POST_STATUS | url=$scan_url" "$DEBUG_LOG_PATH"
+    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+      json_deny "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Prompt blocked."
+    else
+      json_allow "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Allowing prompt."
     fi
     return 0
   fi
@@ -113,9 +130,9 @@ main() {
   if ! echo "$response" | jq empty 2>/dev/null; then
     log_debug "API invalid JSON response | url=$scan_url" "$DEBUG_LOG_PATH"
     if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-      json_deny "CodeDefense API returned invalid JSON. Prompt blocked."
+      json_deny "The scanning service returned an invalid response. Prompt blocked."
     else
-      json_allow "CodeDefense API returned invalid JSON. Allowing prompt."
+      json_allow "The scanning service returned an invalid response. Allowing prompt."
     fi
     return 0
   fi

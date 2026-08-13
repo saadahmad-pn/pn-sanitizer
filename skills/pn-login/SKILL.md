@@ -37,7 +37,7 @@ that tells you where the plugin is installed, so path-guessing isn't
 reliable:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PN_BASE_URL" ] && [ -n "$PN_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
 ```
 
 `CONFIGURED` → tell the user they're already logged in and stop here.
