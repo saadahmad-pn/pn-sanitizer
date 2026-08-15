@@ -4,6 +4,18 @@ All notable changes to pn-sanitizer are recorded here. This project hasn't had
 a public release yet — entries below are dated by when the work happened,
 not by version tag.
 
+## 2026-08-14 — Bundled jq fallback
+
+`jq` is no longer a hard requirement for the end user. Every script now
+resolves `jq` via a shared `JQ_BIN` (in `scripts/lib/common.sh`): prefer a
+system install if present, otherwise fall back to an official, checksum-
+verified static `jq` 1.8.2 binary bundled per-platform in `scripts/bin/`
+(macOS arm64/amd64, Linux amd64/arm64 — see `scripts/bin/PROVENANCE.md`).
+If neither is available, the plugin still fails gracefully with a clear
+message, same as before — this change removes the common case of that
+happening at all, it doesn't remove the safety net. Windows isn't covered by
+the bundle yet.
+
 ## 2026-08-13 — Pre-submission hardening pass
 
 Prompted by an internal marketplace-readiness review. Fixes:

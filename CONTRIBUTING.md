@@ -6,8 +6,13 @@ changes:
 
 ## Requirements
 
-- Bash, `jq`, `curl`, `openssl`, and `nc` — the hook scripts check for these
+- Bash, `curl`, `openssl`, and `nc` — the hook scripts check for these
   explicitly and fail with a clear message if one is missing.
+- `jq` is preferred but not strictly required — every script falls back to a
+  bundled binary in `scripts/bin/` for macOS/Linux on amd64/arm64. See
+  `scripts/bin/PROVENANCE.md` before touching anything jq-related, and update
+  those binaries (with verified checksums) if you ever bump the bundled
+  version.
 - `python3` is optional — `login.sh` falls back to a pure-Bash URL encoder if
   it's unavailable.
 

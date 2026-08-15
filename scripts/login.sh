@@ -7,6 +7,7 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
+source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Ensure line-buffering for non-TTY stdout
@@ -144,9 +145,9 @@ exchange_code() {
   fi
 
   # Validate response is JSON and has access_token
-  if ! echo "$response" | jq -e '.access_token' >/dev/null 2>&1; then
+  if ! echo "$response" | "$JQ_BIN" -e '.access_token' >/dev/null 2>&1; then
     local error_msg
-    error_msg=$(echo "$response" | jq -r '.error_description // .error // "unknown error"' 2>/dev/null)
+    error_msg=$(echo "$response" | "$JQ_BIN" -r '.error_description // .error // "unknown error"' 2>/dev/null)
     echo "error: token exchange failed: $error_msg" >&2
     return 1
   fi
@@ -194,8 +195,8 @@ normalize_base_url() {
 }
 
 main() {
-  if ! command -v jq &>/dev/null; then
-    echo "error: jq is required but not found. Install it (macOS: brew install jq; Linux: apt-get/dnf/pacman install jq), then try again." >&2
+  if [[ -z "$JQ_BIN" ]]; then
+    echo "error: jq is required but not found, and no bundled copy is available for this platform. Install it (macOS: brew install jq; Linux: apt-get/dnf/pacman install jq), then try again." >&2
     return 1
   fi
   if ! command -v openssl &>/dev/null; then
@@ -317,9 +318,9 @@ main() {
   local refresh_token
   local expires_in
 
-  access_token=$(echo "$token_response" | jq -r '.access_token')
-  refresh_token=$(echo "$token_response" | jq -r '.refresh_token // ""')
-  expires_in=$(echo "$token_response" | jq -r '(.expires_in // 3600) | floor' 2>/dev/null)
+  access_token=$(echo "$token_response" | "$JQ_BIN" -r '.access_token')
+  refresh_token=$(echo "$token_response" | "$JQ_BIN" -r '.refresh_token // ""')
+  expires_in=$(echo "$token_response" | "$JQ_BIN" -r '(.expires_in // 3600) | floor' 2>/dev/null)
 
   # Guard against a non-numeric expires_in (malformed/unexpected API response)
   # crashing the arithmetic below outright.

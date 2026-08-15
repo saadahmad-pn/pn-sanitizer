@@ -17,7 +17,9 @@ pn-sanitizer/
 │   ├── check-prompt.sh    # beforeSubmitPrompt hook, calls the CodeDefense API
 │   ├── check-write.sh     # preToolUse hook, calls the CodeDefense API
 │   ├── pn_config.sh       # shared credentials store + token refresh
-│   └── login.sh           # one-time browser login CLI (PKCE)
+│   ├── login.sh           # one-time browser login CLI (PKCE)
+│   ├── lib/common.sh      # shared JSON/HTTP/logging helpers
+│   └── bin/               # bundled jq fallback binaries — see Dependencies below
 ├── skills/
 │   └── pn-login/
 │       └── SKILL.md       # tells the agent how to run login.sh
@@ -27,6 +29,17 @@ pn-sanitizer/
 
 Only `hooks/`, `scripts/`, `skills/`, and `rules/` are loaded when the plugin
 is installed.
+
+## Dependencies
+
+`jq`, `curl`, `openssl`, and `nc` are required. You almost certainly don't
+need to think about `jq` specifically, though: every script prefers a
+system install if you have one, but falls back automatically to a copy
+bundled in `scripts/bin/` (macOS arm64/amd64, Linux amd64/arm64 — see
+`scripts/bin/PROVENANCE.md` for exact versions and checksums). If neither is
+available — an unsupported platform/architecture — the plugin fails
+gracefully with a clear message instead of producing broken output.
+Windows support for the bundled fallback isn't in yet.
 
 ## 1. Point it at your CodeDefense deployment
 

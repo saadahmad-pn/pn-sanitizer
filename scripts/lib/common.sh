@@ -17,11 +17,48 @@ else
   NC=''
 fi
 
+# Resolve jq: prefer a system install (respects whatever version the user
+# already has), fall back to the binary bundled in scripts/bin/ so jq is
+# never a hard requirement. JQ_BIN is empty only if neither is available
+# (e.g. an unsupported platform/arch) — callers must check for that.
+resolve_jq() {
+  if command -v jq &>/dev/null; then
+    printf '%s' "jq"
+    return 0
+  fi
+
+  local os arch bin_dir bundled
+  os="$(uname -s)"
+  arch="$(uname -m)"
+
+  case "$os" in
+    Darwin) os="macos" ;;
+    Linux) os="linux" ;;
+    *) return 1 ;;
+  esac
+  case "$arch" in
+    arm64|aarch64) arch="arm64" ;;
+    x86_64|amd64) arch="amd64" ;;
+    *) return 1 ;;
+  esac
+
+  bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd)"
+  bundled="${bin_dir}/jq-${os}-${arch}"
+  if [[ -n "$bin_dir" ]] && [[ -x "$bundled" ]]; then
+    printf '%s' "$bundled"
+    return 0
+  fi
+
+  return 1
+}
+
+JQ_BIN="$(resolve_jq)" || JQ_BIN=""
+
 # JSON helpers
 
 json_string() {
   local value="$1"
-  echo "$value" | jq -Rs .
+  echo "$value" | "$JQ_BIN" -Rs .
 }
 
 json_object() {
@@ -33,7 +70,7 @@ json_object() {
 json_merge() {
   local json1="$1"
   local json2="$2"
-  echo "$json1" "$json2" | jq -s '.[0] * .[1]'
+  echo "$json1" "$json2" | "$JQ_BIN" -s '.[0] * .[1]'
 }
 
 # HTTP helpers
@@ -146,7 +183,7 @@ audit_log() {
   local timestamp
   timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
-  entry=$(echo "$entry" | jq ". + {timestamp: \"$timestamp\"}")
+  entry=$(echo "$entry" | "$JQ_BIN" ". + {timestamp: \"$timestamp\"}")
   echo "$entry" >> "$log_path"
 }
 
@@ -171,7 +208,7 @@ json_allow() {
     echo '{"continue": true}'
   else
     local msg_json
-    msg_json=$(echo "$message" | jq -Rs .)
+    msg_json=$(echo "$message" | "$JQ_BIN" -Rs .)
     echo "{\"continue\": true, \"user_message\": $msg_json}"
   fi
 }
@@ -180,7 +217,7 @@ json_deny() {
   local message="$1"
 
   local msg_json
-  msg_json=$(echo "$message" | jq -Rs .)
+  msg_json=$(echo "$message" | "$JQ_BIN" -Rs .)
   echo "{\"continue\": false, \"user_message\": $msg_json}"
 }
 
@@ -191,7 +228,7 @@ json_permission_allow() {
     echo '{"permission": "allow"}'
   else
     local msg_json
-    msg_json=$(echo "$message" | jq -Rs .)
+    msg_json=$(echo "$message" | "$JQ_BIN" -Rs .)
     echo "{\"permission\": \"allow\", \"user_message\": $msg_json}"
   fi
 }
@@ -201,13 +238,13 @@ json_permission_deny() {
   local agent_message="${2:-}"
 
   local user_msg_json
-  user_msg_json=$(echo "$user_message" | jq -Rs .)
+  user_msg_json=$(echo "$user_message" | "$JQ_BIN" -Rs .)
 
   if [[ -z "$agent_message" ]]; then
     echo "{\"permission\": \"deny\", \"user_message\": $user_msg_json}"
   else
     local agent_msg_json
-    agent_msg_json=$(echo "$agent_message" | jq -Rs .)
+    agent_msg_json=$(echo "$agent_message" | "$JQ_BIN" -Rs .)
     echo "{\"permission\": \"deny\", \"user_message\": $user_msg_json, \"agent_message\": $agent_msg_json}"
   fi
 }
@@ -216,7 +253,7 @@ json_session_context() {
   local context="$1"
 
   local ctx_json
-  ctx_json=$(echo "$context" | jq -Rs .)
+  ctx_json=$(echo "$context" | "$JQ_BIN" -Rs .)
   echo "{\"additional_context\": $ctx_json}"
 }
 

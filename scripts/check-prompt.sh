@@ -37,24 +37,25 @@ main() {
     payload=$(cat 2>/dev/null)
   fi
 
-  # jq is required for everything below. Always fail open here regardless of
-  # PROMPT_FAILURE_MODE — jq could be missing before the user has ever logged
-  # in, so this must stay unconditional for the same reason "not configured"
-  # does below. Uses a hand-written literal since the JSON helpers themselves
-  # depend on jq.
-  if ! command_exists jq; then
-    echo '{"continue": true, "user_message": "A required tool (jq) is missing on this machine. Allowing prompt. Install jq to enable scanning (see the plugin README)."}'
+  # jq is required for everything below (a system install or the bundled
+  # fallback in scripts/bin/ — see JQ_BIN in lib/common.sh). Always fail open
+  # here regardless of PROMPT_FAILURE_MODE — this could trip before the user
+  # has ever logged in, so it must stay unconditional for the same reason
+  # "not configured" does below. Uses a hand-written literal since the JSON
+  # helpers themselves depend on jq.
+  if [[ -z "$JQ_BIN" ]]; then
+    echo '{"continue": true, "user_message": "No usable jq was found on this machine or bundled for this platform. Allowing prompt. Install jq to enable scanning (see the plugin README)."}'
     return 0
   fi
 
-  if ! echo "$payload" | jq empty 2>/dev/null; then
+  if ! echo "$payload" | "$JQ_BIN" empty 2>/dev/null; then
     json_deny "Received invalid input. Prompt blocked."
     return 0
   fi
 
   # Extract prompt
   local prompt
-  prompt=$(echo "$payload" | jq -r '.prompt // ""')
+  prompt=$(echo "$payload" | "$JQ_BIN" -r '.prompt // ""')
 
   # Resolve config
   local config
@@ -127,7 +128,7 @@ main() {
   fi
 
   # Validate response is JSON
-  if ! echo "$response" | jq empty 2>/dev/null; then
+  if ! echo "$response" | "$JQ_BIN" empty 2>/dev/null; then
     log_debug "API invalid JSON response | url=$scan_url" "$DEBUG_LOG_PATH"
     if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
       json_deny "The scanning service returned an invalid response. Prompt blocked."
@@ -140,8 +141,8 @@ main() {
   local action
   local message
 
-  action=$(echo "$response" | jq -r '.action_to_take // "allow"')
-  message=$(echo "$response" | jq -r '.message // "Prompt blocked by CodeDefense."')
+  action=$(echo "$response" | "$JQ_BIN" -r '.action_to_take // "allow"')
+  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Prompt blocked by CodeDefense."')
 
   log_debug "API response received | action=$action" "$DEBUG_LOG_PATH"
 

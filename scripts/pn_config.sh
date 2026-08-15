@@ -14,7 +14,7 @@ pn_load_credentials() {
     return 1
   fi
 
-  jq -e '.base_url and .access_token and .refresh_token and .expires_at' "$CRED_PATH" >/dev/null 2>&1 || {
+  "$JQ_BIN" -e '.base_url and .access_token and .refresh_token and .expires_at' "$CRED_PATH" >/dev/null 2>&1 || {
     return 1
   }
 
@@ -32,7 +32,7 @@ pn_save_credentials() {
   chmod 700 "$CRED_DIR" 2>/dev/null || true
 
   local creds_json
-  creds_json=$(jq -n \
+  creds_json=$("$JQ_BIN" -n \
     --arg base_url "$base_url" \
     --arg access_token "$access_token" \
     --arg refresh_token "$refresh_token" \
@@ -79,7 +79,7 @@ EOF
   fi
 
   # Validate response has required fields
-  jq -e '.access_token and .refresh_token and .expires_in' <<<"$response" >/dev/null 2>&1 || {
+  "$JQ_BIN" -e '.access_token and .refresh_token and .expires_in' <<<"$response" >/dev/null 2>&1 || {
     return 1
   }
 
@@ -96,10 +96,10 @@ pn_get_valid_access_token() {
   local refresh_token
   local expires_at
 
-  base_url=$(echo "$creds" | jq -r '.base_url')
-  access_token=$(echo "$creds" | jq -r '.access_token')
-  refresh_token=$(echo "$creds" | jq -r '.refresh_token')
-  expires_at=$(echo "$creds" | jq -r '.expires_at | floor' 2>/dev/null)
+  base_url=$(echo "$creds" | "$JQ_BIN" -r '.base_url')
+  access_token=$(echo "$creds" | "$JQ_BIN" -r '.access_token')
+  refresh_token=$(echo "$creds" | "$JQ_BIN" -r '.refresh_token')
+  expires_at=$(echo "$creds" | "$JQ_BIN" -r '.expires_at | floor' 2>/dev/null)
 
   # Guard against a corrupted/malformed credentials file crashing the
   # arithmetic below outright — treat an unparseable value as already
@@ -128,9 +128,9 @@ pn_get_valid_access_token() {
   local new_refresh_token
   local expires_in
 
-  new_access_token=$(echo "$refreshed" | jq -r '.access_token')
-  new_refresh_token=$(echo "$refreshed" | jq -r '.refresh_token')
-  expires_in=$(echo "$refreshed" | jq -r '.expires_in | floor' 2>/dev/null)
+  new_access_token=$(echo "$refreshed" | "$JQ_BIN" -r '.access_token')
+  new_refresh_token=$(echo "$refreshed" | "$JQ_BIN" -r '.refresh_token')
+  expires_in=$(echo "$refreshed" | "$JQ_BIN" -r '.expires_in | floor' 2>/dev/null)
 
   # A non-numeric expires_in means the refresh response itself is malformed —
   # treat this the same as a failed refresh rather than crash on arithmetic

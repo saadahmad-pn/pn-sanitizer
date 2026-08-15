@@ -18,12 +18,15 @@ fi
 
 # Fail open: any error just returns empty context
 main() {
-  # Check if jq is available. Build this message by hand (no json_session_context)
-  # since that helper — and every jq_* helper — itself depends on jq.
-  if ! command_exists jq; then
+  # Check whether jq is available — a system install or the bundled fallback
+  # in scripts/bin/ (see JQ_BIN in lib/common.sh). Build this message by hand
+  # (no json_session_context) since that helper — and every jq_* helper —
+  # itself depends on jq.
+  if [[ -z "$JQ_BIN" ]]; then
     local instructions
     read -r -d '' instructions <<'EOF' || true
-jq is required but not found. Please install it:
+No usable jq was found on this machine, and no bundled copy is available for
+this platform. Please install jq:
 
 macOS:  brew install jq
 Linux:  sudo apt-get install jq  (Debian/Ubuntu)

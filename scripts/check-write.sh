@@ -35,14 +35,15 @@ main() {
     payload=$(cat 2>/dev/null)
   fi
 
-  # jq is required for everything below; route through the same FAILURE_MODE
-  # decision as an unreachable scanner, using hand-written literals since the
-  # JSON helpers (and audit_log) themselves depend on jq.
-  if ! command_exists jq; then
+  # jq is required for everything below (a system install or the bundled
+  # fallback in scripts/bin/ — see JQ_BIN in lib/common.sh); route through the
+  # same FAILURE_MODE decision as an unreachable scanner, using hand-written
+  # literals since the JSON helpers (and audit_log) themselves depend on jq.
+  if [[ -z "$JQ_BIN" ]]; then
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      echo '{"permission": "allow", "user_message": "A required tool (jq) is missing on this machine. Write allowed WITHOUT a security scan. Install jq to enable scanning (see the plugin README)."}'
+      echo '{"permission": "allow", "user_message": "No usable jq was found on this machine or bundled for this platform. Write allowed WITHOUT a security scan. Install jq to enable scanning (see the plugin README)."}'
     else
-      echo '{"permission": "deny", "user_message": "A required tool (jq) is missing on this machine. Write blocked.", "agent_message": "A required tool (jq) is missing on this machine. Do not retry this write. Ask the user to install jq (see the plugin README), then try again."}'
+      echo '{"permission": "deny", "user_message": "No usable jq was found on this machine or bundled for this platform. Write blocked.", "agent_message": "No usable jq was found on this machine or bundled for this platform. Do not retry this write. Ask the user to install jq (see the plugin README), then try again."}'
     fi
     return 0
   fi
@@ -52,14 +53,14 @@ main() {
   # quirk, not an unreachable scanner. Routing it through FAILURE_MODE would
   # mean an affected machine gets every single write blocked persistently,
   # which is worse than a transient scanner outage.
-  if ! echo "$payload" | jq empty 2>/dev/null; then
+  if ! echo "$payload" | "$JQ_BIN" empty 2>/dev/null; then
     json_permission_allow "Received invalid input."
     return 0
   fi
 
   # Extract tool name
   local tool_name
-  tool_name=$(echo "$payload" | jq -r '.tool_name // ""')
+  tool_name=$(echo "$payload" | "$JQ_BIN" -r '.tool_name // ""')
 
   # Only scan Write tool calls
   if [[ "$tool_name" != "Write" ]]; then
@@ -72,9 +73,9 @@ main() {
   local transcript_path
   local file_path
 
-  agent_message=$(echo "$payload" | jq -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-  transcript_path=$(echo "$payload" | jq -r '.transcript_path // ""')
-  file_path=$(echo "$payload" | jq -r '.tool_input.file_path // ""')
+  agent_message=$(echo "$payload" | "$JQ_BIN" -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  transcript_path=$(echo "$payload" | "$JQ_BIN" -r '.transcript_path // ""')
+  file_path=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')
 
   # Determine what to scan
   local transcript_content=""
@@ -98,7 +99,7 @@ main() {
   local config
   config=$(pn_resolve_config) || {
     local reason="PN not configured — run the pn-login skill"
-    audit_log_entry=$(jq -n \
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "not_configured" \
@@ -136,7 +137,7 @@ main() {
   # Handle curl errors
   if [[ $curl_exit -eq 28 ]]; then
     # Timeout
-    audit_log_entry=$(jq -n \
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "api_timeout" \
@@ -153,7 +154,7 @@ main() {
     return 0
   elif [[ $curl_exit -ne 0 ]]; then
     # Connection error
-    audit_log_entry=$(jq -n \
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "api_unreachable" \
@@ -175,7 +176,7 @@ main() {
   # would otherwise default to "allow" via the // fallback below and
   # silently mask the actual failure.
   if [[ "$HTTP_POST_STATUS" != 2* ]]; then
-    audit_log_entry=$(jq -n \
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "api_http_error" \
@@ -193,8 +194,8 @@ main() {
   fi
 
   # Validate response is JSON
-  if ! echo "$response" | jq empty 2>/dev/null; then
-    audit_log_entry=$(jq -n \
+  if ! echo "$response" | "$JQ_BIN" empty 2>/dev/null; then
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "api_invalid_json" \
@@ -215,13 +216,13 @@ main() {
   local message
   local scan_id
 
-  action=$(echo "$response" | jq -r '.action_to_take // "allow"')
-  message=$(echo "$response" | jq -r '.message // "Agent response blocked by CodeDefense."')
-  scan_id=$(echo "$response" | jq -r '.scan_id // ""')
+  action=$(echo "$response" | "$JQ_BIN" -r '.action_to_take // "allow"')
+  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Agent response blocked by CodeDefense."')
+  scan_id=$(echo "$response" | "$JQ_BIN" -r '.scan_id // ""')
 
 
   # Audit log the decision
-  audit_log_entry=$(jq -n \
+  audit_log_entry=$("$JQ_BIN" -n \
     --arg file_path "$file_path" \
     --arg decision "$action" \
     --arg scan_id "$scan_id" \
