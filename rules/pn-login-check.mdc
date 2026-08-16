@@ -5,15 +5,15 @@ alwaysApply: true
 
 # PN (Paradigm Networks) login check
 
-This plugin (`pn-sanitizer`) gates every prompt and tool call through CodeDefense,
+This plugin (`paradigm-scanner`) gates every prompt and tool call through CodeDefense,
 which requires this workspace to be logged in to PN. Two other mechanisms try to
 surface a missing login, but **neither reliably reaches you (the agent) on the
 first message of a session**, so this rule is the backstop:
 
-- `check-session.py` (`sessionStart`) injects context asking you to request the
+- `check-session.sh` (`sessionStart`) injects context asking you to request the
   base URL, but `sessionStart` is fire-and-forget — the agent loop doesn't wait
   for or enforce it, so it can race with (or miss) the user's first message.
-- `check-prompt.py` (`beforeSubmitPrompt`) only supports `continue` /
+- `check-prompt.sh` (`beforeSubmitPrompt`) only supports `continue` /
   `user_message` output fields. `user_message` is a UI-level notice to the
   human when a prompt is blocked — it is never injected into your context, so
   an "allowed" prompt with PN unconfigured gives you no signal to act on.
@@ -23,26 +23,38 @@ first message of a session**, so this rule is the backstop:
 On the **first user message of a session**, before doing anything else, check
 whether PN is already configured. Do this with a plain shell command — do
 **not** try to locate this plugin's own `scripts/` directory to import
-`pn_config.py`; the plugin can be installed anywhere (`~/.cursor/plugins/...`)
+`pn_config.sh`; the plugin can be installed anywhere (`~/.cursor/plugins/...`)
 and there is no environment variable that tells you where, so path-guessing
 is unreliable. The credentials file lives at a fixed, well-known path
 regardless of install location:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PN_BASE_URL" ] && [ -n "$PN_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
+  echo CONFIGURED
+elif [ -n "$PN_BASE_URL" ]; then
+  echo NOT_CONFIGURED_URL_KNOWN
+else
+  echo NOT_CONFIGURED
+fi
 ```
 
 - `CONFIGURED` → PN already has a stored login (or a shared-host env override
   is set). Proceed with the user's request normally — no further action
   needed. (This only checks presence, not validity — an expired token that
-  fails to refresh is already handled by `check-prompt.py`/`check-response.py`
+  fails to refresh is already handled by `check-prompt.sh`/`check-write.sh`
   failing open/closed on their own, so don't try to validate the token here.)
-- `NOT_CONFIGURED` → PN is **not** configured. You must invoke the
-  `AskQuestion` tool itself to ask for the base URL — actually call the tool,
-  do not just type the prompt and options into a chat message as text or a
-  bulleted list. Writing it out in prose produces none of the clickable UI or
-  free-text "Other" field; it just looks like a plain question to the user,
-  which is exactly what this is meant to avoid. Call it with:
+- `NOT_CONFIGURED_URL_KNOWN` → an admin has already set `PN_BASE_URL` for
+  this workspace (e.g. via the plugin's marketplace configuration), but no
+  one has completed login yet. Do **not** ask for the base URL — run the
+  `pn-login` skill directly using `$PN_BASE_URL` as the known value, skipping
+  straight to its login step, before proceeding with the user's request.
+- `NOT_CONFIGURED` → PN is **not** configured and no base URL is known. You
+  must invoke the `AskQuestion` tool itself to ask for the base URL —
+  actually call the tool, do not just type the prompt and options into a
+  chat message as text or a bulleted list. Writing it out in prose produces
+  none of the clickable UI or free-text "Other" field; it just looks like a
+  plain question to the user, which is exactly what this is meant to avoid.
+  Call it with:
   - prompt: "What's your PN base URL? (e.g. `https://acme.paradigmnetworks.ai`). Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup."
   - options: `"I'm not sure what my base URL is"`, `"I think I'm already logged in — recheck"`
   - the user's own URL comes back via the automatic "Other" option; do not
@@ -55,8 +67,14 @@ if [ -f ~/.pn/credentials.json ] || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNA
   Once you have it, run the `pn-login` skill to log in before proceeding
   with their original request.
 
+This automatic use of `$PN_BASE_URL` only applies to this passive, first-
+message check. If the user explicitly asks to log in, switch PN orgs, or
+gives their own URL directly, that always takes priority — run the
+`pn-login` skill with whatever URL they actually gave you, regardless of
+what `PN_BASE_URL` is set to.
+
 Do not treat an allowed prompt or a "CodeDefense API unreachable" message as
-proof that PN is configured — `check-prompt.py` and `check-response.py` fail
+proof that PN is configured — `check-prompt.sh` and `check-write.sh` fail
 open on purpose, so prompts and tool calls can proceed even when there's no
 login at all.
 

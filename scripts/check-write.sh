@@ -1,5 +1,6 @@
 #!/bin/bash
-# preToolUse hook: scan agent response before Write/Edit tool calls
+# preToolUse hook: scan agent response before Write tool calls
+# (Cursor has no separate "Edit" tool_name; all file modifications use "Write".)
 # Returns {permission: "allow"/"deny", user_message: "...", agent_message: "..."}
 
 set -o pipefail
@@ -12,31 +13,57 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
-TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-5}"
+TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
 TRANSCRIPT_BYTES="${SNANTIZER_TRANSCRIPT_BYTES:-4000}"
-FAILURE_MODE="${SNANTIZER_FAILURE_MODE:-closed}"
-FAILURE_MODE=$(echo "$FAILURE_MODE" | tr '[:upper:]' '[:lower:]')
+# PN_FAILURE_MODE (marketplace setting: block/allow) takes precedence;
+# SNANTIZER_FAILURE_MODE (legacy shared-host override: closed/open) is the fallback.
+RAW_FAILURE_MODE=$(echo "${PN_FAILURE_MODE:-${SNANTIZER_FAILURE_MODE:-block}}" | tr '[:upper:]' '[:lower:]')
+case "$RAW_FAILURE_MODE" in
+  allow|open) FAILURE_MODE="open" ;;
+  *)          FAILURE_MODE="closed" ;;
+esac
 
-AUDIT_LOG_PATH="${HOME}/.pn-sanitizer/audit.jsonl"
+AUDIT_LOG_PATH="${HOME}/.paradigm-scanner/audit.jsonl"
 
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
 main() {
-  # Read and validate JSON from stdin
-  local payload
-  payload=$(cat 2>/dev/null)
+  # Read and validate JSON from stdin (skip if nothing is piped in — avoids
+  # hanging when invoked without a payload, e.g. manual testing)
+  local payload=""
+  if [[ ! -t 0 ]]; then
+    payload=$(cat 2>/dev/null)
+  fi
 
-  if ! echo "$payload" | jq empty 2>/dev/null; then
-    json_permission_allow "Write-guard hook received invalid JSON input."
+  # jq is required for everything below (a system install or the bundled
+  # fallback in scripts/bin/ — see JQ_BIN in lib/common.sh); route through the
+  # same FAILURE_MODE decision as an unreachable scanner, using hand-written
+  # literals since the JSON helpers (and audit_log) themselves depend on jq.
+  if [[ -z "$JQ_BIN" ]]; then
+    if [[ "$FAILURE_MODE" == "open" ]]; then
+      echo '{"permission": "allow", "user_message": "No usable jq was found on this machine or bundled for this platform. Write allowed WITHOUT a security scan. Install jq to enable scanning (see the plugin README)."}'
+    else
+      echo '{"permission": "deny", "user_message": "No usable jq was found on this machine or bundled for this platform. Write blocked.", "agent_message": "No usable jq was found on this machine or bundled for this platform. Do not retry this write. Ask the user to install jq (see the plugin README), then try again."}'
+    fi
+    return 0
+  fi
+
+  # Deliberately always allow here, unlike the FAILURE_MODE-driven branches
+  # below: a malformed payload usually signals a Cursor integration/encoding
+  # quirk, not an unreachable scanner. Routing it through FAILURE_MODE would
+  # mean an affected machine gets every single write blocked persistently,
+  # which is worse than a transient scanner outage.
+  if ! echo "$payload" | "$JQ_BIN" empty 2>/dev/null; then
+    json_permission_allow "Received invalid input."
     return 0
   fi
 
   # Extract tool name
   local tool_name
-  tool_name=$(echo "$payload" | jq -r '.tool_name // ""')
+  tool_name=$(echo "$payload" | "$JQ_BIN" -r '.tool_name // ""')
 
-  # Only scan Write and Edit tools
-  if [[ "$tool_name" != "Write" ]] && [[ "$tool_name" != "Edit" ]]; then
+  # Only scan Write tool calls
+  if [[ "$tool_name" != "Write" ]]; then
     json_permission_allow
     return 0
   fi
@@ -46,9 +73,9 @@ main() {
   local transcript_path
   local file_path
 
-  agent_message=$(echo "$payload" | jq -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-  transcript_path=$(echo "$payload" | jq -r '.transcript_path // ""')
-  file_path=$(echo "$payload" | jq -r '.tool_input.file_path // ""')
+  agent_message=$(echo "$payload" | "$JQ_BIN" -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  transcript_path=$(echo "$payload" | "$JQ_BIN" -r '.transcript_path // ""')
+  file_path=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')
 
   # Determine what to scan
   local transcript_content=""
@@ -72,7 +99,7 @@ main() {
   local config
   config=$(pn_resolve_config) || {
     local reason="PN not configured — run the pn-login skill"
-    audit_log_entry=$(jq -n \
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "not_configured" \
@@ -81,9 +108,9 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable ($reason). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service is unavailable ($reason). Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable ($reason). Write blocked." "The security scan API is unavailable ($reason). Do not retry this write."
+      json_permission_deny "The scanning service is unavailable ($reason). Write blocked." "The scanning service is unavailable ($reason). Do not retry this write."
     fi
     return 0
   }
@@ -98,15 +125,19 @@ main() {
   fi
 
 
-  # POST to API (curl -F handles multipart encoding automatically)
+  # POST to API (--form-string sends this as a literal value, not a file
+  # reference, even if it happens to start with "@")
   local response
-  response=$(http_post_form "$scan_url" "$scan_text" "$access_token" "$TIMEOUT_SECONDS")
+  local raw_response
+  raw_response=$(http_post_form "$scan_url" "$scan_text" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
+  http_post_split_status "$raw_response"
+  response="$HTTP_POST_BODY"
 
   # Handle curl errors
   if [[ $curl_exit -eq 28 ]]; then
     # Timeout
-    audit_log_entry=$(jq -n \
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "api_timeout" \
@@ -116,14 +147,14 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable (timed out after ${TIMEOUT_SECONDS}s). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable (timed out after ${TIMEOUT_SECONDS}s). Write blocked." "The security scan API is unavailable (timed out after ${TIMEOUT_SECONDS}s). Do not retry this write."
+      json_permission_deny "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Write blocked." "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Do not retry this write."
     fi
     return 0
   elif [[ $curl_exit -ne 0 ]]; then
     # Connection error
-    audit_log_entry=$(jq -n \
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "api_unreachable" \
@@ -133,16 +164,38 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable (connection failed). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service is unavailable (connection failed). Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable (connection failed). Write blocked." "The security scan API is unavailable (connection failed). Do not retry this write."
+      json_permission_deny "The scanning service is unavailable (connection failed). Write blocked." "The scanning service is unavailable (connection failed). Do not retry this write."
+    fi
+    return 0
+  fi
+
+  # Reject non-2xx responses (expired/invalid token, server error, etc.)
+  # before treating the body as a real verdict — a valid-JSON error body
+  # would otherwise default to "allow" via the // fallback below and
+  # silently mask the actual failure.
+  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
+    audit_log_entry=$("$JQ_BIN" -n \
+      --arg file_path "$file_path" \
+      --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
+      --arg reason "api_http_error" \
+      --arg detail "HTTP ${HTTP_POST_STATUS}" \
+      --arg scan_url "$scan_url" \
+      '{file_path: $file_path, decision: $decision, reason: $reason, detail: $detail, scan_url: $scan_url}')
+    audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
+
+    if [[ "$FAILURE_MODE" == "open" ]]; then
+      json_permission_allow "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Write allowed WITHOUT a security scan."
+    else
+      json_permission_deny "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Write blocked." "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Do not retry this write."
     fi
     return 0
   fi
 
   # Validate response is JSON
-  if ! echo "$response" | jq empty 2>/dev/null; then
-    audit_log_entry=$(jq -n \
+  if ! echo "$response" | "$JQ_BIN" empty 2>/dev/null; then
+    audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "api_invalid_json" \
@@ -152,9 +205,9 @@ main() {
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "CodeDefense unavailable (invalid JSON response). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service returned an invalid response. Write allowed WITHOUT a security scan."
     else
-      json_permission_deny "CodeDefense unavailable (invalid JSON response). Write blocked." "The security scan API is unavailable (invalid JSON response). Do not retry this write."
+      json_permission_deny "The scanning service returned an invalid response. Write blocked." "The scanning service returned an invalid response. Do not retry this write."
     fi
     return 0
   fi
@@ -163,13 +216,13 @@ main() {
   local message
   local scan_id
 
-  action=$(echo "$response" | jq -r '.action_to_take // "allow"')
-  message=$(echo "$response" | jq -r '.message // "Agent response blocked by CodeDefense."')
-  scan_id=$(echo "$response" | jq -r '.scan_id // ""')
+  action=$(echo "$response" | "$JQ_BIN" -r '.action_to_take // "allow"')
+  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Agent response blocked by CodeDefense."')
+  scan_id=$(echo "$response" | "$JQ_BIN" -r '.scan_id // ""')
 
 
   # Audit log the decision
-  audit_log_entry=$(jq -n \
+  audit_log_entry=$("$JQ_BIN" -n \
     --arg file_path "$file_path" \
     --arg decision "$action" \
     --arg scan_id "$scan_id" \

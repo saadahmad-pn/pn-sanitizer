@@ -1,61 +1,63 @@
-# pn-sanitizer (Snantizer)
+# paradigm-scanner
 
-A Cursor plugin that gates every submitted prompt through a `beforeSubmitPrompt`
-hook. The hook calls a small local API, which decides whether the prompt is
-allowed to reach the agent.
+A Cursor plugin that gates every submitted prompt (`beforeSubmitPrompt`) and
+every file write (`preToolUse`), sending each to your organization's
+CodeDefense API to decide whether it's allowed through.
 
-**Base case:** block the exact prompt `hello` (after trim); allow everything else.
+Since that means prompt text and file-write content leave your machine, see
+[SECURITY.md](SECURITY.md#data-handling) for exactly what's sent, where it's
+stored, and how — worth reading before installing.
 
 ## What's in this plugin
 
 ```text
-pn-sanitizer/
+paradigm-scanner/
 ├── .cursor-plugin/
 │   └── plugin.json        # plugin manifest
 ├── hooks/
-│   └── hooks.json          # sessionStart / beforeSubmitPrompt hook config
+│   └── hooks.json          # sessionStart / beforeSubmitPrompt / preToolUse hook config
 ├── scripts/
 │   ├── check-session.sh   # sessionStart hook, flags missing PN login
-│   ├── check-prompt.sh    # beforeSubmitPrompt hook, calls the check API
-│   ├── check-write.sh     # preToolUse hook, calls the check API
+│   ├── check-prompt.sh    # beforeSubmitPrompt hook, calls the CodeDefense API
+│   ├── check-write.sh     # preToolUse hook, calls the CodeDefense API
 │   ├── pn_config.sh       # shared credentials store + token refresh
-│   └── login.sh           # one-time browser login CLI (PKCE)
+│   ├── login.sh           # one-time browser login CLI (PKCE)
+│   ├── lib/common.sh      # shared JSON/HTTP/logging helpers
+│   └── bin/               # bundled jq fallback binaries — see Dependencies below
 ├── skills/
 │   └── pn-login/
-│       └── SKILL.md       # tells the agent how to run login.py
-├── rules/
-│   └── pn-login-check.mdc # always-on backstop that asks for the base URL
-└── server/                 # companion FastAPI service (not installed by the plugin)
-    ├── main.py
-    └── requirements.txt
+│       └── SKILL.md       # tells the agent how to run login.sh
+└── rules/
+    └── pn-login-check.mdc # always-on backstop that asks for the base URL
 ```
 
 Only `hooks/`, `scripts/`, `skills/`, and `rules/` are loaded when the plugin
-is installed. `server/` is a companion service you run separately — the hook
-has nothing to check prompts against without it.
+is installed.
 
-## 1. Run the check API
+## Dependencies
 
-Each developer (or a shared host) needs the API reachable at the URL the hook
-points to.
+`jq`, `curl`, `openssl`, and `nc` are required. You almost certainly don't
+need to think about `jq` specifically, though: every script prefers a
+system install if you have one, but falls back automatically to a copy
+bundled in `scripts/bin/` (macOS arm64/amd64, Linux amd64/arm64 — see
+`scripts/bin/PROVENANCE.md` for exact versions and checksums). If neither is
+available — an unsupported platform/architecture — the plugin fails
+gracefully with a clear message instead of producing broken output.
+Windows support for the bundled fallback isn't in yet.
 
-```bash
-cd server
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
+## 1. Point it at your CodeDefense deployment
 
-Health check: `GET http://127.0.0.1:8000/health`
-Check prompt: `POST http://127.0.0.1:8000/check` with `{"prompt":"..."}`.
+Each developer (or a shared host) needs your organization's CodeDefense API
+reachable at the base URL you'll log in with, e.g.
+`https://acme.paradigmnetworks.ai`. This plugin doesn't ship a scanning
+backend — it's a client for your org's own CodeDefense deployment.
 
 ## 2. Install the plugin
 
 ### Option A: Local install (for testing before sharing)
 
 ```bash
-ln -s /path/to/pn-sanitizer ~/.cursor/plugins/local/pn-sanitizer
+ln -s /path/to/pn-sanitizer ~/.cursor/plugins/local/paradigm-scanner
 ```
 
 Restart Cursor (or run **Developer: Reload Window**).
@@ -64,7 +66,7 @@ Restart Cursor (or run **Developer: Reload Window**).
 
 1. Push this repo to GitHub.
 2. In the Cursor dashboard, go to **Dashboard → Plugins → Team Marketplaces → Add Marketplace**.
-3. Import the repo URL and add `pn-sanitizer` to the marketplace.
+3. Import the repo URL and add `paradigm-scanner` to the marketplace.
 4. Set it to **Default On** or **Required** so teammates get the hook automatically.
 
 Teammates still need the check API reachable (see step 1) — the plugin only
@@ -120,25 +122,43 @@ variables — read by `check-prompt.sh` and `check-write.sh` — take
 | `SNANTIZER_TOKEN` | _(none — falls back to stored login)_ | Bearer access token |
 | `SNANTIZER_SCAN_URL` | `{base_url}/api/v1/codedefense/scan` | Full scan endpoint override |
 | `SNANTIZER_TIMEOUT` | `5` | HTTP timeout (seconds) |
-| `SNANTIZER_FAILURE_MODE` | `closed` | `open`/`closed` — verdict when the scanner is unreachable or not configured |
+| `SNANTIZER_FAILURE_MODE` | `closed` | `open`/`closed` — legacy name for the write-guard failure mode below |
+
+`check-write.sh` also reads `PN_FAILURE_MODE` — the setting exposed in Cursor's
+plugin configuration UI — taking precedence over `SNANTIZER_FAILURE_MODE` when
+both are set. It accepts `block` (default; deny writes when the scanner is
+unreachable or not configured) or `allow` (let writes through unscanned in
+that case).
+
+`check-prompt.sh` has its own, separate `PN_PROMPT_FAILURE_MODE` (or legacy
+`SNANTIZER_PROMPT_FAILURE_MODE`), accepting `allow` (default) or `block`. It
+only governs scanner errors that happen *after* you're already logged in
+(timeout, unreachable, invalid response) — a not-yet-configured workspace
+always allows the prompt through unconditionally regardless of this setting,
+since `beforeSubmitPrompt` has no way to hand the agent context to explain a
+block, and blocking here could strand a new user before they ever reach the
+login flow. The same is true if `jq` itself is missing.
 
 If only one of `SNANTIZER_BASE_URL` / `SNANTIZER_TOKEN` is set, it's ignored
 and the stored login is used instead — set both, or neither.
 
-`failClosed` is enabled for `beforeSubmitPrompt` in `hooks/hooks.json`: if the
-hook script itself crashes or times out, the prompt is blocked. If the API is
-merely unreachable, slow, or not yet configured, the hook fails open (allows
-the prompt) so a down API or a fresh, not-yet-logged-in checkout doesn't block
-everyone's work — see `scripts/check-prompt.sh`. `sessionStart` (`check-session.sh`) is
-`failClosed: false` and fails open on any error, since it must never block a
+`beforeSubmitPrompt` has no `failClosed` set in `hooks/hooks.json`, so it
+follows Cursor's default (fail-open) if the hook script itself crashes or
+times out. If the CodeDefense API is merely unreachable, slow, or not yet
+configured, `check-prompt.sh` also fails open on purpose — see
+`PN_PROMPT_FAILURE_MODE` above for how to change that once your team is fully
+onboarded. `sessionStart` (`check-session.sh`) explicitly sets
+`failClosed: false` and always fails open, since it must never block a
 session from starting.
 
 ## Try it
 
-1. Start the FastAPI server (step 1 above).
-2. Install the plugin locally (step 2, option A).
-3. In Agent chat, submit `hello` → should be blocked.
-4. Submit any other prompt → should proceed.
+1. Install the plugin locally (step 2, option A) and log in to your
+   organization's CodeDefense deployment (see "One-time login" above).
+2. In Agent chat, submit a prompt or make an edit that your organization's
+   CodeDefense policy blocks — it should be denied with a message from the
+   plugin.
+3. Submit anything CodeDefense allows — it should proceed normally.
 
 Check **Cursor Settings → Hooks** or the Hooks output channel if something
 does not fire.

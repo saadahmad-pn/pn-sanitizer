@@ -99,10 +99,10 @@ unset SNANTIZER_FAILURE_MODE
 
 test_case "check-write.sh audit log written"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
-rm -f "$HOME/.pn-sanitizer/audit.jsonl"
+rm -f "$HOME/.paradigm-scanner/audit.jsonl"
 payload='{"tool_name": "Write", "agent_message": "test", "tool_input": {"file_path": "test.txt"}}'
 "$SCRIPTS_DIR/check-write.sh" <<< "$payload" >/dev/null 2>&1 || true
-if [[ -f "$HOME/.pn-sanitizer/audit.jsonl" ]]; then
+if [[ -f "$HOME/.paradigm-scanner/audit.jsonl" ]]; then
   TESTS_RUN=$((TESTS_RUN + 1))
   echo -e "  ${GREEN}✓${NC} Audit log written"
   TESTS_PASSED=$((TESTS_PASSED + 1))

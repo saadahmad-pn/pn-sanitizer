@@ -7,24 +7,19 @@
         "matcher": "",
         "failClosed": false,
         "timeout": 10
-      },
-      {
-        "command": "sh \"$CURSOR_PLUGIN_ROOT/scripts/probe-variables.sh\"",
-        "failClosed": false,
-        "timeout": 5
       }
     ],
     "beforeSubmitPrompt": [
       {
         "command": "bash ./scripts/check-prompt.sh",
-        "timeout": 10
+        "timeout": 25
       }
     ],
     "preToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write",
         "command": "bash ./scripts/check-write.sh",
-        "timeout": 20
+        "timeout": 25
       }
     ]
   }

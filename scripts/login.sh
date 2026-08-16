@@ -7,6 +7,7 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
+source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Ensure line-buffering for non-TTY stdout
@@ -34,15 +35,16 @@ urlencode_strict() {
   echo -n "$string" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().rstrip()))" 2>/dev/null || \
   echo -n "$string" | python3 -c "import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null || \
   {
-    # Fallback: bash-only encoding (not perfect but works for most cases)
-    local i="${string//\%/\%25}"
-    i="${i//\ /\%20}"
-    i="${i//?/\%21}"
-    i="${i//:/\%3A}"
-    i="${i////\%2F}"
-    i="${i//&/\%26}"
-    i="${i//=/\%3D}"
-    echo -n "$i"
+    # Fallback: pure-bash percent-encoding (used when python3 is unavailable)
+    local result="" c hex i
+    for (( i = 0; i < ${#string}; i++ )); do
+      c="${string:i:1}"
+      case "$c" in
+        [a-zA-Z0-9.~_-]) result+="$c" ;;
+        *) printf -v hex '%%%02X' "'$c"; result+="$hex" ;;
+      esac
+    done
+    echo -n "$result"
   }
 }
 
@@ -143,9 +145,9 @@ exchange_code() {
   fi
 
   # Validate response is JSON and has access_token
-  if ! echo "$response" | jq -e '.access_token' >/dev/null 2>&1; then
+  if ! echo "$response" | "$JQ_BIN" -e '.access_token' >/dev/null 2>&1; then
     local error_msg
-    error_msg=$(echo "$response" | jq -r '.error_description // .error // "unknown error"' 2>/dev/null)
+    error_msg=$(echo "$response" | "$JQ_BIN" -r '.error_description // .error // "unknown error"' 2>/dev/null)
     echo "error: token exchange failed: $error_msg" >&2
     return 1
   fi
@@ -193,6 +195,19 @@ normalize_base_url() {
 }
 
 main() {
+  if [[ -z "$JQ_BIN" ]]; then
+    echo "error: jq is required but not found, and no bundled copy is available for this platform. Install it (macOS: brew install jq; Linux: apt-get/dnf/pacman install jq), then try again." >&2
+    return 1
+  fi
+  if ! command -v openssl &>/dev/null; then
+    echo "error: openssl is required but not found. It's needed to generate the login's PKCE challenge. Install it, then try again." >&2
+    return 1
+  fi
+  if ! command -v nc &>/dev/null; then
+    echo "error: nc (netcat) is required but not found. It's needed to receive the login callback. Install it, then try again." >&2
+    return 1
+  fi
+
   # Parse arguments
   local base_url=""
 
@@ -303,9 +318,15 @@ main() {
   local refresh_token
   local expires_in
 
-  access_token=$(echo "$token_response" | jq -r '.access_token')
-  refresh_token=$(echo "$token_response" | jq -r '.refresh_token // ""')
-  expires_in=$(echo "$token_response" | jq -r '(.expires_in // 3600) | floor')
+  access_token=$(echo "$token_response" | "$JQ_BIN" -r '.access_token')
+  refresh_token=$(echo "$token_response" | "$JQ_BIN" -r '.refresh_token // ""')
+  expires_in=$(echo "$token_response" | "$JQ_BIN" -r '(.expires_in // 3600) | floor' 2>/dev/null)
+
+  # Guard against a non-numeric expires_in (malformed/unexpected API response)
+  # crashing the arithmetic below outright.
+  if ! [[ "$expires_in" =~ ^[0-9]+$ ]]; then
+    expires_in=3600
+  fi
 
   # Calculate expiry timestamp
   local expires_at
