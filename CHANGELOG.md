@@ -1,8 +1,62 @@
 # Changelog
 
-All notable changes to pn-sanitizer are recorded here. This project hasn't had
-a public release yet — entries below are dated by when the work happened,
-not by version tag.
+All notable changes to paradigm-scanner (formerly pn-sanitizer) are recorded
+here. This project hasn't had a public release yet — entries below are dated
+by when the work happened, not by version tag.
+
+## 2026-08-17 — Added minClientVersions
+
+`plugin.json` now declares `"minClientVersions": {"cursor": "2.5.0"}` —
+2.5.0 is when Cursor's Plugin packaging system itself (the thing this
+project depends on to exist as an installable plugin at all) shipped,
+confirmed against Cursor's own changelog. Also confirmed `logo` and
+`assets/logo.svg` are wired in with a real brand asset.
+
+## 2026-08-17 — Renamed to paradigm-scanner
+
+The plugin's `name` field (`.cursor-plugin/plugin.json`) changed from
+`pn-sanitizer` to `paradigm-scanner` — `displayName` had already been set to
+"Paradigm Networks," but `name` is the internal identifier Cursor uses for
+install paths and marketplace URLs, and it must be lowercase kebab-case
+(confirmed against Cursor's own official plugins, e.g. `google-drive`).
+Updated everywhere this was hardcoded: the `pn-login` skill's `find` lookup
+for `login.sh`, the local-install symlink example, and the local log/audit
+directory (`~/.pn-sanitizer/` → `~/.paradigm-scanner/`) along with the tests
+that check for it. The GitHub repository URL itself (`homepage`/
+`repository` in `plugin.json`) is intentionally left unchanged pending a
+separate decision on whether to rename the repo too.
+
+## 2026-08-17 — Data handling disclosure
+
+Added a "Data handling" section to `SECURITY.md` documenting what this
+plugin actually does with prompt/file-write content: sent over HTTPS,
+stored indefinitely per-tenant in the tenant's own CodeDefense database,
+already covered under Paradigm Networks' main product customer agreement
+(no separate disclosure needed for this plugin specifically). Linked to it
+from the top of the README. Closes the data-handling review item from the
+marketplace-readiness list.
+
+## 2026-08-16 — Honor an admin-configured PN_BASE_URL during onboarding
+
+`rules/pn-login-check.mdc` and `skills/pn-login/SKILL.md` previously only
+recognized two states — fully logged in, or not configured at all — so an
+admin who pre-configured `PN_BASE_URL` via the plugin's marketplace variable
+still had every teammate asked for that same URL again on their first
+message. Added a third state, `NOT_CONFIGURED_URL_KNOWN`: when only
+`PN_BASE_URL` is set, the agent skips asking entirely and logs the user in
+directly with that value. An explicit request from the user to log into a
+different org still always takes priority over the pre-configured value.
+
+## 2026-08-16 — Removed unused variable probe
+
+Removed `scripts/probe-variables.sh` and its `sessionStart` entry in
+`hooks/hooks.json`. It was pure diagnostic instrumentation (logged
+`$CURSOR_PLUGIN_ROOT`/`$CURSOR_PROJECT_DIR` and other env vars to a local
+temp file to check an assumption about what Cursor passes to hook scripts)
+— it always returned a no-op `{}` and nothing else in the codebase
+referenced it. The open question it was meant to answer remains open; the
+login skill's own `find`-based fallback for locating `login.sh` never
+depended on it.
 
 ## 2026-08-14 — Bundled jq fallback
 

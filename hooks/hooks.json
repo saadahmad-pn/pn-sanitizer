@@ -7,11 +7,6 @@
         "matcher": "",
         "failClosed": false,
         "timeout": 10
-      },
-      {
-        "command": "sh \"$CURSOR_PLUGIN_ROOT/scripts/probe-variables.sh\"",
-        "failClosed": false,
-        "timeout": 5
       }
     ],
     "beforeSubmitPrompt": [

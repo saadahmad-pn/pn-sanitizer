@@ -1,13 +1,17 @@
-# pn-sanitizer
+# paradigm-scanner
 
 A Cursor plugin that gates every submitted prompt (`beforeSubmitPrompt`) and
 every file write (`preToolUse`), sending each to your organization's
 CodeDefense API to decide whether it's allowed through.
 
+Since that means prompt text and file-write content leave your machine, see
+[SECURITY.md](SECURITY.md#data-handling) for exactly what's sent, where it's
+stored, and how — worth reading before installing.
+
 ## What's in this plugin
 
 ```text
-pn-sanitizer/
+paradigm-scanner/
 ├── .cursor-plugin/
 │   └── plugin.json        # plugin manifest
 ├── hooks/
@@ -53,7 +57,7 @@ backend — it's a client for your org's own CodeDefense deployment.
 ### Option A: Local install (for testing before sharing)
 
 ```bash
-ln -s /path/to/pn-sanitizer ~/.cursor/plugins/local/pn-sanitizer
+ln -s /path/to/pn-sanitizer ~/.cursor/plugins/local/paradigm-scanner
 ```
 
 Restart Cursor (or run **Developer: Reload Window**).
@@ -62,7 +66,7 @@ Restart Cursor (or run **Developer: Reload Window**).
 
 1. Push this repo to GitHub.
 2. In the Cursor dashboard, go to **Dashboard → Plugins → Team Marketplaces → Add Marketplace**.
-3. Import the repo URL and add `pn-sanitizer` to the marketplace.
+3. Import the repo URL and add `paradigm-scanner` to the marketplace.
 4. Set it to **Default On** or **Required** so teammates get the hook automatically.
 
 Teammates still need the check API reachable (see step 1) — the plugin only

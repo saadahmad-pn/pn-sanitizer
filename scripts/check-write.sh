@@ -23,7 +23,7 @@ case "$RAW_FAILURE_MODE" in
   *)          FAILURE_MODE="closed" ;;
 esac
 
-AUDIT_LOG_PATH="${HOME}/.pn-sanitizer/audit.jsonl"
+AUDIT_LOG_PATH="${HOME}/.paradigm-scanner/audit.jsonl"
 
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 

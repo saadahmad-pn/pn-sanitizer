@@ -26,7 +26,7 @@ NC='\033[0m'
 test_init() {
   TEST_TEMP_DIR=$(mktemp -d) || exit 1
   export HOME="$TEST_TEMP_DIR/home"
-  mkdir -p "$HOME/.pn" "$HOME/.pn-sanitizer" "$HOME/Desktop"
+  mkdir -p "$HOME/.pn" "$HOME/.paradigm-scanner" "$HOME/Desktop"
 }
 
 # Cleanup test environment

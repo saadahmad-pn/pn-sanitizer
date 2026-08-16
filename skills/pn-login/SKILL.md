@@ -37,10 +37,23 @@ that tells you where the plugin is installed, so path-guessing isn't
 reliable:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$PN_BASE_URL" ] && [ -n "$PN_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PN_BASE_URL" ] && [ -n "$PN_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
+  echo CONFIGURED
+elif [ -n "$PN_BASE_URL" ]; then
+  echo NOT_CONFIGURED_URL_KNOWN
+else
+  echo NOT_CONFIGURED
+fi
 ```
 
-`CONFIGURED` → tell the user they're already logged in and stop here.
+- `CONFIGURED` → tell the user they're already logged in and stop here.
+- `NOT_CONFIGURED_URL_KNOWN` → an admin already set `PN_BASE_URL` for this
+  workspace. Skip step 2 entirely — don't ask the user for a base URL they've
+  never needed to know — and go straight to step 3 using `$PN_BASE_URL` as
+  the value. (This doesn't apply if the user is explicitly asking to log
+  into a *different* org — in that case use whatever URL they give you
+  instead, same as step 2 below would.)
+- `NOT_CONFIGURED` → no base URL is known at all; continue to step 2.
 
 ### 2. Get the base URL
 
@@ -78,7 +91,7 @@ Running the script (unlike the check in step 1) needs its real path, since
 it needs `pn_config.sh` next to it:
 
 ```bash
-find ~/.cursor/plugins -path "*/pn-sanitizer/scripts/login.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
 ```
 
 This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
@@ -87,8 +100,10 @@ installs (`~/.cursor/plugins/local/`). If both come back, prefer `local/`.
 ### 4. Run the login script
 
 ```bash
-bash <path-from-step-3> --base-url <the-url-from-step-2>
+bash <path-from-step-3> --base-url <the-base-url>
 ```
+
+("the base URL" is `$PN_BASE_URL` if step 1 returned `NOT_CONFIGURED_URL_KNOWN`, or whatever the user gave you in step 2 otherwise.)
 
 Run it in the background rather than blocking the turn on it — it can take
 up to a minute, and you need to relay its output as soon as it appears

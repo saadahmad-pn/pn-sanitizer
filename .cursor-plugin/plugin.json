@@ -1,18 +1,22 @@
 {
-  "name": "pn-sanitizer",
-  "displayName": "Paradigm Networks Security Scanner",
-  "description": "Paradigm Networks' CodeDefense scanner for Cursor: automatically checks prompts and file changes for security risks — like destructive commands or unsafe code — before they're allowed through.",
+  "name": "paradigm-scanner",
+  "displayName": "Paradigm Networks",
+  "description": "Paradigm Networks plugin for Cursor: automatically checks prompts and file changes for security risks — like destructive commands or unsafe code — before they're allowed through.",
   "version": "0.1.0",
+  "minClientVersions": {
+    "cursor": "2.5.0"
+  },
   "author": {
-    "name": "saadahmad-pn"
+    "name": "Paradigm Networks"
   },
   "publisher": "Paradigm Networks",
   "homepage": "https://github.com/saadahmad-pn/pn-sanitizer",
   "repository": "https://github.com/saadahmad-pn/pn-sanitizer",
   "license": "MIT",
+  "logo": "assets/logo.svg",
   "category": "security",
-  "keywords": ["hooks", "security", "prompt-guard"],
-  "tags": ["CodeDefense", "policy", "compliance"],
+  "keywords": ["hooks", "security", "prompt-guard", "Paradigm", "Paradigm Networks"],
+  "tags": ["Code Defense", "policy", "compliance", "scanner", "Paradigm", "Paradigm Networks"],
   "hooks": "hooks/hooks.json",
   "variables": {
     "type": "object",

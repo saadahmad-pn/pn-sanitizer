@@ -13,7 +13,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 # Configuration from environment
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
-DEBUG_LOG_PATH="${HOME}/.pn-sanitizer/check-prompt.log"
+DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 
 # PN_PROMPT_FAILURE_MODE (marketplace setting: block/allow) takes precedence;
 # SNANTIZER_PROMPT_FAILURE_MODE (legacy shared-host override: closed/open) is
