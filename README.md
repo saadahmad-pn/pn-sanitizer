@@ -88,7 +88,7 @@ one-time browser login instead of any hardcoded or manually-pasted token:
    so `rules/pn-login-check.mdc` (always-on) is the reliable backstop that
    actually guarantees the agent checks and asks on turn one.
 2. Give the agent your Paradigm Networks base URL, e.g. `https://acme.paradigmnetworks.ai`.
-   Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup.
+   Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup.
    The agent runs the `pn-login` skill, which invokes:
    ```bash
    bash scripts/login.sh --base-url https://acme.paradigmnetworks.ai

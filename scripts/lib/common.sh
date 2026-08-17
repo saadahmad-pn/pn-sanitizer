@@ -281,10 +281,3 @@ file_read_tail() {
 command_exists() {
   command -v "$1" &>/dev/null
 }
-
-# URL encoding
-urlencode() {
-  local string="$1"
-  python3 -c "import urllib.parse; print(urllib.parse.quote('$string'))" 2>/dev/null || \
-  echo "$string" | sed 's/ /%20/g'
-}

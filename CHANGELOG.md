@@ -4,6 +4,21 @@ All notable changes to paradigm-scanner (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-18 — Real signup URL
+
+The signup link shown to a not-yet-registered user (README, the
+`pn-login-check` rule, the `pn-login` skill) was a placeholder,
+`https://signup.paradigmnetworks.ai/signup`. Replaced with the real one:
+`https://signup.claude-demo.paradigmnetworks.ai/signup`.
+
+## 2026-08-18 — Removed unused urlencode() from common.sh
+
+`scripts/lib/common.sh` had a dead `urlencode()` function: unreferenced
+anywhere in the codebase, depended on `python3` with a broken space-only
+`sed` fallback. The real OAuth flow has always used its own
+`urlencode_strict()` in `scripts/login.sh`, a proper self-contained
+percent-encoder. Flagged in review; removed.
+
 ## 2026-08-17 — Square logo
 
 Replaced `assets/logo.svg` (128×111, non-square) with `assets/logo.png`

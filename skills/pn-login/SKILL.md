@@ -66,14 +66,14 @@ you're doing it wrong.
 
 Call `AskQuestion` with:
 
-- prompt: `What's your Paradigm Networks base URL? (e.g. https://acme.paradigmnetworks.ai). Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup.`
+- prompt: `What's your Paradigm Networks base URL? (e.g. https://acme.paradigmnetworks.ai). Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup.`
 - options: `I'm not sure what my base URL is` and
   `I think I'm already logged in — recheck`
   (two real, non-"Other" options are required by the tool; the user's actual
   URL comes back through "Other", which is the expected path for most users)
 
 If they pick **"I'm not sure what my base URL is"**: they likely don't have a
-Paradigm Networks account yet. Point them to https://signup.paradigmnetworks.ai/signup to
+Paradigm Networks account yet. Point them to https://signup.claude-demo.paradigmnetworks.ai/signup to
 sign up and get one, then stop and wait — don't guess a URL or retry the
 question in a loop. Once they say they have it, ask again with the same
 `AskQuestion` call.
