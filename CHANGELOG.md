@@ -4,6 +4,21 @@ All notable changes to paradigm-scanner (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-18 — Signup link in raw "not configured" hook messages
+
+The signup URL was previously only reachable through the agent-mediated
+onboarding path (README, the `pn-login-check` rule, the `pn-login` skill).
+The raw hook messages a user sees directly when Paradigm Networks isn't
+configured — `check-prompt.sh`'s "not configured" prompt message,
+`check-write.sh`'s "not configured" write message, and
+`check-session.sh`'s session context — didn't mention it, so a user who
+never gets an agent-driven prompt (e.g. `sessionStart` racing/missing the
+first message, per the known limitation this plugin already documents) had
+no way to discover signup from the message alone. Added the signup line to
+all three. Scoped deliberately to only the "not configured" case — the
+separate timeout/unreachable/HTTP-error/invalid-response messages in both
+scripts are unrelated and untouched.
+
 ## 2026-08-18 — Real signup URL
 
 The signup link shown to a not-yet-registered user (README, the

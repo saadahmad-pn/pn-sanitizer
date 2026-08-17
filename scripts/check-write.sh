@@ -108,10 +108,11 @@ main() {
       '{file_path: $file_path, decision: $decision, reason: $reason, detail: $detail}')
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
+    local signup_note="Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup."
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "The scanning service is unavailable ($reason). Write allowed WITHOUT a security scan."
+      json_permission_allow "The scanning service is unavailable ($reason). Write allowed WITHOUT a security scan. $signup_note"
     else
-      json_permission_deny "The scanning service is unavailable ($reason). Write blocked." "The scanning service is unavailable ($reason). Do not retry this write."
+      json_permission_deny "The scanning service is unavailable ($reason). Write blocked. $signup_note" "The scanning service is unavailable ($reason). Do not retry this write."
     fi
     return 0
   }
