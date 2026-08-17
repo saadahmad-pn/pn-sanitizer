@@ -13,7 +13,7 @@
   "homepage": "https://github.com/saadahmad-pn/pn-sanitizer",
   "repository": "https://github.com/saadahmad-pn/pn-sanitizer",
   "license": "MIT",
-  "logo": "assets/logo.svg",
+  "logo": "assets/logo.png",
   "category": "security",
   "keywords": ["hooks", "security", "prompt-guard", "Paradigm Networks"],
   "tags": ["Code Defense", "policy", "compliance", "scanner", "Paradigm Networks"],

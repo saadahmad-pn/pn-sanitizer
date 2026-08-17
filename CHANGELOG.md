@@ -4,6 +4,16 @@ All notable changes to paradigm-scanner (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-17 — Square logo
+
+Replaced `assets/logo.svg` (128×111, non-square) with `assets/logo.png`
+(192×192, square) — the marketplace listing image slot expects a square
+asset. `plugin.json`'s `logo` field updated accordingly. Also dropped two
+redundant standalone `"Paradigm"` entries from `plugin.json`'s
+keywords/tags (already covered by `"Paradigm Networks"`) and fixed a
+leftover `[Paradigm]` message tag in `check-prompt.sh` to say
+`[Paradigm Networks]`.
+
 ## 2026-08-17 — Removed dead multipart.sh test references
 
 `scripts/lib/multipart.sh` was deleted at some point in the bash conversion,
