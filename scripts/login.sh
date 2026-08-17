@@ -1,5 +1,5 @@
 #!/bin/bash
-# OAuth PKCE login flow for PN authentication
+# OAuth PKCE login flow for Paradigm Networks authentication
 # Usage: login.sh --base-url https://acme.paradigmnetworks.ai
 
 set -o pipefail
@@ -62,7 +62,7 @@ wait_for_callback() {
   local request_file="/tmp/callback_request_$$.txt"
 
   # Create response body
-  local response_body="<!doctype html><html><head><title>PN login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2></body></html>"
+  local response_body="<!doctype html><html><head><title>Paradigm Networks login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2></body></html>"
   local response_len=${#response_body}
 
   # Build full HTTP response
@@ -276,8 +276,8 @@ main() {
   fi
 
   echo ""
-  echo "If that link takes you to the main PN dashboard instead of a 'You're logged in' confirmation,"
-  echo "you weren't signed in to PN in that browser yet — sign in there, then open the exact same link"
+  echo "If that link takes you to the main Paradigm Networks dashboard instead of a 'You're logged in' confirmation,"
+  echo "you weren't signed in to Paradigm Networks in that browser yet — sign in there, then open the exact same link"
   echo "again (no need to re-run this command) to finish."
   echo ""
   echo "Waiting up to ${CALLBACK_TIMEOUT_SECONDS}s for you to complete login..."

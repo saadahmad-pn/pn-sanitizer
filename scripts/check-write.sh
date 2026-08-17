@@ -15,9 +15,10 @@ source "$SCRIPT_DIR/pn_config.sh"
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
 TRANSCRIPT_BYTES="${SNANTIZER_TRANSCRIPT_BYTES:-4000}"
-# PN_FAILURE_MODE (marketplace setting: block/allow) takes precedence;
-# SNANTIZER_FAILURE_MODE (legacy shared-host override: closed/open) is the fallback.
-RAW_FAILURE_MODE=$(echo "${PN_FAILURE_MODE:-${SNANTIZER_FAILURE_MODE:-block}}" | tr '[:upper:]' '[:lower:]')
+# PARADIGM_NETWORKS_FAILURE_MODE (marketplace setting: block/allow) takes
+# precedence; SNANTIZER_FAILURE_MODE (legacy shared-host override:
+# closed/open) is the fallback.
+RAW_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_FAILURE_MODE:-${SNANTIZER_FAILURE_MODE:-block}}" | tr '[:upper:]' '[:lower:]')
 case "$RAW_FAILURE_MODE" in
   allow|open) FAILURE_MODE="open" ;;
   *)          FAILURE_MODE="closed" ;;
@@ -98,7 +99,7 @@ main() {
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
-    local reason="PN not configured — run the pn-login skill"
+    local reason="Paradigm Networks not configured — run the pn-login skill"
     audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
@@ -217,7 +218,7 @@ main() {
   local scan_id
 
   action=$(echo "$response" | "$JQ_BIN" -r '.action_to_take // "allow"')
-  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Agent response blocked by CodeDefense."')
+  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Agent response blocked by Paradigm Networks."')
   scan_id=$(echo "$response" | "$JQ_BIN" -r '.scan_id // ""')
 
 

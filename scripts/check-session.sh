@@ -1,5 +1,5 @@
 #!/bin/bash
-# sessionStart hook: check if PN is configured, ask user to login if not
+# sessionStart hook: check if Paradigm Networks is configured, ask user to login if not
 # Per Cursor's hooks contract, this is fire-and-forget — it cannot prevent
 # session creation but can inject context into the system prompt.
 
@@ -39,7 +39,7 @@ EOF
     return 0
   fi
 
-  # Check if PN is configured
+  # Check if Paradigm Networks is configured
   if pn_is_configured; then
     # Configured, return no-op
     echo '{}'
@@ -47,7 +47,7 @@ EOF
     # Not configured, ask user to login
     local message
     read -r -d '' message <<'EOF' || true
-PN is not configured for this workspace. Ask the user for their PN base URL (e.g. https://<org>.paradigmnetworks.ai), then run the pn-login skill to authenticate before relying on CodeDefense-gated prompts or tool calls.
+Paradigm Networks is not configured for this workspace. Ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai), then run the pn-login skill to authenticate before relying on Paradigm Networks-gated prompts or tool calls.
 EOF
     json_session_context "$message"
   fi

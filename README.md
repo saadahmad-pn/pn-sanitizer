@@ -2,7 +2,7 @@
 
 A Cursor plugin that gates every submitted prompt (`beforeSubmitPrompt`) and
 every file write (`preToolUse`), sending each to your organization's
-CodeDefense API to decide whether it's allowed through.
+Paradigm Networks API to decide whether it's allowed through.
 
 Since that means prompt text and file-write content leave your machine, see
 [SECURITY.md](SECURITY.md#data-handling) for exactly what's sent, where it's
@@ -17,9 +17,9 @@ paradigm-scanner/
 ├── hooks/
 │   └── hooks.json          # sessionStart / beforeSubmitPrompt / preToolUse hook config
 ├── scripts/
-│   ├── check-session.sh   # sessionStart hook, flags missing PN login
-│   ├── check-prompt.sh    # beforeSubmitPrompt hook, calls the CodeDefense API
-│   ├── check-write.sh     # preToolUse hook, calls the CodeDefense API
+│   ├── check-session.sh   # sessionStart hook, flags missing Paradigm Networks login
+│   ├── check-prompt.sh    # beforeSubmitPrompt hook, calls the Paradigm Networks API
+│   ├── check-write.sh     # preToolUse hook, calls the Paradigm Networks API
 │   ├── pn_config.sh       # shared credentials store + token refresh
 │   ├── login.sh           # one-time browser login CLI (PKCE)
 │   ├── lib/common.sh      # shared JSON/HTTP/logging helpers
@@ -45,12 +45,12 @@ available — an unsupported platform/architecture — the plugin fails
 gracefully with a clear message instead of producing broken output.
 Windows support for the bundled fallback isn't in yet.
 
-## 1. Point it at your CodeDefense deployment
+## 1. Point it at your Paradigm Networks deployment
 
-Each developer (or a shared host) needs your organization's CodeDefense API
-reachable at the base URL you'll log in with, e.g.
+Each developer (or a shared host) needs your organization's Paradigm
+Networks API reachable at the base URL you'll log in with, e.g.
 `https://acme.paradigmnetworks.ai`. This plugin doesn't ship a scanning
-backend — it's a client for your org's own CodeDefense deployment.
+backend — it's a client for your org's own Paradigm Networks deployment.
 
 ## 2. Install the plugin
 
@@ -76,18 +76,18 @@ ships the hook, not the server.
 
 ### One-time login (default)
 
-The plugin authenticates against the PN backend with a one-time browser
-login instead of any hardcoded or manually-pasted token:
+The plugin authenticates against the Paradigm Networks backend with a
+one-time browser login instead of any hardcoded or manually-pasted token:
 
 1. Open a chat in Cursor. The `sessionStart` hook (`scripts/check-session.sh`)
    checks whether this machine already has a valid stored login
    (`~/.pn/credentials.json`). If not, it tells the agent to ask you for your
-   PN base URL. `sessionStart` is fire-and-forget per Cursor's hooks contract
-   (it can race with — or miss — your very first message), and
+   Paradigm Networks base URL. `sessionStart` is fire-and-forget per Cursor's
+   hooks contract (it can race with — or miss — your very first message), and
    `beforeSubmitPrompt` has no way to inject context into the agent at all,
    so `rules/pn-login-check.mdc` (always-on) is the reliable backstop that
    actually guarantees the agent checks and asks on turn one.
-2. Give the agent your PN base URL, e.g. `https://acme.paradigmnetworks.ai`.
+2. Give the agent your Paradigm Networks base URL, e.g. `https://acme.paradigmnetworks.ai`.
    Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup.
    The agent runs the `pn-login` skill, which invokes:
    ```bash
@@ -105,7 +105,7 @@ the access token in the background shortly before it expires. You only log
 in once per machine — there's nothing to paste and nothing hardcoded in the
 scripts.
 
-To log in again (e.g. to switch PN orgs), just re-run `scripts/login.sh`
+To log in again (e.g. to switch Paradigm Networks orgs), just re-run `scripts/login.sh`
 with a different `--base-url`; it overwrites the stored credentials.
 
 ### Shared-host override (optional)
@@ -118,20 +118,21 @@ variables — read by `check-prompt.sh` and `check-write.sh` — take
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SNANTIZER_BASE_URL` | _(none — falls back to stored login)_ | PN base URL |
+| `SNANTIZER_BASE_URL` | _(none — falls back to stored login)_ | Paradigm Networks base URL |
 | `SNANTIZER_TOKEN` | _(none — falls back to stored login)_ | Bearer access token |
 | `SNANTIZER_SCAN_URL` | `{base_url}/api/v1/codedefense/scan` | Full scan endpoint override |
 | `SNANTIZER_TIMEOUT` | `5` | HTTP timeout (seconds) |
 | `SNANTIZER_FAILURE_MODE` | `closed` | `open`/`closed` — legacy name for the write-guard failure mode below |
 
-`check-write.sh` also reads `PN_FAILURE_MODE` — the setting exposed in Cursor's
-plugin configuration UI — taking precedence over `SNANTIZER_FAILURE_MODE` when
-both are set. It accepts `block` (default; deny writes when the scanner is
-unreachable or not configured) or `allow` (let writes through unscanned in
-that case).
+`check-write.sh` also reads `PARADIGM_NETWORKS_FAILURE_MODE` — the setting
+exposed in Cursor's plugin configuration UI — taking precedence over
+`SNANTIZER_FAILURE_MODE` when both are set. It accepts `block` (default;
+deny writes when the scanner is unreachable or not configured) or `allow`
+(let writes through unscanned in that case).
 
-`check-prompt.sh` has its own, separate `PN_PROMPT_FAILURE_MODE` (or legacy
-`SNANTIZER_PROMPT_FAILURE_MODE`), accepting `allow` (default) or `block`. It
+`check-prompt.sh` has its own, separate `PARADIGM_NETWORKS_PROMPT_FAILURE_MODE`
+(or legacy `SNANTIZER_PROMPT_FAILURE_MODE`), accepting `allow` (default) or
+`block`. It
 only governs scanner errors that happen *after* you're already logged in
 (timeout, unreachable, invalid response) — a not-yet-configured workspace
 always allows the prompt through unconditionally regardless of this setting,
@@ -144,21 +145,21 @@ and the stored login is used instead — set both, or neither.
 
 `beforeSubmitPrompt` has no `failClosed` set in `hooks/hooks.json`, so it
 follows Cursor's default (fail-open) if the hook script itself crashes or
-times out. If the CodeDefense API is merely unreachable, slow, or not yet
-configured, `check-prompt.sh` also fails open on purpose — see
-`PN_PROMPT_FAILURE_MODE` above for how to change that once your team is fully
-onboarded. `sessionStart` (`check-session.sh`) explicitly sets
+times out. If the Paradigm Networks API is merely unreachable, slow, or not
+yet configured, `check-prompt.sh` also fails open on purpose — see
+`PARADIGM_NETWORKS_PROMPT_FAILURE_MODE` above for how to change that once
+your team is fully onboarded. `sessionStart` (`check-session.sh`) explicitly sets
 `failClosed: false` and always fails open, since it must never block a
 session from starting.
 
 ## Try it
 
 1. Install the plugin locally (step 2, option A) and log in to your
-   organization's CodeDefense deployment (see "One-time login" above).
+   organization's Paradigm Networks deployment (see "One-time login" above).
 2. In Agent chat, submit a prompt or make an edit that your organization's
-   CodeDefense policy blocks — it should be denied with a message from the
-   plugin.
-3. Submit anything CodeDefense allows — it should proceed normally.
+   Paradigm Networks policy blocks — it should be denied with a message from
+   the plugin.
+3. Submit anything Paradigm Networks allows — it should proceed normally.
 
 Check **Cursor Settings → Hooks** or the Hooks output channel if something
 does not fire.

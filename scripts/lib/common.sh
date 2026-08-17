@@ -1,5 +1,5 @@
 #!/bin/bash
-# Common utilities for all PN hook scripts
+# Common utilities for all Paradigm Networks hook scripts
 # Provides: JSON helpers, HTTP wrappers, logging, error handling
 
 set -o pipefail

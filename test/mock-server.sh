@@ -1,5 +1,5 @@
 #!/bin/bash
-# Mock CodeDefense API server for testing
+# Mock Paradigm Networks API server for testing
 # Usage: start_mock_server <port> [mode]
 # Modes: allow, block, warn, timeout, error500, error401
 

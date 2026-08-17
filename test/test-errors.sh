@@ -129,32 +129,6 @@ result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
 assert_json_field_equals "$result" "permission" "allow" "Reads transcript when message empty"
 unset SNANTIZER_FAILURE_MODE
 
-test_case "Multipart body with special characters in field value"
-value='Test with "quotes" and \backslash and $variables'
-body=$(build_multipart_body "field" "$value")
-if [[ "$body" == *"Test with"* ]] && [[ "$body" == *"quotes"* ]]; then
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${GREEN}✓${NC} Handles special characters"
-  TESTS_PASSED=$((TESTS_PASSED + 1))
-else
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${RED}✗${NC} Failed to handle special characters"
-  TESTS_FAILED=$((TESTS_FAILED + 1))
-fi
-
-test_case "Multipart body with newlines in value"
-value=$'line1\nline2\nline3'
-body=$(build_multipart_body "field" "$value")
-if [[ "$body" == *"line1"* ]] && [[ "$body" == *"line2"* ]]; then
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${GREEN}✓${NC} Handles multiline values"
-  TESTS_PASSED=$((TESTS_PASSED + 1))
-else
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${RED}✗${NC} Failed with multiline values"
-  TESTS_FAILED=$((TESTS_FAILED + 1))
-fi
-
 echo ""
 test_summary
 FINAL_RESULT=$?

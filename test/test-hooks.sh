@@ -15,12 +15,12 @@ source_scripts
 
 echo -e "${BLUE}=== Integration Tests: check-session.sh ===${NC}"
 
-test_case "check-session.sh with jq installed and PN not configured"
+test_case "check-session.sh with jq installed and Paradigm Networks not configured"
 result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
 assert_json_valid "$result" "Valid JSON output"
 assert_json_has_key "$result" "additional_context" "Shows context when not configured"
 
-test_case "check-session.sh with jq and PN configured"
+test_case "check-session.sh with jq and Paradigm Networks configured"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
 result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
 assert_json_valid "$result" "Valid JSON output"
@@ -38,7 +38,7 @@ fi
 echo ""
 echo -e "${BLUE}=== Integration Tests: check-prompt.sh ===${NC}"
 
-test_case "check-prompt.sh allows prompt when PN not configured"
+test_case "check-prompt.sh allows prompt when Paradigm Networks not configured"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"prompt": "What is the answer?"}'
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload")

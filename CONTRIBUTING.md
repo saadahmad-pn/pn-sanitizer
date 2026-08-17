@@ -36,12 +36,12 @@ the hook scripts using a mock server (`test/mock-server.sh`).
   allow/deny decision over letting a script crash or hang.
 - **User- and agent-facing messages use plain language.** Avoid internal
   terms like "hook" or naming internal API paths — someone using this
-  plugin day-to-day shouldn't need to know Cursor's or CodeDefense's
+  plugin day-to-day shouldn't need to know Cursor's or Paradigm Networks'
   internals to understand a message.
 
 ## Pull requests
 
 Keep changes scoped and explain the *why*, not just the *what* — especially
-for anything touching the failure-mode logic (`PN_FAILURE_MODE`,
-`PN_PROMPT_FAILURE_MODE`) or the login flow, where a subtle behavior change
-can affect every user of the plugin.
+for anything touching the failure-mode logic (`PARADIGM_NETWORKS_FAILURE_MODE`,
+`PARADIGM_NETWORKS_PROMPT_FAILURE_MODE`) or the login flow, where a subtle
+behavior change can affect every user of the plugin.

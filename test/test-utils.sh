@@ -288,6 +288,5 @@ mock_credentials() {
 # Source common and config scripts
 source_scripts() {
   source "$SCRIPTS_DIR/lib/common.sh"
-  source "$SCRIPTS_DIR/lib/multipart.sh"
   source "$SCRIPTS_DIR/pn_config.sh"
 }

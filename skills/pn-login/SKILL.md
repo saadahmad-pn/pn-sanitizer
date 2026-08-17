@@ -1,18 +1,18 @@
 ---
 name: pn-login
-description: Log this workspace in to PN (Paradigm Networks) so Paradigm security checks work. Use when PN isn't configured yet — e.g. the sessionStart hook injected a "PN is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to PN, switch PN orgs, or re-authenticate.
+description: Log this workspace in to Paradigm Networks so Paradigm Networks security checks work. Use when Paradigm Networks isn't configured yet — e.g. the sessionStart hook injected a "Paradigm Networks is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to Paradigm Networks, switch Paradigm Networks orgs, or re-authenticate.
 ---
 
-# PN login
+# Paradigm Networks login
 
 ## When to use this
 
 - The `sessionStart` hook (`scripts/check-session.sh`) injected context saying
-  PN is not configured for this workspace.
+  Paradigm Networks is not configured for this workspace.
 - `check-prompt.sh` reported "not configured" / "no
   login found" in a `user_message`.
-- The user asks to log in, re-authenticate, or switch to a different PN
-  organization.
+- The user asks to log in, re-authenticate, or switch to a different Paradigm
+  Networks organization.
 
 ## What not to do
 
@@ -37,9 +37,9 @@ that tells you where the plugin is installed, so path-guessing isn't
 reliable:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$PN_BASE_URL" ] && [ -n "$PN_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
   echo CONFIGURED
-elif [ -n "$PN_BASE_URL" ]; then
+elif [ -n "$PARADIGM_NETWORKS_URL" ]; then
   echo NOT_CONFIGURED_URL_KNOWN
 else
   echo NOT_CONFIGURED
@@ -47,12 +47,12 @@ fi
 ```
 
 - `CONFIGURED` → tell the user they're already logged in and stop here.
-- `NOT_CONFIGURED_URL_KNOWN` → an admin already set `PN_BASE_URL` for this
-  workspace. Skip step 2 entirely — don't ask the user for a base URL they've
-  never needed to know — and go straight to step 3 using `$PN_BASE_URL` as
-  the value. (This doesn't apply if the user is explicitly asking to log
-  into a *different* org — in that case use whatever URL they give you
-  instead, same as step 2 below would.)
+- `NOT_CONFIGURED_URL_KNOWN` → an admin already set `PARADIGM_NETWORKS_URL`
+  for this workspace. Skip step 2 entirely — don't ask the user for a base
+  URL they've never needed to know — and go straight to step 3 using
+  `$PARADIGM_NETWORKS_URL` as the value. (This doesn't apply if the user is
+  explicitly asking to log into a *different* org — in that case use
+  whatever URL they give you instead, same as step 2 below would.)
 - `NOT_CONFIGURED` → no base URL is known at all; continue to step 2.
 
 ### 2. Get the base URL
@@ -66,14 +66,14 @@ you're doing it wrong.
 
 Call `AskQuestion` with:
 
-- prompt: `What's your PN base URL? (e.g. https://acme.paradigmnetworks.ai). Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup.`
+- prompt: `What's your Paradigm Networks base URL? (e.g. https://acme.paradigmnetworks.ai). Don't have one yet? Sign up at https://signup.paradigmnetworks.ai/signup.`
 - options: `I'm not sure what my base URL is` and
   `I think I'm already logged in — recheck`
   (two real, non-"Other" options are required by the tool; the user's actual
   URL comes back through "Other", which is the expected path for most users)
 
 If they pick **"I'm not sure what my base URL is"**: they likely don't have a
-PN account yet. Point them to https://signup.paradigmnetworks.ai/signup to
+Paradigm Networks account yet. Point them to https://signup.paradigmnetworks.ai/signup to
 sign up and get one, then stop and wait — don't guess a URL or retry the
 question in a loop. Once they say they have it, ask again with the same
 `AskQuestion` call.
@@ -103,7 +103,7 @@ installs (`~/.cursor/plugins/local/`). If both come back, prefer `local/`.
 bash <path-from-step-3> --base-url <the-base-url>
 ```
 
-("the base URL" is `$PN_BASE_URL` if step 1 returned `NOT_CONFIGURED_URL_KNOWN`, or whatever the user gave you in step 2 otherwise.)
+("the base URL" is `$PARADIGM_NETWORKS_URL` if step 1 returned `NOT_CONFIGURED_URL_KNOWN`, or whatever the user gave you in step 2 otherwise.)
 
 Run it in the background rather than blocking the turn on it — it can take
 up to a minute, and you need to relay its output as soon as it appears
@@ -129,7 +129,7 @@ server has to actually receive the redirect.
 
 ### 6. Relay the outcome
 
-- Exit `0` → PN is configured and the Paradigm are active. No
+- Exit `0` → Paradigm Networks is configured and its checks are active. No
   further action needed.
 - Non-zero → share the error the script printed (timeout, denied, network
   error, etc.) and offer to retry with a fresh run. If retrying, remind the

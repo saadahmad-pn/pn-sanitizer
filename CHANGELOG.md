@@ -4,6 +4,38 @@ All notable changes to paradigm-scanner (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-17 — Removed dead multipart.sh test references
+
+`scripts/lib/multipart.sh` was deleted at some point in the bash conversion,
+but `test-utils.sh` still tried to source it, and 5 tests across
+`test-unit.sh`/`test-errors.sh` still called functions
+(`multipart_boundary`, `multipart_content_type`, `build_multipart_body`)
+that no longer exist anywhere in the codebase — failing on every run since
+the file was removed. Removed the source line and all 5 dead tests. The full
+suite now runs cleanly end to end: 69/69 passing (was reporting 2 failed
+suites before). Also corrected the hardcoded test-count summary in
+`run-all-tests.sh`, which had gone stale independently of this cleanup.
+
+## 2026-08-17 — Renamed PN/CodeDefense branding to Paradigm Networks
+
+Every user- and agent-facing mention of "PN"/"pn" and "CodeDefense" is now
+"Paradigm Networks," including the plugin's marketplace-configurable
+variables:
+
+- `PN_BASE_URL` → `PARADIGM_NETWORKS_URL`
+- `PN_TOKEN` → `PARADIGM_NETWORKS_TOKEN`
+- `PN_FAILURE_MODE` → `PARADIGM_NETWORKS_FAILURE_MODE`
+- `PN_PROMPT_FAILURE_MODE` → `PARADIGM_NETWORKS_PROMPT_FAILURE_MODE`
+
+Deliberately left unchanged: the real API endpoint paths
+(`/api/v1/codedefense/scan`, `/api/v1/plugin/authorize`,
+`/api/v1/plugin/token` — these are routes on the actual backend, not just
+naming), the `~/.pn/credentials.json` credentials directory (avoids forcing
+every existing login to re-authenticate), the legacy `SNANTIZER_*`
+shared-host variables, and every internal file/directory/function name
+(`pn_config.sh`, `skills/pn-login/`, `rules/pn-login-check.mdc`,
+`pn_resolve_config`, etc.).
+
 ## 2026-08-17 — Added minClientVersions
 
 `plugin.json` now declares `"minClientVersions": {"cursor": "2.5.0"}` —

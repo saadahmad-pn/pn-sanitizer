@@ -1,5 +1,5 @@
 #!/bin/bash
-# Credential and config management for PN hook scripts
+# Credential and config management for Paradigm Networks hook scripts
 # Handles reading/writing ~/.pn/credentials.json and token refresh
 
 CLIENT_ID="cursor-plugin"
@@ -148,14 +148,14 @@ pn_get_valid_access_token() {
   return 0
 }
 
-# Resolve config: new PN_* names take precedence, then SNANTIZER_* names, then file
+# Resolve config: new PARADIGM_NETWORKS_* names take precedence, then SNANTIZER_* names, then file
 pn_resolve_config() {
   local env_base
   local env_token
 
-  # Check new variable names first (PN_BASE_URL, PN_TOKEN)
-  env_base="${PN_BASE_URL:-}"
-  env_token="${PN_TOKEN:-}"
+  # Check new variable names first (PARADIGM_NETWORKS_URL, PARADIGM_NETWORKS_TOKEN)
+  env_base="${PARADIGM_NETWORKS_URL:-}"
+  env_token="${PARADIGM_NETWORKS_TOKEN:-}"
 
   if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
     echo "$env_base $env_token"
@@ -175,7 +175,7 @@ pn_resolve_config() {
   pn_get_valid_access_token
 }
 
-# Check if PN is configured (simplified, just checks if credentials exist)
+# Check if Paradigm Networks is configured (simplified, just checks if credentials exist)
 pn_is_configured() {
   pn_load_credentials >/dev/null 2>&1
 }

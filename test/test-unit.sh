@@ -48,7 +48,7 @@ assert_json_has_key "$result" "user_message" "Has user_message key"
 assert_json_has_key "$result" "agent_message" "Has agent_message key"
 
 test_case "json_session_context"
-result=$(json_session_context "Configure PN")
+result=$(json_session_context "Configure Paradigm Networks")
 assert_json_valid "$result" "Valid JSON"
 assert_json_has_key "$result" "additional_context" "Has additional_context key"
 
@@ -85,41 +85,6 @@ assert_file_exists "$audit_file" "Audit file created"
 result=$(cat "$audit_file")
 assert_json_valid "$result" "Valid JSON line"
 assert_json_has_key "$result" "timestamp" "Has timestamp"
-
-echo ""
-echo -e "${BLUE}=== Unit Tests: lib/multipart.sh ===${NC}"
-
-test_case "multipart_boundary is consistent"
-boundary1=$(multipart_boundary)
-boundary2=$(multipart_boundary)
-if [[ "$boundary1" == "$boundary2" ]]; then
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${GREEN}✓${NC} Boundary is consistent"
-  TESTS_PASSED=$((TESTS_PASSED + 1))
-else
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${RED}✗${NC} Boundary is consistent"
-  TESTS_FAILED=$((TESTS_FAILED + 1))
-fi
-
-test_case "multipart_content_type returns correct header"
-ct=$(multipart_content_type)
-assert_output_contains "echo '$ct'" "multipart/form-data" "Content-Type has correct format"
-assert_output_contains "echo '$ct'" "boundary=" "Content-Type has boundary"
-
-test_case "build_multipart_body creates valid structure"
-body=$(build_multipart_body "field1" "value1")
-if [[ "$body" == *"SnantizerBoundary"* ]]; then
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${GREEN}✓${NC} Body contains boundary"
-  TESTS_PASSED=$((TESTS_PASSED + 1))
-else
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${RED}✗${NC} Body contains boundary"
-  TESTS_FAILED=$((TESTS_FAILED + 1))
-fi
-assert_output_contains "echo '$body'" "field1" "Body contains field name"
-assert_output_contains "echo '$body'" "value1" "Body contains field value"
 
 echo ""
 echo -e "${BLUE}=== Unit Tests: pn_config.sh ===${NC}"

@@ -1,7 +1,7 @@
 # Security Policy
 
 paradigm-scanner gates prompts and file writes in Cursor through your
-organization's CodeDefense scanning backend. Because it sits in that path,
+organization's Paradigm Networks scanning backend. Because it sits in that path,
 we treat vulnerability reports in this repository seriously and want to
 hear about them.
 
@@ -23,21 +23,21 @@ Include, where possible:
 In scope: the hook scripts (`scripts/`), the plugin manifest and hook
 configuration (`.cursor-plugin/`, `hooks/`), and the login/credential flow.
 
-Out of scope: the CodeDefense scanning backend itself (a separate,
+Out of scope: the Paradigm Networks scanning backend itself (a separate,
 organization-hosted service this plugin talks to, not part of this
 repository).
 
 ## Data handling
 
 This plugin sends the text of submitted prompts and the content of file
-writes to your organization's CodeDefense deployment so it can be scanned
-before being allowed through.
+writes to your organization's Paradigm Networks deployment so it can be
+scanned before being allowed through.
 
-- **Transport:** all traffic to CodeDefense is sent over HTTPS.
-- **Storage:** CodeDefense is a tenant-based product — scanned content is
-  stored indefinitely in your organization's own tenant database (provided
-  by Paradigm Networks) and is visible on your tenant's dashboard. Data from
-  different tenants isn't shared or mixed.
+- **Transport:** all traffic to Paradigm Networks is sent over HTTPS.
+- **Storage:** Paradigm Networks is a tenant-based product — scanned content
+  is stored indefinitely in your organization's own tenant database and is
+  visible on your tenant's dashboard. Data from different tenants isn't
+  shared or mixed.
 - **Disclosure:** this data flow is already covered under Paradigm Networks'
   main product customer agreement — installing this plugin doesn't introduce
   a separate or additional disclosure.

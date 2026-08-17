@@ -1,5 +1,5 @@
 #!/bin/bash
-# beforeSubmitPrompt hook: scan prompt via CodeDefense API before submitting
+# beforeSubmitPrompt hook: scan prompt via Paradigm Networks API before submitting
 # Returns {continue: true/false, user_message: "..."} to allow/block the prompt
 
 set -o pipefail
@@ -15,15 +15,16 @@ SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 
-# PN_PROMPT_FAILURE_MODE (marketplace setting: block/allow) takes precedence;
-# SNANTIZER_PROMPT_FAILURE_MODE (legacy shared-host override: closed/open) is
-# the fallback. Defaults to "open" (unlike check-write.sh's PN_FAILURE_MODE,
-# which defaults to "closed"). This only governs failures below that happen
-# *after* pn_resolve_config succeeds — i.e. the user is already logged in.
-# "PN not configured" and "jq missing" always allow unconditionally,
-# regardless of this setting, so a not-yet-logged-in user (or a machine
-# without jq) can never get stuck on their first message.
-RAW_PROMPT_FAILURE_MODE=$(echo "${PN_PROMPT_FAILURE_MODE:-${SNANTIZER_PROMPT_FAILURE_MODE:-allow}}" | tr '[:upper:]' '[:lower:]')
+# PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (marketplace setting: block/allow)
+# takes precedence; SNANTIZER_PROMPT_FAILURE_MODE (legacy shared-host
+# override: closed/open) is the fallback. Defaults to "open" (unlike
+# check-write.sh's PARADIGM_NETWORKS_FAILURE_MODE, which defaults to
+# "closed"). This only governs failures below that happen *after*
+# pn_resolve_config succeeds — i.e. the user is already logged in.
+# "Paradigm Networks not configured" and "jq missing" always allow
+# unconditionally, regardless of this setting, so a not-yet-logged-in user
+# (or a machine without jq) can never get stuck on their first message.
+RAW_PROMPT_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_PROMPT_FAILURE_MODE:-${SNANTIZER_PROMPT_FAILURE_MODE:-allow}}" | tr '[:upper:]' '[:lower:]')
 case "$RAW_PROMPT_FAILURE_MODE" in
   block|closed) PROMPT_FAILURE_MODE="closed" ;;
   *)            PROMPT_FAILURE_MODE="open" ;;
@@ -60,7 +61,7 @@ main() {
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
-    json_allow "PN is not configured (no login found). Allowing prompt — run the pn-login skill to authenticate CodeDefense."
+    json_allow "Paradigm Networks is not configured (no login found). Allowing prompt — run the pn-login skill to authenticate Paradigm Networks."
     return 0
   }
 
@@ -142,7 +143,7 @@ main() {
   local message
 
   action=$(echo "$response" | "$JQ_BIN" -r '.action_to_take // "allow"')
-  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Prompt blocked by CodeDefense."')
+  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Prompt blocked by Paradigm Networks."')
 
   log_debug "API response received | action=$action" "$DEBUG_LOG_PATH"
 
