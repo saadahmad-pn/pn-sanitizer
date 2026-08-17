@@ -15,8 +15,8 @@
   "license": "MIT",
   "logo": "assets/logo.svg",
   "category": "security",
-  "keywords": ["hooks", "security", "prompt-guard", "Paradigm", "Paradigm Networks"],
-  "tags": ["Code Defense", "policy", "compliance", "scanner", "Paradigm", "Paradigm Networks"],
+  "keywords": ["hooks", "security", "prompt-guard", "Paradigm Networks"],
+  "tags": ["Code Defense", "policy", "compliance", "scanner", "Paradigm Networks"],
   "hooks": "hooks/hooks.json",
   "variables": {
     "type": "object",

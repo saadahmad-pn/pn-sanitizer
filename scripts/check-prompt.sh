@@ -151,7 +151,7 @@ main() {
   # Return verdict
   case "$action" in
     block)
-      local branded_message="[Paradigm] $message"
+      local branded_message="[Paradigm Networks] $message"
       json_deny "$branded_message"
       ;;
     warn)
