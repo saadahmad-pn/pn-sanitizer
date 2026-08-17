@@ -1,17 +1,25 @@
 {
   "version": 1,
   "hooks": {
+    "sessionStart": [
+      {
+        "command": "bash ./scripts/check-session.sh",
+        "matcher": "",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
     "beforeSubmitPrompt": [
       {
-        "command": "python ${CURSOR_PLUGIN_ROOT}/scripts/check-prompt.py",
-        "timeout": 10
+        "command": "bash ./scripts/check-prompt.sh",
+        "timeout": 25
       }
     ],
     "preToolUse": [
       {
-        "matcher": "Write|Edit",
-        "command": "python ${CURSOR_PLUGIN_ROOT}/scripts/check-write.py",
-        "timeout": 20
+        "matcher": "Write",
+        "command": "bash ./scripts/check-write.sh",
+        "timeout": 25
       }
     ]
   }
