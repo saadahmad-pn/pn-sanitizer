@@ -1,8 +1,29 @@
 # Changelog
 
-All notable changes to paradigm-scanner (formerly pn-sanitizer) are recorded
+All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
+
+## 2026-08-18 — "paradigm-scanner" reworded to "Paradigm Networks" in prose
+
+README's title/intro, and the opening line of `SECURITY.md`,
+`CONTRIBUTING.md`, this changelog, and `rules/pn-login-check.mdc`, said
+"paradigm-scanner" where they meant the product, for naming consistency
+with everything else already called Paradigm Networks. Left unchanged
+everywhere the literal identifier is load-bearing: `plugin.json`'s `name`
+field, the local-install symlink target and marketplace-add step in
+README, the directory tree diagram, the `~/.paradigm-scanner/` log
+directory paths, the login skill's `find` lookup for `login.sh`, and this
+changelog's own historical entry documenting the rename to that literal
+identifier.
+## 2026-08-18 — Renamed pn-login skill to paradigmnetworks-login
+
+`skills/pn-login/` → `skills/paradigmnetworks-login/`, and its frontmatter
+`name` updated to match. Updated every place that told the agent to run
+"the pn-login skill" (`README.md`, `rules/pn-login-check.mdc`,
+`check-prompt.sh`, `check-session.sh`, `check-write.sh`) to the new name.
+Left the `pn-login-check.mdc` rule's own filename unchanged — only the
+skill's name was in scope.
 
 ## 2026-08-18 — Signup link in raw "not configured" hook messages
 

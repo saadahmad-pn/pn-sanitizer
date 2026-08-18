@@ -47,7 +47,7 @@ EOF
     # Not configured, ask user to login
     local message
     read -r -d '' message <<'EOF' || true
-Paradigm Networks is not configured for this workspace. Ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run the pn-login skill to authenticate before relying on Paradigm Networks-gated prompts or tool calls.
+Paradigm Networks is not configured for this workspace. Ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run the paradigmnetworks-login skill to authenticate before relying on Paradigm Networks-gated prompts or tool calls.
 EOF
     json_session_context "$message"
   fi

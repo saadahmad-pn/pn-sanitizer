@@ -1,4 +1,4 @@
-# paradigm-scanner
+# Paradigm Networks
 
 A Cursor plugin that gates every submitted prompt (`beforeSubmitPrompt`) and
 every file write (`preToolUse`), sending each to your organization's
@@ -25,7 +25,7 @@ paradigm-scanner/
 │   ├── lib/common.sh      # shared JSON/HTTP/logging helpers
 │   └── bin/               # bundled jq fallback binaries — see Dependencies below
 ├── skills/
-│   └── pn-login/
+│   └── paradigmnetworks-login/
 │       └── SKILL.md       # tells the agent how to run login.sh
 └── rules/
     └── pn-login-check.mdc # always-on backstop that asks for the base URL
@@ -89,7 +89,7 @@ one-time browser login instead of any hardcoded or manually-pasted token:
    actually guarantees the agent checks and asks on turn one.
 2. Give the agent your Paradigm Networks base URL, e.g. `https://acme.paradigmnetworks.ai`.
    Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup.
-   The agent runs the `pn-login` skill, which invokes:
+   The agent runs the `paradigmnetworks-login` skill, which invokes:
    ```bash
    bash scripts/login.sh --base-url https://acme.paradigmnetworks.ai
    ```

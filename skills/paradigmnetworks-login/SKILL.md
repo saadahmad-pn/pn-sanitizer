@@ -1,5 +1,5 @@
 ---
-name: pn-login
+name: paradigmnetworks-login
 description: Log this workspace in to Paradigm Networks so Paradigm Networks security checks work. Use when Paradigm Networks isn't configured yet — e.g. the sessionStart hook injected a "Paradigm Networks is not configured" notice, or a hook message mentions no login/token was found — or when the user explicitly asks to log in to Paradigm Networks, switch Paradigm Networks orgs, or re-authenticate.
 ---
 

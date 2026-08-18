@@ -61,7 +61,7 @@ main() {
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
-    json_allow "Paradigm Networks is not configured (no login found). Allowing prompt — run the pn-login skill to authenticate Paradigm Networks. Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup."
+    json_allow "Paradigm Networks is not configured (no login found). Allowing prompt — run the paradigmnetworks-login skill to authenticate Paradigm Networks. Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup."
     return 0
   }
 

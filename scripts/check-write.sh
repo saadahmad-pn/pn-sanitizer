@@ -99,7 +99,7 @@ main() {
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
-    local reason="Paradigm Networks not configured — run the pn-login skill"
+    local reason="Paradigm Networks not configured — run the paradigmnetworks-login skill"
     audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
