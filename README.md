@@ -2,7 +2,9 @@
 
 A Cursor plugin that gates every submitted prompt (`beforeSubmitPrompt`) and
 every file write (`preToolUse`), sending each to your organization's
-Paradigm Networks API to decide whether it's allowed through.
+Paradigm Networks API to decide whether it's allowed through. It also keeps
+the agent aware of the git repo(s) and branch(es) in the workspace, so
+Paradigm Networks can attribute a request to a repo.
 
 Since that means prompt text and file-write content leave your machine, see
 [SECURITY.md](SECURITY.md#data-handling) for exactly what's sent, where it's
@@ -17,13 +19,15 @@ paradigm-scanner/
 ├── hooks/
 │   └── hooks.json          # sessionStart / beforeSubmitPrompt / preToolUse hook config
 ├── scripts/
-│   ├── check-session.sh   # sessionStart hook, flags missing Paradigm Networks login
-│   ├── check-prompt.sh    # beforeSubmitPrompt hook, calls the Paradigm Networks API
-│   ├── check-write.sh     # preToolUse hook, calls the Paradigm Networks API
-│   ├── pn_config.sh       # shared credentials store + token refresh
-│   ├── login.sh           # one-time browser login CLI (PKCE)
-│   ├── lib/common.sh      # shared JSON/HTTP/logging helpers
-│   └── bin/               # bundled jq fallback binaries — see Dependencies below
+│   ├── check-session.sh      # sessionStart hook, flags missing Paradigm Networks login
+│   ├── check-prompt.sh       # beforeSubmitPrompt hook, calls the Paradigm Networks API
+│   ├── check-write.sh        # preToolUse hook, calls the Paradigm Networks API
+│   ├── check-repo-context.sh # beforeSubmitPrompt hook, writes workspace git context
+│   ├── pn_config.sh          # shared credentials store + token refresh
+│   ├── login.sh              # one-time browser login CLI (PKCE)
+│   ├── lib/common.sh         # shared JSON/HTTP/logging helpers
+│   ├── lib/git-utils.sh      # git repo discovery + sanitization for check-repo-context.sh
+│   └── bin/                  # bundled jq fallback binaries — see Dependencies below
 ├── skills/
 │   └── paradigmnetworks-login/
 │       └── SKILL.md       # tells the agent how to run login.sh
@@ -151,6 +155,22 @@ yet configured, `check-prompt.sh` also fails open on purpose — see
 your team is fully onboarded. `sessionStart` (`check-session.sh`) explicitly sets
 `failClosed: false` and always fails open, since it must never block a
 session from starting.
+
+### Git repo context
+
+`check-repo-context.sh` runs on the same `beforeSubmitPrompt` event as
+`check-prompt.sh`, independently — it has nothing to do with the security
+scan and never blocks a prompt. Before each prompt, it looks for git repos
+in the workspace and (re)writes `.cursor/rules/paradigm-repo-context.mdc`
+with a sanitized `<GIT>url|branch</GIT>` tag per repo found (credentials in
+the remote URL are stripped first). That file is `alwaysApply: true`, so
+Cursor folds it into the system prompt of the next real model request —
+which is what lets your Paradigm Networks deployment attribute a request to
+a repo. It also adds that generated file's path to the workspace's own
+`.gitignore` the first time it runs, so it never risks getting committed.
+Nothing here sends anything to Paradigm Networks directly; the repo/branch
+tag just rides along as part of the prompt content already covered in
+[SECURITY.md](SECURITY.md#data-handling).
 
 ## Try it
 

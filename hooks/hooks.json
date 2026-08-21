@@ -13,6 +13,10 @@
       {
         "command": "bash ./scripts/check-prompt.sh",
         "timeout": 25
+      },
+      {
+        "command": "bash ./scripts/check-repo-context.sh",
+        "timeout": 10
       }
     ],
     "preToolUse": [

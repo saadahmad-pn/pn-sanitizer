@@ -4,6 +4,43 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-21 — Git repo context for the Paradigm Networks backend
+
+Added `scripts/check-repo-context.sh` and `scripts/lib/git-utils.sh`,
+ported from a separate plugin (`pn-repo-beacon`) and rebranded. Runs as a
+second, independent entry on the `beforeSubmitPrompt` hook (alongside, not
+merged into, `check-prompt.sh`) and writes a workspace-local
+`.cursor/rules/paradigm-repo-context.mdc` (`alwaysApply: true`) containing
+a sanitized `<GIT>url|branch</GIT>` tag per git repo found in the
+workspace. Cursor folds always-apply rules into the system prompt of the
+next real model request, which is what lets the Paradigm Networks
+control-server backend parse the tag out (`GitContext.go`) and attribute a
+request to a repo — this required zero changes on the control-server side,
+since it already handles this exact tag format (including a fallback for
+the malformed `<GIT>url|branch<GIT>` tag the original beacon plugin
+produces; this port closes the tag correctly).
+
+Deliberately independent of the security-scan hook: no changes to
+`check-prompt.sh`/`check-write.sh` or their Paradigm Networks payloads.
+The repo/branch tag reaches Paradigm Networks only because it becomes part
+of the prompt content Cursor already sends — already covered by
+`SECURITY.md`'s existing data-handling disclosure, so no new disclosure
+was needed.
+
+Two things ported as-is because they're load-bearing: sanitization
+(strips credentials from remote URLs, strips control characters, caps
+length) and a workspace-root safety check that refuses to write into
+system directories. One deliberate improvement over the original: a
+per-workspace cache (root mtime + each known repo's `.git/HEAD` mtime)
+skips the full repo-tree walk and rewrite when nothing's changed, instead
+of rescanning unconditionally on every prompt.
+
+Added unit tests for `git-utils.sh` (credential stripping, control-char
+stripping, length capping, repo discovery, symlink refusal, dedup) and an
+integration test for `check-repo-context.sh` (rule file written with a
+sanitized tag, `.gitignore` updated, fails open on bad input). Full suite:
+87/87 passing.
+
 ## 2026-08-18 — "paradigm-scanner" reworded to "Paradigm Networks" in prose
 
 README's title/intro, and the opening line of `SECURITY.md`,
