@@ -27,13 +27,17 @@ if (-not $rawMode) { $rawMode = "allow" }
 $rawMode = $rawMode.ToLowerInvariant()
 $PromptFailureMode = if ($rawMode -eq "block" -or $rawMode -eq "closed") { "closed" } else { "open" }
 
+Write-DebugLog -Message "===== check-prompt.ps1 invoked =====" -LogPath $DebugLogPath
+
 try {
   $payload = Get-StdinText
+  Write-DebugLog -Message "Read stdin | length=$($payload.Length)" -LogPath $DebugLogPath
 
   $parsedPayload = $null
   try {
     $parsedPayload = $payload | ConvertFrom-Json -ErrorAction Stop
   } catch {
+    Write-DebugLog -Message "Payload failed to parse as JSON | error=$($_.Exception.Message) | raw(first 300 chars)=$($payload.Substring(0, [Math]::Min(300, $payload.Length)))" -LogPath $DebugLogPath
     Write-JsonDeny -Message "Received invalid input. Prompt blocked."
     return
   }
@@ -51,10 +55,18 @@ try {
     $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/api/v1/codedefense/scan"
   }
 
-  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | scan_url=$scanUrl | prompt_len=$($prompt.Length)" -LogPath $DebugLogPath
-  Write-DebugLog -Message "Timeout: ${TimeoutSeconds}s" -LogPath $DebugLogPath
+  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | scan_url=$scanUrl | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
+  $callStart = Get-Date
+  Write-DebugLog -Message "POST starting -> $scanUrl" -LogPath $DebugLogPath
   $result = Invoke-ScanHttpPost -Url $scanUrl -TextData $prompt -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
+
+  $bodyPreview = ""
+  if ($result.Body) {
+    $bodyPreview = $result.Body.Substring(0, [Math]::Min(500, $result.Body.Length))
+  }
+  Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode) | body(first 500 chars)=$bodyPreview" -LogPath $DebugLogPath
 
   if ($result.TimedOut) {
     Write-DebugLog -Message "API timeout | after ${TimeoutSeconds}s | url=$scanUrl" -LogPath $DebugLogPath
@@ -116,5 +128,6 @@ try {
   }
 } catch {
   # Anything unexpected -- fail open, same posture as an unreachable API.
+  Write-DebugLog -Message "UNEXPECTED ERROR | $($_.Exception.GetType().FullName): $($_.Exception.Message)" -LogPath $DebugLogPath
   Write-JsonAllow -Message "The scanning service is unreachable. Allowing prompt."
 }
