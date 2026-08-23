@@ -17,6 +17,33 @@ function ConvertTo-CompactJson {
   return ($InputObject | ConvertTo-Json -Compress -Depth 10)
 }
 
+# Get-StdinText
+# Reads the whole of stdin as UTF-8 text, or "" if there's nothing there.
+# Deliberately does NOT gate on [Console]::IsInputRedirected first -- that
+# check (and [Console]::In generally) sits on top of Windows console-mode
+# detection that has been observed to misreport when PowerShell is
+# launched through an intermediate process (cmd.exe -> powershell.exe
+# -File, which is exactly how run-powershell.cmd invokes every hook here),
+# silently leaving the payload empty and making a real, piped-in JSON
+# payload look like invalid input. Reading the raw standard-input stream
+# directly, with an explicit encoding, sidesteps both that and a possible
+# leading UTF-8 BOM (which ConvertFrom-Json does not tolerate, and which
+# some Windows-side JSON writers include) -- stripped below if present.
+function Get-StdinText {
+  try {
+    $stdin = [Console]::OpenStandardInput()
+    $reader = New-Object System.IO.StreamReader($stdin, [System.Text.Encoding]::UTF8)
+    $text = $reader.ReadToEnd()
+  } catch {
+    return ""
+  }
+  if ($null -eq $text) { return "" }
+  if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) {
+    $text = $text.Substring(1)
+  }
+  return $text
+}
+
 # Get-JsonProperty -InputObject $obj -Name "field" -Default "fallback"
 # The PowerShell equivalent of jq's `.field // "fallback"`. Every script
 # here runs under Set-StrictMode -Version Latest, which throws when code

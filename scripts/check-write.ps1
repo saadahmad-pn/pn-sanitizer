@@ -56,10 +56,7 @@ function Write-CheckWriteAuditLog {
 }
 
 try {
-  $payload = ""
-  if ([Console]::IsInputRedirected) {
-    $payload = [Console]::In.ReadToEnd()
-  }
+  $payload = Get-StdinText
 
   $parsedPayload = $null
   try {

@@ -76,7 +76,7 @@ function Get-CacheKeyForRoot {
 }
 
 try {
-  $rawInput = [Console]::In.ReadToEnd()
+  $rawInput = Get-StdinText
   if (-not $rawInput) { throw "no input" }
   $payload = $rawInput | ConvertFrom-Json -ErrorAction Stop
   $workspaceRoots = @(Get-JsonProperty -InputObject $payload -Name "workspace_roots" -Default @())

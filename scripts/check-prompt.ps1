@@ -28,10 +28,7 @@ $rawMode = $rawMode.ToLowerInvariant()
 $PromptFailureMode = if ($rawMode -eq "block" -or $rawMode -eq "closed") { "closed" } else { "open" }
 
 try {
-  $payload = ""
-  if ([Console]::IsInputRedirected) {
-    $payload = [Console]::In.ReadToEnd()
-  }
+  $payload = Get-StdinText
 
   $parsedPayload = $null
   try {

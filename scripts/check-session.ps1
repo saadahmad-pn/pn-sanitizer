@@ -14,15 +14,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-try {
-  # Drain stdin (hook may send a payload); nothing in it is used here,
-  # same as the bash version.
-  if ([Console]::IsInputRedirected) {
-    [Console]::In.ReadToEnd() | Out-Null
-  }
-} catch {
-  # Nothing to act on either way.
-}
+Get-StdinText | Out-Null
 
 try {
   if (Test-PnConfigured) {
