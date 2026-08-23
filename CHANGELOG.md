@@ -4,6 +4,49 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-23 — Windows support
+
+Every hook and the login flow now has a native PowerShell twin
+(`check-session.ps1`, `check-prompt.ps1`, `check-write.ps1`,
+`check-repo-context.ps1`, `login.ps1`, `pn_config.ps1`, `lib/common.ps1`,
+`lib/git-utils.ps1`), targeting Windows PowerShell 5.1 — the version that
+ships on every Windows machine by default, not PowerShell 7+-only syntax.
+Zero additional installs: `ConvertTo-Json`/`ConvertFrom-Json`,
+`Invoke-RestMethod`, `System.Security.Cryptography`, and
+`System.Net.HttpListener` replace `jq`/`curl`/`openssl`/`nc` entirely, so
+there's nothing to bundle for Windows the way `jq` is bundled for
+macOS/Linux.
+
+Cursor runs every hook array entry unconditionally on every platform —
+there is no per-entry platform filter (confirmed against Cursor's own
+hooks documentation) — so `hooks/hooks.json` now lists a bash command and
+a PowerShell command side by side for every event. Added
+`scripts/run-powershell.cmd` to bridge the two: its first line is
+deliberately both a valid Windows batch label and a valid POSIX no-op, so
+when `/bin/sh` (not `cmd.exe`) ends up executing it on macOS/Linux, it
+exits `0` silently instead of erroring on every single hook call.
+Mirrored the same problem from the other direction: each `.sh` script now
+detects a Windows POSIX-emulation layer (Git Bash/MSYS2/Cygwin) and exits
+immediately with a neutral response, so a Windows machine that happens to
+have `bash` on `PATH` doesn't run both implementations for the same
+event.
+
+The OAuth login flow (`login.ps1`) binds its callback listener to
+`127.0.0.1` specifically, deliberately never a wildcard address —
+binding to a specific loopback address doesn't require administrator
+rights on Windows, while a wildcard bind does, and nothing in this flow
+ever needs to accept a connection from anywhere but the local browser.
+
+Updated `skills/paradigmnetworks-login/SKILL.md` and
+`rules/pn-login-check.mdc` with Windows-equivalent shell snippets
+alongside the existing bash ones.
+
+Not yet run end-to-end against a real Windows machine or a live Cursor
+session by the people maintaining this repo — reviewed carefully
+(including a from-scratch audit for PowerShell's strict-mode property
+access and function-return-value pitfalls, both of which caught real
+bugs before this shipped) but unverified in practice.
+
 ## 2026-08-21 — Git repo context for the Paradigm Networks backend
 
 Added `scripts/check-repo-context.sh` and `scripts/lib/git-utils.sh`,

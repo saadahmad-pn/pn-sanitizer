@@ -28,6 +28,20 @@
 
 set -euo pipefail
 
+# On Windows, this same hook event also has a PowerShell entry (run via
+# scripts/run-powershell.cmd) that does the real work -- Cursor has no way
+# to run only one entry per platform per event (confirmed against Cursor's
+# own hooks documentation), so both are always present in hooks.json. If
+# bash happens to be available anyway (Git Bash, MSYS2, Cygwin), this would
+# otherwise run a second time for the same event. Defer to the PowerShell
+# entry instead.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo '{"continue": true}'
+    exit 0
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/lib/common.sh"

@@ -7,6 +7,12 @@
         "matcher": "",
         "failClosed": false,
         "timeout": 10
+      },
+      {
+        "command": "./scripts/run-powershell.cmd ./scripts/check-session.ps1",
+        "matcher": "",
+        "failClosed": false,
+        "timeout": 10
       }
     ],
     "beforeSubmitPrompt": [
@@ -15,7 +21,15 @@
         "timeout": 25
       },
       {
+        "command": "./scripts/run-powershell.cmd ./scripts/check-prompt.ps1",
+        "timeout": 25
+      },
+      {
         "command": "bash ./scripts/check-repo-context.sh",
+        "timeout": 10
+      },
+      {
+        "command": "./scripts/run-powershell.cmd ./scripts/check-repo-context.ps1",
         "timeout": 10
       }
     ],
@@ -23,6 +37,11 @@
       {
         "matcher": "Write",
         "command": "bash ./scripts/check-write.sh",
+        "timeout": 25
+      },
+      {
+        "matcher": "Write",
+        "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
         "timeout": 25
       }
     ]

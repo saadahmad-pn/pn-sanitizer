@@ -36,6 +36,8 @@ plugin's own `scripts/` directory for this, there's no environment variable
 that tells you where the plugin is installed, so path-guessing isn't
 reliable:
 
+macOS/Linux:
+
 ```bash
 if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
   echo CONFIGURED
@@ -44,6 +46,18 @@ elif [ -n "$PARADIGM_NETWORKS_URL" ]; then
 else
   echo NOT_CONFIGURED
 fi
+```
+
+Windows (PowerShell):
+
+```powershell
+if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN) -or ($env:SNANTIZER_BASE_URL -and $env:SNANTIZER_TOKEN)) {
+  Write-Output "CONFIGURED"
+} elseif ($env:PARADIGM_NETWORKS_URL) {
+  Write-Output "NOT_CONFIGURED_URL_KNOWN"
+} else {
+  Write-Output "NOT_CONFIGURED"
+}
 ```
 
 - `CONFIGURED` → tell the user they're already logged in and stop here.
@@ -85,29 +99,40 @@ after that, proceed with it anyway — `login.sh` validates the URL itself and
 will report a clear error if it's truly malformed. Don't keep re-asking past
 that point.
 
-### 3. Locate `login.sh`
+### 3. Locate the login script
 
 Running the script (unlike the check in step 1) needs its real path, since
-it needs `pn_config.sh` next to it:
+it needs `pn_config.sh`/`pn_config.ps1` next to it. On macOS/Linux you need
+`login.sh`; on Windows you need `login.ps1` alongside `run-powershell.cmd`:
 
 ```bash
 find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.ps1" 2>/dev/null
 ```
 
 This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
-installs (`~/.cursor/plugins/local/`). If both come back, prefer `local/`.
+installs (`~/.cursor/plugins/local/`). If both come back for a platform,
+prefer `local/`.
 
 ### 4. Run the login script
 
+macOS/Linux:
+
 ```bash
-bash <path-from-step-3> --base-url <the-base-url>
+bash <path-to-login.sh> --base-url <the-base-url>
+```
+
+Windows:
+
+```
+<scripts-dir>\run-powershell.cmd <scripts-dir>\login.ps1 -BaseUrl <the-base-url>
 ```
 
 ("the base URL" is `$PARADIGM_NETWORKS_URL` if step 1 returned `NOT_CONFIGURED_URL_KNOWN`, or whatever the user gave you in step 2 otherwise.)
 
 Run it in the background rather than blocking the turn on it — it can take
 up to a minute, and you need to relay its output as soon as it appears
-(`login.sh` flushes its output immediately, so read it after a couple of
+(the script flushes its output immediately, so read it after a couple of
 seconds rather than waiting for the process to exit).
 
 The script already knows whether it's running in a sandboxed agent shell and

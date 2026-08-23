@@ -19,18 +19,27 @@ paradigm-scanner/
 ├── hooks/
 │   └── hooks.json          # sessionStart / beforeSubmitPrompt / preToolUse hook config
 ├── scripts/
-│   ├── check-session.sh      # sessionStart hook, flags missing Paradigm Networks login
-│   ├── check-prompt.sh       # beforeSubmitPrompt hook, calls the Paradigm Networks API
-│   ├── check-write.sh        # preToolUse hook, calls the Paradigm Networks API
-│   ├── check-repo-context.sh # beforeSubmitPrompt hook, writes workspace git context
-│   ├── pn_config.sh          # shared credentials store + token refresh
-│   ├── login.sh              # one-time browser login CLI (PKCE)
-│   ├── lib/common.sh         # shared JSON/HTTP/logging helpers
-│   ├── lib/git-utils.sh      # git repo discovery + sanitization for check-repo-context.sh
-│   └── bin/                  # bundled jq fallback binaries — see Dependencies below
+│   ├── check-session.sh          # sessionStart hook (macOS/Linux)
+│   ├── check-prompt.sh           # beforeSubmitPrompt hook, calls the Paradigm Networks API (macOS/Linux)
+│   ├── check-write.sh            # preToolUse hook, calls the Paradigm Networks API (macOS/Linux)
+│   ├── check-repo-context.sh     # beforeSubmitPrompt hook, writes workspace git context (macOS/Linux)
+│   ├── pn_config.sh              # shared credentials store + token refresh (macOS/Linux)
+│   ├── login.sh                  # one-time browser login CLI, PKCE (macOS/Linux)
+│   ├── lib/common.sh             # shared JSON/HTTP/logging helpers (macOS/Linux)
+│   ├── lib/git-utils.sh          # git repo discovery + sanitization (macOS/Linux)
+│   ├── bin/                      # bundled jq fallback binaries — see Dependencies below
+│   ├── check-session.ps1         # sessionStart hook (Windows)
+│   ├── check-prompt.ps1          # beforeSubmitPrompt hook (Windows)
+│   ├── check-write.ps1           # preToolUse hook (Windows)
+│   ├── check-repo-context.ps1    # beforeSubmitPrompt hook, writes workspace git context (Windows)
+│   ├── pn_config.ps1             # shared credentials store + token refresh (Windows)
+│   ├── login.ps1                 # one-time browser login CLI, PKCE (Windows)
+│   ├── lib/common.ps1            # shared JSON/HTTP/logging helpers (Windows)
+│   ├── lib/git-utils.ps1         # git repo discovery + sanitization (Windows)
+│   └── run-powershell.cmd        # launches the .ps1 hooks; see Windows support below
 ├── skills/
 │   └── paradigmnetworks-login/
-│       └── SKILL.md       # tells the agent how to run login.sh
+│       └── SKILL.md       # tells the agent how to run the login script
 └── rules/
     └── pn-login-check.mdc # always-on backstop that asks for the base URL
 ```
@@ -40,14 +49,53 @@ is installed.
 
 ## Dependencies
 
-`jq`, `curl`, `openssl`, and `nc` are required. You almost certainly don't
-need to think about `jq` specifically, though: every script prefers a
-system install if you have one, but falls back automatically to a copy
-bundled in `scripts/bin/` (macOS arm64/amd64, Linux amd64/arm64 — see
-`scripts/bin/PROVENANCE.md` for exact versions and checksums). If neither is
-available — an unsupported platform/architecture — the plugin fails
-gracefully with a clear message instead of producing broken output.
-Windows support for the bundled fallback isn't in yet.
+**macOS/Linux:** `jq`, `curl`, `openssl`, and `nc` are required. You
+almost certainly don't need to think about `jq` specifically, though:
+every script prefers a system install if you have one, but falls back
+automatically to a copy bundled in `scripts/bin/` (macOS arm64/amd64,
+Linux amd64/arm64 — see `scripts/bin/PROVENANCE.md` for exact versions
+and checksums). If neither is available — an unsupported
+platform/architecture — the plugin fails gracefully with a clear message
+instead of producing broken output.
+
+**Windows:** nothing to install. The `.ps1` scripts use only what ships
+with Windows PowerShell 5.1 by default — no bundled `jq`/`curl`/`openssl`/
+`nc` equivalent needed, since `ConvertTo-Json`/`Invoke-RestMethod`/
+`System.Security.Cryptography`/`System.Net.HttpListener` cover the same
+ground natively. See "Windows support" below for how this actually runs.
+
+## Windows support
+
+Cursor has no way to run a hook entry on only one platform — every entry
+in a hook's array runs on every OS unconditionally (confirmed against
+Cursor's own hooks documentation). So each hook event lists both a bash
+command and a PowerShell one; whichever one doesn't apply exits
+immediately and silently:
+
+- On macOS/Linux, the PowerShell entry runs through `run-powershell.cmd`,
+  whose first line is deliberately readable both as a Windows batch label
+  and as a POSIX shell no-op — so when `/bin/sh` (not `cmd.exe`) ends up
+  executing it, it just exits `0` instead of erroring.
+- On Windows, if `bash` happens to be available anyway (Git Bash, MSYS2,
+  Cygwin), the `.sh` scripts detect that environment and exit immediately
+  with a neutral response instead of doing the real work a second time.
+
+`run-powershell.cmd` launches PowerShell from an absolute,
+`%SystemRoot%`-expanded path (not a bare `powershell.exe`, which could be
+hijacked by a same-named binary earlier in `PATH`) with
+`-ExecutionPolicy Bypass` scoped to that one invocation — no system or
+user execution-policy setting needs to change.
+
+The Windows login flow (`login.ps1`) binds its OAuth callback listener to
+`127.0.0.1` specifically, never a wildcard address — binding to a
+specific loopback address doesn't require administrator rights on
+Windows, while binding wider does, and there's never a reason to bind
+wider here since the browser completing the redirect always runs on the
+same machine.
+
+This has been reviewed carefully but not run end-to-end on a real Windows
+machine by the people maintaining this repo — if you hit something that
+doesn't work as described, that's the part most likely to have a real bug.
 
 ## 1. Point it at your Paradigm Networks deployment
 
@@ -93,15 +141,20 @@ one-time browser login instead of any hardcoded or manually-pasted token:
    actually guarantees the agent checks and asks on turn one.
 2. Give the agent your Paradigm Networks base URL, e.g. `https://acme.paradigmnetworks.ai`.
    Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup.
-   The agent runs the `paradigmnetworks-login` skill, which invokes:
+   The agent runs the `paradigmnetworks-login` skill, which invokes (macOS/Linux):
    ```bash
    bash scripts/login.sh --base-url https://acme.paradigmnetworks.ai
+   ```
+   or, on Windows:
+   ```
+   scripts\run-powershell.cmd scripts\login.ps1 -BaseUrl https://acme.paradigmnetworks.ai
    ```
 3. This opens your browser to log in via an OAuth-style loopback-redirect +
    PKCE flow against `{base_url}/api/v1/plugin/authorize` and
    `/api/v1/plugin/token`. On success, credentials (`base_url`,
    `access_token`, `refresh_token`, `expires_at`) are saved to
-   `~/.pn/credentials.json` (mode `0600`).
+   `~/.pn/credentials.json` — restricted to your user only (mode `0600` on
+   macOS/Linux, an equivalent owner-only ACL on Windows).
 
 From then on, `check-prompt.sh`, `check-write.sh`, and `check-session.sh`
 all read from that file via `scripts/pn_config.sh`, transparently refreshing

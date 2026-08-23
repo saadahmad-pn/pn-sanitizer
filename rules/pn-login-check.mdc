@@ -28,7 +28,7 @@ command — do **not** try to locate this plugin's own `scripts/` directory to
 import `pn_config.sh`; the plugin can be installed anywhere
 (`~/.cursor/plugins/...`) and there is no environment variable that tells you
 where, so path-guessing is unreliable. The credentials file lives at a fixed,
-well-known path regardless of install location:
+well-known path regardless of install location. macOS/Linux:
 
 ```bash
 if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
@@ -38,6 +38,18 @@ elif [ -n "$PARADIGM_NETWORKS_URL" ]; then
 else
   echo NOT_CONFIGURED
 fi
+```
+
+Windows (PowerShell):
+
+```powershell
+if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN) -or ($env:SNANTIZER_BASE_URL -and $env:SNANTIZER_TOKEN)) {
+  Write-Output "CONFIGURED"
+} elseif ($env:PARADIGM_NETWORKS_URL) {
+  Write-Output "NOT_CONFIGURED_URL_KNOWN"
+} else {
+  Write-Output "NOT_CONFIGURED"
+}
 ```
 
 - `CONFIGURED` → Paradigm Networks already has a stored login (or a
