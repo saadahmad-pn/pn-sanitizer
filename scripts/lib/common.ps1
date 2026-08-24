@@ -97,6 +97,18 @@ function Invoke-HttpPostRaw {
   $cts = New-Object System.Threading.CancellationTokenSource
   $client = New-Object System.Net.Http.HttpClient
   try {
+    # CancelAfter is kept as a best-effort signal, but it is NOT what
+    # actually enforces the timeout below -- observed directly against a
+    # real Windows PowerShell 5.1 target: a request configured with a 10s
+    # timeout ran for ~22s anyway. Windows PowerShell 5.1's HttpClient
+    # sits on older machinery than PowerShell 7's and does not reliably
+    # honor cancellation the way it does on modern .NET (verified working
+    # correctly there in this plugin's own testing). The actual guarantee
+    # here comes from Task.Wait(timeout) below: it returns false on timeout
+    # without throwing, and without waiting any longer, regardless of
+    # whether the underlying request ever actually stops -- an abandoned
+    # task left running in the background is fine, since this process
+    # prints its result and exits shortly after either way.
     $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
 
     # The leading comma matters: without it, PowerShell unrolls the byte
@@ -110,22 +122,36 @@ function Invoke-HttpPostRaw {
         New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $AuthToken)
     }
 
+    $postTask = $client.PostAsync($Url, $content, $cts.Token)
+    # Task.Wait(timeout) returns false on a pure timeout (our own wait
+    # gave up, the task may still be running) -- but if the task itself
+    # transitions to Faulted/Canceled *within* that same window, Wait()
+    # throws instead of returning normally. Both outcomes are handled here.
     try {
-      $response = $client.PostAsync($Url, $content, $cts.Token).GetAwaiter().GetResult()
+      $completedInTime = $postTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
     } catch {
-      # .GetAwaiter().GetResult() rethrows the original exception directly
-      # (unlike .Result/.Wait(), which wrap it in an AggregateException),
-      # so the cancellation flag is the reliable signal here regardless of
-      # exactly which exception type surfaces.
-      if ($cts.IsCancellationRequested) {
-        return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-      }
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+    if (-not $completedInTime) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+    }
+    if ($postTask.IsFaulted) {
       return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
     }
 
-    $bodyText = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    $response = $postTask.Result
+    $readTask = $response.Content.ReadAsStringAsync()
+    try {
+      $readCompletedInTime = $readTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
+    } catch {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+    if (-not $readCompletedInTime) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+    }
+
     return [PSCustomObject]@{
-      Body             = $bodyText
+      Body             = $readTask.Result
       StatusCode       = [int]$response.StatusCode
       TimedOut         = $false
       ConnectionFailed = $false
