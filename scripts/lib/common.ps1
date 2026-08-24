@@ -17,6 +17,44 @@ function ConvertTo-CompactJson {
   return ($InputObject | ConvertTo-Json -Compress -Depth 10)
 }
 
+# Get-Utf8FileText -Path ...
+# Reads a file as UTF-8 text with any leading byte-order-mark stripped.
+# Windows PowerShell 5.1's Set-Content -Encoding UTF8 always writes a
+# UTF-8 BOM (unlike PowerShell 7, which defaults to no BOM) -- observed
+# directly against a real Windows target: Get-Content -Encoding UTF8 does
+# not reliably strip it back out on that runtime, leaving an invisible
+# character before the real content. For a JSON file (credentials.json)
+# that made ConvertFrom-Json fail silently on a file that looked completely
+# normal when opened and read visually. Read every one of this plugin's
+# own files through this instead of a bare Get-Content -Raw.
+function Get-Utf8FileText {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    if ($bytes.Length -gt 3) {
+      $bytes = $bytes[3..($bytes.Length - 1)]
+    } else {
+      $bytes = @()
+    }
+  }
+  return [System.Text.Encoding]::UTF8.GetString($bytes)
+}
+
+# Set-Utf8FileTextNoBom -Path ... -Value ...
+# Writes text as UTF-8 with no byte-order-mark, unlike Set-Content
+# -Encoding UTF8 on Windows PowerShell 5.1 (which always includes one).
+# Stops new BOMs from ever being written, rather than just compensating
+# for them on read -- pairs with Get-Utf8FileText above, which still
+# tolerates a BOM for files saved before this fix.
+function Set-Utf8FileTextNoBom {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value
+  )
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Value, $utf8NoBom)
+}
+
 # Get-StdinText
 # Reads the whole of stdin as UTF-8 text, or "" if there's nothing there.
 # Deliberately does NOT gate on [Console]::IsInputRedirected first -- that
@@ -249,7 +287,7 @@ function Get-FileTail {
 
   $fileInfo = Get-Item $Path
   if ($fileInfo.Length -le $MaxBytes) {
-    return (Get-Content -Path $Path -Raw -Encoding UTF8)
+    return (Get-Utf8FileText -Path $Path)
   }
 
   $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)

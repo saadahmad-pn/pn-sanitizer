@@ -44,7 +44,7 @@ function Get-PnCredentials {
     return $null
   }
   try {
-    $raw = Get-Content -Path $Script:PnCredPath -Raw -Encoding UTF8
+    $raw = Get-Utf8FileText -Path $Script:PnCredPath
     $creds = $raw | ConvertFrom-Json -ErrorAction Stop
   } catch {
     return $null
@@ -89,7 +89,7 @@ function Save-PnCredentials {
   # credentials file is never briefly world-readable.
   $tempFile = "$($Script:PnCredPath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
   try {
-    ($credsObject | ConvertTo-Json -Compress) | Set-Content -Path $tempFile -Encoding UTF8 -NoNewline
+    Set-Utf8FileTextNoBom -Path $tempFile -Value ($credsObject | ConvertTo-Json -Compress)
     Protect-PathForCurrentUserOnly -Path $tempFile
     Move-Item -Path $tempFile -Destination $Script:PnCredPath -Force
     Protect-PathForCurrentUserOnly -Path $Script:PnCredPath

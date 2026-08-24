@@ -50,7 +50,7 @@ try {
   # difference (e.g. $HOME) rather than the credentials file's content.
   if (Test-Path $Script:PnCredPath -PathType Leaf) {
     try {
-      $diagRaw = Get-Content -Path $Script:PnCredPath -Raw -Encoding UTF8
+      $diagRaw = Get-Utf8FileText -Path $Script:PnCredPath
       $diagParsed = $diagRaw | ConvertFrom-Json -ErrorAction Stop
       Write-DebugLog -Message "DIAG credentials file | has base_url=$([bool]$diagParsed.base_url) has access_token=$([bool]$diagParsed.access_token) has refresh_token=$([bool]$diagParsed.refresh_token) has expires_at=$([bool]$diagParsed.expires_at)" -LogPath $DebugLogPath
     } catch {
