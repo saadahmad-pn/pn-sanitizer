@@ -77,11 +77,6 @@ function Save-PnCredentials {
     [Parameter(Mandatory = $true)][long]$ExpiresAt
   )
 
-  if (-not (Test-Path $Script:PnCredDir)) {
-    New-Item -ItemType Directory -Path $Script:PnCredDir -Force | Out-Null
-  }
-  Protect-PathForCurrentUserOnly -Path $Script:PnCredDir
-
   $credsObject = [PSCustomObject]@{
     base_url      = $BaseUrl
     access_token  = $AccessToken
@@ -94,9 +89,19 @@ function Save-PnCredentials {
   # credentials file is never briefly world-readable.
   $tempFile = "$($Script:PnCredPath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
   try {
+    # -ErrorAction Stop on every cmdlet in this block matters, not just
+    # style: every caller of this function runs under
+    # $ErrorActionPreference = "Continue", which makes a cmdlet's own
+    # errors non-terminating by default -- a plain try/catch does not
+    # intercept those, so without this, a failed step here could fall
+    # through silently and this function would incorrectly return $true.
+    if (-not (Test-Path $Script:PnCredDir)) {
+      New-Item -ItemType Directory -Path $Script:PnCredDir -Force -ErrorAction Stop | Out-Null
+    }
+    Protect-PathForCurrentUserOnly -Path $Script:PnCredDir
     Set-Utf8FileTextNoBom -Path $tempFile -Value ($credsObject | ConvertTo-Json -Compress)
     Protect-PathForCurrentUserOnly -Path $tempFile
-    Move-Item -Path $tempFile -Destination $Script:PnCredPath -Force
+    Move-Item -Path $tempFile -Destination $Script:PnCredPath -Force -ErrorAction Stop
     Protect-PathForCurrentUserOnly -Path $Script:PnCredPath
     return $true
   } catch {

@@ -48,7 +48,12 @@ function Confirm-Gitignored {
       return
     }
   }
-  Add-Content -Path $gitignorePath -Value "`n# Added by paradigm-scanner -- generated, workspace-local agent context`n$RelativePath" -Encoding UTF8
+  # SilentlyContinue, not Stop: a failure updating one root's .gitignore
+  # (e.g. a transient AV file lock, observed as this exact class of issue
+  # elsewhere in this plugin) must not turn into a terminating error that
+  # escapes this function and aborts the whole workspace_roots loop in
+  # check-repo-context.ps1, skipping every remaining root.
+  Add-Content -Path $gitignorePath -Value "`n# Added by paradigm-scanner -- generated, workspace-local agent context`n$RelativePath" -Encoding UTF8 -ErrorAction SilentlyContinue
 }
 
 # A cheap "has anything changed" signal: the root's own last-write time
@@ -83,7 +88,11 @@ try {
   if ($workspaceRoots.Count -eq 0) { throw "no workspace_roots" }
 
   if (-not (Test-Path $CacheDir)) {
-    New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
+    # SilentlyContinue: if this fails, the cache-skip optimization below
+    # just won't apply this run (falls through to a full walk every time)
+    # -- not ideal, but not worth letting it abort the whole script when
+    # the fallback behavior is already safe.
+    New-Item -ItemType Directory -Path $CacheDir -Force -ErrorAction SilentlyContinue | Out-Null
   }
 
   foreach ($root in $workspaceRoots) {
@@ -143,17 +152,31 @@ try {
 
     $ruleDir = Join-Path $root ".cursor\rules"
     $ruleFile = Join-Path $ruleDir "paradigm-repo-context.mdc"
-    if (-not (Test-Path $ruleDir)) {
-      New-Item -ItemType Directory -Path $ruleDir -Force | Out-Null
-    }
-
     $ruleContent = "---`nalwaysApply: true`n---`n`n### Available Repositories:`n$repoList`n"
-    Set-Content -Path $ruleFile -Value $ruleContent -Encoding UTF8 -NoNewline
+
+    # Explicit -ErrorAction Stop + continue, not SilentlyContinue: unlike
+    # the .gitignore update, this write is the actual point of this
+    # script. If it fails (e.g. a transient AV file lock, the same class
+    # of issue seen elsewhere in this plugin), the cache entry written
+    # below must not claim this root succeeded -- so skip straight to the
+    # next root instead of silently treating a failed write as done.
+    try {
+      if (-not (Test-Path $ruleDir)) {
+        New-Item -ItemType Directory -Path $ruleDir -Force -ErrorAction Stop | Out-Null
+      }
+      Set-Content -Path $ruleFile -Value $ruleContent -Encoding UTF8 -NoNewline -ErrorAction Stop
+    } catch {
+      continue
+    }
 
     Confirm-Gitignored -WorkspaceRoot $root -RelativePath ".cursor/rules/paradigm-repo-context.mdc" | Out-Null
 
+    # SilentlyContinue: this is purely a "skip the next full walk" cache --
+    # the rule file itself is already written by this point, so a failure
+    # here just means the next run redoes a full scan instead of skipping
+    # it. Not worth letting it abort processing of any remaining roots.
     $newFingerprint = Get-RootFingerprint -RootPath $root -RepoPaths $uniqueRepos
-    @($newFingerprint) + $uniqueRepos | Set-Content -Path $cacheFile -Encoding UTF8
+    @($newFingerprint) + $uniqueRepos | Set-Content -Path $cacheFile -Encoding UTF8 -ErrorAction SilentlyContinue
   }
 } catch {
   # Fail open, always -- this hook has nothing to gate.

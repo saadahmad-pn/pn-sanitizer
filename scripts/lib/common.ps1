@@ -241,9 +241,17 @@ function Write-DebugLog {
   try {
     $dir = Split-Path -Parent $LogPath
     if ($dir -and -not (Test-Path $dir)) {
-      New-Item -ItemType Directory -Path $dir -Force | Out-Null
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
     }
-    Add-Content -Path $LogPath -Value "[$timestamp] $Message" -Encoding UTF8
+    # -ErrorAction Stop matters here, not just style: with
+    # $ErrorActionPreference = "Continue" set by every caller of this
+    # function, Add-Content's own errors are non-terminating by default,
+    # and a plain try/catch does not intercept non-terminating errors --
+    # they would otherwise leak straight through to Cursor's error output
+    # instead of being swallowed the way this function promises. Observed
+    # directly: a transient "Stream was not readable" (most likely an AV
+    # product briefly locking the file) leaked through exactly this way.
+    Add-Content -Path $LogPath -Value "[$timestamp] $Message" -Encoding UTF8 -ErrorAction Stop
   } catch {
     # Logging must never be the reason a hook fails.
   }
@@ -262,11 +270,16 @@ function Write-AuditLog {
   try {
     $dir = Split-Path -Parent $LogPath
     if ($dir -and -not (Test-Path $dir)) {
-      New-Item -ItemType Directory -Path $dir -Force | Out-Null
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
     }
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     $withTimestamp = $Entry | Select-Object *, @{ Name = "timestamp"; Expression = { $timestamp } }
-    Add-Content -Path $LogPath -Value (ConvertTo-CompactJson $withTimestamp) -Encoding UTF8
+    # -ErrorAction Stop matters here, not just style -- see the identical
+    # note in Write-DebugLog above: without it, a non-terminating
+    # Add-Content error is not actually caught by this try/catch under
+    # $ErrorActionPreference = "Continue", and leaks through instead of
+    # being swallowed the way this function promises.
+    Add-Content -Path $LogPath -Value (ConvertTo-CompactJson $withTimestamp) -Encoding UTF8 -ErrorAction Stop
   } catch {
     # Audit logging must never be the reason a hook fails.
   }
