@@ -52,7 +52,7 @@ function Find-GitReposInternal {
   param(
     [Parameter(Mandatory = $true)][string]$Dir,
     [Parameter(Mandatory = $true)][int]$Depth,
-    [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Found
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Found
   )
 
   if ($Depth -gt $Script:RepoContextMaxDepth) { return }

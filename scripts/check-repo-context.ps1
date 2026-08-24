@@ -99,7 +99,11 @@ try {
 
     $skip = $false
     if (Test-Path $cacheFile -PathType Leaf) {
-      $cacheLines = Get-Content -Path $cacheFile -ErrorAction SilentlyContinue
+      # @() here too: Get-Content returns a bare scalar, not a one-element
+      # array, when the file has exactly one line -- a cache file recording
+      # zero repos for a root produces exactly that (just the fingerprint
+      # line), and .Count on a scalar throws the same way it did above.
+      $cacheLines = @(Get-Content -Path $cacheFile -ErrorAction SilentlyContinue)
       if ($cacheLines -and $cacheLines.Count -gt 1) {
         $lastFingerprint = $cacheLines[0]
         $lastRepos = @($cacheLines | Select-Object -Skip 1)
@@ -113,8 +117,15 @@ try {
     }
     if ($skip) { continue }
 
-    $foundRepos = Find-GitRepos -StartPath $root
-    $uniqueRepos = Get-UniqueLines -Lines $foundRepos
+    # @(...) at the call site matters, not just inside the functions: a
+    # single-item PowerShell array/List crossing a function-return boundary
+    # gets silently unwrapped into a bare scalar unless the caller also
+    # forces array-ness -- observed directly: a workspace with exactly one
+    # repo turned $uniqueRepos into a plain string, and "$uniqueRepos.Count"
+    # then threw (a string has no .Count), silently caught by the fail-open
+    # trap below, with the rule file never getting written at all.
+    $foundRepos = @(Find-GitRepos -StartPath $root)
+    $uniqueRepos = @(Get-UniqueLines -Lines $foundRepos)
 
     if ($uniqueRepos.Count -eq 0) {
       $repoList = "- No git repositories detected in this workspace."
