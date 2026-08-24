@@ -140,20 +140,52 @@ try {
 
   switch ($action) {
     "block" {
-      # Mirrors scripts/check-prompt.sh's block-message formatting:
-      # confirmed on the bash side that newlines and **bold** both render
-      # correctly in Cursor's UI, and that wrapping the flagged reason
-      # (e.g. "privilege escalation") in `inline code` reads well too.
-      # Heuristic, not a structured field from the API response -- matches
-      # the two message shapes observed so far ("...security concerns:
-      # X." and "...security concerns (X, Y) and..."); falls back to the
-      # message unmodified if neither pattern matches.
-      $highlightedMessage = $message
+      # Mirrors scripts/check-prompt.sh's block-message formatting
+      # exactly -- see that file's comments for the full rationale. Note
+      # from testing on a real Windows target: one specific Cursor UI
+      # surface ("Submission blocked by hook") silently drops **bold**
+      # weight (the markdown gets stripped, but no bold is applied),
+      # while `inline code` highlighting does render correctly there.
+      # Porting the same design anyway to get a clean, direct read on how
+      # the new ### heading / > blockquote parts render in that surface.
+      $reason = $message
       if ($message -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
         $reason = $Matches[1]
-        $highlightedMessage = $message -replace [regex]::Escape($reason), ('`' + $reason + '`')
       }
-      Write-JsonDeny -Message "**[Paradigm Networks]**`n`n$highlightedMessage"
+
+      # Preview of the actual prompt that got flagged, capped at 60 words
+      # so a long prompt doesn't blow up the message. Collapsed to a
+      # single line first: markdown's ">" blockquote syntax only quotes
+      # the line it's on, so a multi-line prompt would otherwise break out
+      # of the quote after the first line.
+      $flaggedPreview = ($prompt -replace '\s+', ' ').Trim()
+      # @(...) matters even though Where-Object already returns a
+      # collection: a single-word prompt would otherwise reduce to a bare
+      # string crossing this pipeline, and .Count would throw the same way
+      # it did once already this session for a single-item collection.
+      $words = @($flaggedPreview -split ' ' | Where-Object { $_ -ne '' })
+      $wasTruncated = $words.Count -gt 60
+      $flaggedPreview = ($words | Select-Object -First 60) -join ' '
+      if ($wasTruncated) {
+        $flaggedPreview = "$flaggedPreview..."
+      }
+
+      # Built via single-quoted (fully literal) fragments concatenated in,
+      # not backtick-escaped inside a double-quoted string: backtick is
+      # PowerShell's own escape character, so embedding a literal backtick
+      # directly in a double-quoted string needs doubling it up, which is
+      # easy to get wrong -- concatenating literal single-quoted pieces
+      # sidesteps that entirely.
+      $concernLine = '**Concern** `' + $reason + '`'
+      $quotedContent = '> ' + $flaggedPreview
+
+      $brandedMessage = "### 🛡️ Request blocked by Paradigm Networks`n`n" +
+        "This message wasn't sent to the model. Your organization's proxy inspects`n" +
+        "outbound requests and held this one for review.`n`n" +
+        "$concernLine`n`n" +
+        "**Flagged content**`n`n" +
+        "$quotedContent"
+      Write-JsonDeny -Message $brandedMessage
     }
     "warn" {
       Write-JsonAllow -Message $message
