@@ -87,6 +87,66 @@ assert_json_valid "$result" "Valid JSON line"
 assert_json_has_key "$result" "timestamp" "Has timestamp"
 
 echo ""
+echo -e "${BLUE}=== Unit Tests: lib/git-utils.sh ===${NC}"
+
+test_case "sanitize_git_value strips embedded credentials from a URL"
+result=$(sanitize_git_value "https://x-token-abc123@github.com/acme/repo.git")
+assert_output_equals "echo '$result'" "https://github.com/acme/repo.git" "Credentials stripped"
+
+test_case "sanitize_git_value strips control characters"
+result=$(sanitize_git_value "$(printf 'branch\tname\r\n')")
+assert_output_equals "echo '$result'" "branchname" "Control characters removed"
+
+test_case "sanitize_git_value caps length"
+long_value=$(printf 'x%.0s' {1..600})
+result=$(sanitize_git_value "$long_value")
+assert_output_contains "echo '$result'" "...<truncated>" "Long value truncated"
+
+test_case "find_git_repos discovers a repo and skips node_modules"
+repo_root="$TEST_TEMP_DIR/repo-scan"
+mkdir -p "$repo_root/real-repo" "$repo_root/node_modules/fake-repo"
+(cd "$repo_root/real-repo" && git init -q)
+(cd "$repo_root/node_modules/fake-repo" && git init -q)
+result=$(find_git_repos "$repo_root")
+assert_output_contains "echo '$result'" "$repo_root/real-repo" "Finds real repo"
+if [[ "$result" != *"node_modules"* ]]; then
+  TESTS_RUN=$((TESTS_RUN + 1))
+  echo -e "  ${GREEN}✓${NC} Skips node_modules"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  TESTS_RUN=$((TESTS_RUN + 1))
+  echo -e "  ${RED}✗${NC} Should skip node_modules"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "find_git_repos does not follow symlinked directories"
+symlink_root="$TEST_TEMP_DIR/repo-scan-symlink"
+mkdir -p "$symlink_root/outside-repo"
+(cd "$symlink_root/outside-repo" && git init -q)
+mkdir -p "$symlink_root/workspace"
+ln -s "$symlink_root/outside-repo" "$symlink_root/workspace/linked-repo"
+result=$(find_git_repos "$symlink_root/workspace")
+assert_output_equals "echo '$result'" "" "Does not descend into a symlinked directory"
+
+test_case "get_remote_url returns fallback text when no remote is set"
+no_remote_repo="$TEST_TEMP_DIR/no-remote-repo"
+mkdir -p "$no_remote_repo"
+(cd "$no_remote_repo" && git init -q)
+result=$(get_remote_url "$no_remote_repo")
+assert_output_equals "echo '$result'" "No remote" "Falls back to 'No remote'"
+
+test_case "get_current_branch returns the current branch name"
+branch_repo="$TEST_TEMP_DIR/branch-repo"
+mkdir -p "$branch_repo"
+(cd "$branch_repo" && git init -q -b main-test && git commit --allow-empty -qm init)
+result=$(get_current_branch "$branch_repo")
+assert_output_equals "echo '$result'" "main-test" "Reports checked-out branch"
+
+test_case "dedupe_lines removes duplicates, preserving first-seen order"
+result=$(printf 'a\nb\na\nc\nb\n' | dedupe_lines)
+assert_output_equals "echo '$result'" "$(printf 'a\nb\nc')" "Duplicates removed, order preserved"
+
+echo ""
 echo -e "${BLUE}=== Unit Tests: pn_config.sh ===${NC}"
 
 test_case "pn_save_credentials creates file with correct permissions"

@@ -1,6 +1,6 @@
 # Security Policy
 
-paradigm-scanner gates prompts and file writes in Cursor through your
+Paradigm Networks gates prompts and file writes in Cursor through your
 organization's Paradigm Networks scanning backend. Because it sits in that path,
 we treat vulnerability reports in this repository seriously and want to
 hear about them.

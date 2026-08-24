@@ -1,8 +1,109 @@
 # Changelog
 
-All notable changes to paradigm-scanner (formerly pn-sanitizer) are recorded
+All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
+
+## 2026-08-23 — Windows support
+
+Every hook and the login flow now has a native PowerShell twin
+(`check-session.ps1`, `check-prompt.ps1`, `check-write.ps1`,
+`check-repo-context.ps1`, `login.ps1`, `pn_config.ps1`, `lib/common.ps1`,
+`lib/git-utils.ps1`), targeting Windows PowerShell 5.1 — the version that
+ships on every Windows machine by default, not PowerShell 7+-only syntax.
+Zero additional installs: `ConvertTo-Json`/`ConvertFrom-Json`,
+`Invoke-RestMethod`, `System.Security.Cryptography`, and
+`System.Net.HttpListener` replace `jq`/`curl`/`openssl`/`nc` entirely, so
+there's nothing to bundle for Windows the way `jq` is bundled for
+macOS/Linux.
+
+Cursor runs every hook array entry unconditionally on every platform —
+there is no per-entry platform filter (confirmed against Cursor's own
+hooks documentation) — so `hooks/hooks.json` now lists a bash command and
+a PowerShell command side by side for every event. Added
+`scripts/run-powershell.cmd` to bridge the two: its first line is
+deliberately both a valid Windows batch label and a valid POSIX no-op, so
+when `/bin/sh` (not `cmd.exe`) ends up executing it on macOS/Linux, it
+exits `0` silently instead of erroring on every single hook call.
+Mirrored the same problem from the other direction: each `.sh` script now
+detects a Windows POSIX-emulation layer (Git Bash/MSYS2/Cygwin) and exits
+immediately with a neutral response, so a Windows machine that happens to
+have `bash` on `PATH` doesn't run both implementations for the same
+event.
+
+The OAuth login flow (`login.ps1`) binds its callback listener to
+`127.0.0.1` specifically, deliberately never a wildcard address —
+binding to a specific loopback address doesn't require administrator
+rights on Windows, while a wildcard bind does, and nothing in this flow
+ever needs to accept a connection from anywhere but the local browser.
+
+Updated `skills/paradigmnetworks-login/SKILL.md` and
+`rules/pn-login-check.mdc` with Windows-equivalent shell snippets
+alongside the existing bash ones.
+
+Not yet run end-to-end against a real Windows machine or a live Cursor
+session by the people maintaining this repo — reviewed carefully
+(including a from-scratch audit for PowerShell's strict-mode property
+access and function-return-value pitfalls, both of which caught real
+bugs before this shipped) but unverified in practice.
+
+## 2026-08-21 — Git repo context for the Paradigm Networks backend
+
+Added `scripts/check-repo-context.sh` and `scripts/lib/git-utils.sh`,
+ported from a separate plugin (`pn-repo-beacon`) and rebranded. Runs as a
+second, independent entry on the `beforeSubmitPrompt` hook (alongside, not
+merged into, `check-prompt.sh`) and writes a workspace-local
+`.cursor/rules/paradigm-repo-context.mdc` (`alwaysApply: true`) containing
+a sanitized `<GIT>url|branch</GIT>` tag per git repo found in the
+workspace. Cursor folds always-apply rules into the system prompt of the
+next real model request, which is what lets the Paradigm Networks
+control-server backend parse the tag out (`GitContext.go`) and attribute a
+request to a repo — this required zero changes on the control-server side,
+since it already handles this exact tag format (including a fallback for
+the malformed `<GIT>url|branch<GIT>` tag the original beacon plugin
+produces; this port closes the tag correctly).
+
+Deliberately independent of the security-scan hook: no changes to
+`check-prompt.sh`/`check-write.sh` or their Paradigm Networks payloads.
+The repo/branch tag reaches Paradigm Networks only because it becomes part
+of the prompt content Cursor already sends — already covered by
+`SECURITY.md`'s existing data-handling disclosure, so no new disclosure
+was needed.
+
+Two things ported as-is because they're load-bearing: sanitization
+(strips credentials from remote URLs, strips control characters, caps
+length) and a workspace-root safety check that refuses to write into
+system directories. One deliberate improvement over the original: a
+per-workspace cache (root mtime + each known repo's `.git/HEAD` mtime)
+skips the full repo-tree walk and rewrite when nothing's changed, instead
+of rescanning unconditionally on every prompt.
+
+Added unit tests for `git-utils.sh` (credential stripping, control-char
+stripping, length capping, repo discovery, symlink refusal, dedup) and an
+integration test for `check-repo-context.sh` (rule file written with a
+sanitized tag, `.gitignore` updated, fails open on bad input). Full suite:
+87/87 passing.
+
+## 2026-08-18 — "paradigm-scanner" reworded to "Paradigm Networks" in prose
+
+README's title/intro, and the opening line of `SECURITY.md`,
+`CONTRIBUTING.md`, this changelog, and `rules/pn-login-check.mdc`, said
+"paradigm-scanner" where they meant the product, for naming consistency
+with everything else already called Paradigm Networks. Left unchanged
+everywhere the literal identifier is load-bearing: `plugin.json`'s `name`
+field, the local-install symlink target and marketplace-add step in
+README, the directory tree diagram, the `~/.paradigm-scanner/` log
+directory paths, the login skill's `find` lookup for `login.sh`, and this
+changelog's own historical entry documenting the rename to that literal
+identifier.
+## 2026-08-18 — Renamed pn-login skill to paradigmnetworks-login
+
+`skills/pn-login/` → `skills/paradigmnetworks-login/`, and its frontmatter
+`name` updated to match. Updated every place that told the agent to run
+"the pn-login skill" (`README.md`, `rules/pn-login-check.mdc`,
+`check-prompt.sh`, `check-session.sh`, `check-write.sh`) to the new name.
+Left the `pn-login-check.mdc` rule's own filename unchanged — only the
+skill's name was in scope.
 
 ## 2026-08-18 — Signup link in raw "not configured" hook messages
 

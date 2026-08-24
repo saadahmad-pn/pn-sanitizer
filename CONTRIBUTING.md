@@ -1,6 +1,6 @@
 # Contributing
 
-paradigm-scanner's hooks are plain Bash, deliberately kept simple since they run
+Paradigm Networks' hooks are plain Bash, deliberately kept simple since they run
 on every prompt and file write in Cursor. A few things to know before making
 changes:
 

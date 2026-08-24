@@ -2,6 +2,9 @@
 # Added by pn-plugin — generated, workspace-local agent context
 .cursor/rules/pn-plugin.mdc
 
+# Test scratch dir for check-repo-context.sh (self-cleaned; kept as a safety net)
+test/tmp-repo-context-workspace/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Paradigm Networks login check
 
-This plugin (`paradigm-scanner`) gates every prompt and tool call through
+This plugin (Paradigm Networks) gates every prompt and tool call through
 Paradigm Networks, which requires this workspace to be logged in. Two other
 mechanisms try to surface a missing login, but **neither reliably reaches
 you (the agent) on the first message of a session**, so this rule is the
@@ -28,7 +28,7 @@ command — do **not** try to locate this plugin's own `scripts/` directory to
 import `pn_config.sh`; the plugin can be installed anywhere
 (`~/.cursor/plugins/...`) and there is no environment variable that tells you
 where, so path-guessing is unreliable. The credentials file lives at a fixed,
-well-known path regardless of install location:
+well-known path regardless of install location. macOS/Linux:
 
 ```bash
 if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
@@ -40,6 +40,18 @@ else
 fi
 ```
 
+Windows (PowerShell):
+
+```powershell
+if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN) -or ($env:SNANTIZER_BASE_URL -and $env:SNANTIZER_TOKEN)) {
+  Write-Output "CONFIGURED"
+} elseif ($env:PARADIGM_NETWORKS_URL) {
+  Write-Output "NOT_CONFIGURED_URL_KNOWN"
+} else {
+  Write-Output "NOT_CONFIGURED"
+}
+```
+
 - `CONFIGURED` → Paradigm Networks already has a stored login (or a
   shared-host env override is set). Proceed with the user's request normally
   — no further action needed. (This only checks presence, not validity — an
@@ -49,7 +61,7 @@ fi
 - `NOT_CONFIGURED_URL_KNOWN` → an admin has already set
   `PARADIGM_NETWORKS_URL` for this workspace (e.g. via the plugin's
   marketplace configuration), but no one has completed login yet. Do **not**
-  ask for the base URL — run the `pn-login` skill directly using
+  ask for the base URL — run the `paradigmnetworks-login` skill directly using
   `$PARADIGM_NETWORKS_URL` as the known value, skipping straight to its
   login step, before proceeding with the user's request.
 - `NOT_CONFIGURED` → Paradigm Networks is **not** configured and no base URL
@@ -64,17 +76,17 @@ fi
   - the user's own URL comes back via the automatic "Other" option; do not
     invent, guess, or reuse a base URL from another project or example.
     Validate it once, correct at most one mistake, then move on — see the
-    `pn-login` skill for the full flow, including what to do if it still
+    `paradigmnetworks-login` skill for the full flow, including what to do if it still
     doesn't look like a URL after that, and for what to do if they pick
     "I'm not sure what my base URL is" (point them to signup, don't guess).
 
-  Once you have it, run the `pn-login` skill to log in before proceeding
+  Once you have it, run the `paradigmnetworks-login` skill to log in before proceeding
   with their original request.
 
 This automatic use of `$PARADIGM_NETWORKS_URL` only applies to this passive,
 first-message check. If the user explicitly asks to log in, switch Paradigm
 Networks orgs, or gives their own URL directly, that always takes priority —
-run the `pn-login` skill with whatever URL they actually gave you, regardless
+run the `paradigmnetworks-login` skill with whatever URL they actually gave you, regardless
 of what `PARADIGM_NETWORKS_URL` is set to.
 
 Do not treat an allowed prompt or a "Paradigm Networks unreachable" message

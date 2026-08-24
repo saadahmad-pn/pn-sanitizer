@@ -5,6 +5,20 @@
 
 set -o pipefail
 
+# On Windows, this same hook event also has a PowerShell entry (run via
+# scripts/run-powershell.cmd) that does the real work -- Cursor has no way
+# to run only one entry per platform per event (confirmed against Cursor's
+# own hooks documentation), so both are always present in hooks.json. If
+# bash happens to be available anyway (Git Bash, MSYS2, Cygwin), this would
+# otherwise run a second time for the same event. Defer to the PowerShell
+# entry instead.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo '{"permission": "allow"}'
+    exit 0
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
@@ -99,7 +113,7 @@ main() {
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
-    local reason="Paradigm Networks not configured — run the pn-login skill"
+    local reason="Paradigm Networks not configured — run the paradigmnetworks-login skill"
     audit_log_entry=$("$JQ_BIN" -n \
       --arg file_path "$file_path" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
