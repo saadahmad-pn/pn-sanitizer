@@ -179,7 +179,17 @@ try {
       $concernLine = '**Concern** `' + $reason + '`'
       $quotedContent = '> ' + $flaggedPreview
 
-      $brandedMessage = "### 🛡️ Request blocked by Paradigm Networks`n`n" +
+      # Built from its Unicode code points, not embedded as a literal
+      # character in this source file: a literal multi-byte emoji here
+      # depends on the file being read back with the exact encoding it was
+      # saved with, which is exactly the kind of ambiguity that produced
+      # mojibake ("dY>...") on a real Windows target even after forcing
+      # [Console]::OutputEncoding to UTF-8 in common.ps1. The shield emoji
+      # is two code points -- U+1F6E1 SHIELD, U+FE0F VARIATION SELECTOR-16
+      # (selects the emoji-style presentation) -- constructing both from
+      # their code points sidesteps source-file encoding entirely.
+      $shieldEmoji = [char]::ConvertFromUtf32(0x1F6E1) + [char]::ConvertFromUtf32(0xFE0F)
+      $brandedMessage = "### $shieldEmoji Request blocked by Paradigm Networks`n`n" +
         "This message wasn't sent to the model. Your organization's proxy inspects`n" +
         "outbound requests and held this one for review.`n`n" +
         "$concernLine`n`n" +

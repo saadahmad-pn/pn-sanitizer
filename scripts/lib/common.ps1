@@ -12,6 +12,21 @@
 
 Set-StrictMode -Version Latest
 
+# Windows PowerShell 5.1 defaults stdout to the legacy console codepage, not
+# UTF-8 -- any multi-byte character (emoji, non-ASCII text from a server
+# response) written past this point gets its bytes reinterpreted under that
+# codepage and comes out as mojibake, even though plain ASCII text in the
+# same string is unaffected (ASCII bytes are identical across codepages).
+# Forcing this here, in the file every hook script dot-sources first,
+# covers all of them against any future non-ASCII content, not just one
+# literal character in one message. Best-effort: some hosts (e.g. no real
+# console attached) throw setting this, and it's not worth failing a hook
+# over.
+try {
+  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {
+}
+
 function ConvertTo-CompactJson {
   param([Parameter(Mandatory = $true)]$InputObject)
   return ($InputObject | ConvertTo-Json -Compress -Depth 10)
