@@ -27,7 +27,7 @@ if (-not $rawMode) { $rawMode = "allow" }
 $rawMode = $rawMode.ToLowerInvariant()
 $PromptFailureMode = if ($rawMode -eq "block" -or $rawMode -eq "closed") { "closed" } else { "open" }
 
-Write-DebugLog -Message "===== check-prompt.ps1 invoked =====" -LogPath $DebugLogPath
+Write-DebugLog -Message "===== check-prompt.ps1 invoked ===== HOME=$HOME | USERPROFILE=$env:USERPROFILE | USERNAME=$env:USERNAME | CredPath=$($Script:PnCredPath) | CredFileExists=$(Test-Path $Script:PnCredPath)" -LogPath $DebugLogPath
 
 try {
   $payload = Get-StdinText
@@ -43,6 +43,22 @@ try {
   }
 
   $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
+
+  # Temporary, extra-verbose diagnostic: mirrors the manual field-by-field
+  # check exactly, from inside this hook's own process, so a mismatch
+  # against a manual interactive check points straight at an environment
+  # difference (e.g. $HOME) rather than the credentials file's content.
+  if (Test-Path $Script:PnCredPath -PathType Leaf) {
+    try {
+      $diagRaw = Get-Content -Path $Script:PnCredPath -Raw -Encoding UTF8
+      $diagParsed = $diagRaw | ConvertFrom-Json -ErrorAction Stop
+      Write-DebugLog -Message "DIAG credentials file | has base_url=$([bool]$diagParsed.base_url) has access_token=$([bool]$diagParsed.access_token) has refresh_token=$([bool]$diagParsed.refresh_token) has expires_at=$([bool]$diagParsed.expires_at)" -LogPath $DebugLogPath
+    } catch {
+      Write-DebugLog -Message "DIAG credentials file exists but failed to parse | error=$($_.Exception.Message)" -LogPath $DebugLogPath
+    }
+  } else {
+    Write-DebugLog -Message "DIAG credentials file does not exist at $($Script:PnCredPath)" -LogPath $DebugLogPath
+  }
 
   Write-DebugLog -Message "Resolving config (may refresh an expiring token)..." -LogPath $DebugLogPath
   $config = Resolve-PnConfig
