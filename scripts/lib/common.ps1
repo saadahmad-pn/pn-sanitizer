@@ -99,7 +99,11 @@ function Invoke-HttpPostRaw {
   try {
     $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
 
-    $content = New-Object System.Net.Http.ByteArrayContent($BodyBytes)
+    # The leading comma matters: without it, PowerShell unrolls the byte
+    # array into one constructor argument per byte instead of passing the
+    # array itself as the single argument ByteArrayContent(byte[]) expects
+    # -- observed directly: "Cannot find an overload ... argument count: 127".
+    $content = New-Object System.Net.Http.ByteArrayContent(, $BodyBytes)
     $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($ContentType)
     if ($AuthToken) {
       $client.DefaultRequestHeaders.Authorization =
