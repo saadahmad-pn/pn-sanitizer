@@ -154,13 +154,28 @@ function Invoke-CodeExchange {
           "&code_verifier=$([System.Uri]::EscapeDataString($CodeVerifier))" +
           "&client_id=$([System.Uri]::EscapeDataString($ClientId))" +
           "&redirect_uri=$([System.Uri]::EscapeDataString($RedirectUri))"
+  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
 
-  try {
-    $response = Invoke-RestMethod -Uri $tokenUrl -Method Post `
-      -ContentType "application/x-www-form-urlencoded" -Body $body `
-      -TimeoutSec $TokenTimeoutSeconds -ErrorAction Stop
-  } catch {
+  # Invoke-HttpPostRaw (common.ps1), not Invoke-RestMethod -- see that
+  # function's comment: -TimeoutSec was observed to not reliably abort a
+  # hung request on Windows during this plugin's own testing.
+  $result = Invoke-HttpPostRaw -Url $tokenUrl -BodyBytes $bodyBytes `
+    -ContentType "application/x-www-form-urlencoded" -TimeoutSec $TokenTimeoutSeconds
+
+  if ($result.TimedOut) {
+    [Console]::Error.WriteLine("error: timed out reaching $BaseUrl")
+    return $null
+  }
+  if ($result.ConnectionFailed -or -not $result.Body) {
     [Console]::Error.WriteLine("error: could not reach $BaseUrl")
+    return $null
+  }
+
+  $response = $null
+  try {
+    $response = $result.Body | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    [Console]::Error.WriteLine("error: token exchange returned an invalid response")
     return $null
   }
 

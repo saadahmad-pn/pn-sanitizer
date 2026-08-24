@@ -33,6 +33,7 @@ $rawMode = $rawMode.ToLowerInvariant()
 $FailureMode = if ($rawMode -eq "allow" -or $rawMode -eq "open") { "open" } else { "closed" }
 
 $AuditLogPath = Join-Path $HOME ".paradigm-scanner\audit.jsonl"
+$DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
 $StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
 function Write-CheckWriteAuditLog {
@@ -55,8 +56,11 @@ function Write-CheckWriteAuditLog {
   Write-AuditLog -Entry $entry -LogPath $AuditLogPath | Out-Null
 }
 
+Write-DebugLog -Message "===== check-write.ps1 invoked =====" -LogPath $DebugLogPath
+
 try {
   $payload = Get-StdinText
+  Write-DebugLog -Message "Read stdin | length=$($payload.Length)" -LogPath $DebugLogPath
 
   $parsedPayload = $null
   try {
@@ -97,7 +101,9 @@ try {
     return
   }
 
+  Write-DebugLog -Message "Resolving config (may refresh an expiring token)..." -LogPath $DebugLogPath
   $config = Resolve-PnConfig
+  Write-DebugLog -Message "Config resolved | configured=$($null -ne $config)" -LogPath $DebugLogPath
   if ($null -eq $config) {
     $reason = "Paradigm Networks not configured -- run the paradigmnetworks-login skill"
     Write-CheckWriteAuditLog -FilePath $filePath -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
@@ -118,7 +124,11 @@ try {
     $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/api/v1/codedefense/scan"
   }
 
+  $callStart = Get-Date
+  Write-DebugLog -Message "POST starting -> $scanUrl | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
   $result = Invoke-ScanHttpPost -Url $scanUrl -TextData $scanText -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
+  Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode)" -LogPath $DebugLogPath
 
   if ($result.TimedOut) {
     Write-CheckWriteAuditLog -FilePath $filePath -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
@@ -190,6 +200,7 @@ try {
 } catch {
   # Anything unexpected -- match the FailureMode posture for an
   # unreachable scanner rather than crash without a response.
+  Write-DebugLog -Message "UNEXPECTED ERROR | $($_.Exception.GetType().FullName): $($_.Exception.Message)" -LogPath $DebugLogPath
   if ($FailureMode -eq "open") {
     Write-JsonPermissionAllow -Message "The scanning service is unavailable. Write allowed WITHOUT a security scan."
   } else {

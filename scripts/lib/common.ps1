@@ -66,24 +66,76 @@ function Get-JsonProperty {
   return $Default
 }
 
-# Invoke-ScanHttpPost -Url ... -TextData ... -AuthToken ... -TimeoutSec ...
-# Mirrors http_post_form + http_post_split_status combined into one call:
-# sends TextData as a literal multipart/form-data field named "text" (never
-# interpreted as a file path, matching curl --form-string's behavior) and
-# returns an object describing exactly what happened, so callers don't have
-# to unpick a curl exit code the way the bash version does.
-#
-# Deliberately builds the multipart body by hand instead of using
-# Invoke-WebRequest's -Form parameter: -Form was added in PowerShell 6.1,
-# so relying on it would silently fail on stock Windows PowerShell 5.1,
-# which is the actual "nothing extra to install" baseline this is written
-# against.
+Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+
+# Invoke-HttpPostRaw -Url ... -BodyBytes ... -ContentType ... -AuthToken ... -TimeoutSec ...
+# A hard-timeout HTTP POST built directly on HttpClient + a
+# CancellationToken, instead of Invoke-WebRequest/-RestMethod's -TimeoutSec.
+# Observed directly against a real Windows test environment for this
+# plugin: -TimeoutSec did not reliably abort a hung request -- the process
+# outlived it and had to be killed from outside by Cursor's own, longer,
+# hook-level timeout instead, with the actual HTTP call never returning at
+# all. CancellationToken.CancelAfter forces the issue: cancelling it aborts
+# the underlying socket operation directly, it does not depend on the HTTP
+# stack choosing to honor a timeout value the way -TimeoutSec apparently
+# doesn't in that environment.
 #
 # Returns a PSCustomObject with:
 #   Body              - response body string, or $null if unreachable/timed out
 #   StatusCode        - HTTP status code (int), or $null if unreachable/timed out
 #   TimedOut          - $true if the request exceeded TimeoutSec
 #   ConnectionFailed  - $true if the request could not connect at all
+function Invoke-HttpPostRaw {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [Parameter(Mandatory = $true)][byte[]]$BodyBytes,
+    [Parameter(Mandatory = $true)][string]$ContentType,
+    [string]$AuthToken = "",
+    [int]$TimeoutSec = 5
+  )
+
+  $cts = New-Object System.Threading.CancellationTokenSource
+  $client = New-Object System.Net.Http.HttpClient
+  try {
+    $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
+
+    $content = New-Object System.Net.Http.ByteArrayContent($BodyBytes)
+    $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($ContentType)
+    if ($AuthToken) {
+      $client.DefaultRequestHeaders.Authorization =
+        New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $AuthToken)
+    }
+
+    try {
+      $response = $client.PostAsync($Url, $content, $cts.Token).GetAwaiter().GetResult()
+    } catch {
+      # .GetAwaiter().GetResult() rethrows the original exception directly
+      # (unlike .Result/.Wait(), which wrap it in an AggregateException),
+      # so the cancellation flag is the reliable signal here regardless of
+      # exactly which exception type surfaces.
+      if ($cts.IsCancellationRequested) {
+        return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+      }
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+
+    $bodyText = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    return [PSCustomObject]@{
+      Body             = $bodyText
+      StatusCode       = [int]$response.StatusCode
+      TimedOut         = $false
+      ConnectionFailed = $false
+    }
+  } finally {
+    $client.Dispose()
+    $cts.Dispose()
+  }
+}
+
+# Invoke-ScanHttpPost -Url ... -TextData ... -AuthToken ... -TimeoutSec ...
+# Mirrors http_post_form + http_post_split_status combined into one call:
+# sends TextData as a literal multipart/form-data field named "text" (never
+# interpreted as a file path, matching curl --form-string's behavior).
 function Invoke-ScanHttpPost {
   param(
     [Parameter(Mandatory = $true)][string]$Url,
@@ -104,49 +156,9 @@ function Invoke-ScanHttpPost {
   $bodyString = $bodyLines -join "`r`n"
   $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyString)
 
-  $headers = @{}
-  if ($AuthToken) {
-    $headers["Authorization"] = "Bearer $AuthToken"
-  }
-
-  try {
-    $response = Invoke-WebRequest -Uri $Url -Method Post `
-      -ContentType "multipart/form-data; boundary=$boundary" `
-      -Headers $headers -Body $bodyBytes -TimeoutSec $TimeoutSec `
-      -UseBasicParsing -ErrorAction Stop
-
-    return [PSCustomObject]@{
-      Body             = $response.Content
-      StatusCode       = [int]$response.StatusCode
-      TimedOut         = $false
-      ConnectionFailed = $false
-    }
-  } catch [System.Net.WebException] {
-    $webEx = $_.Exception
-    if ($webEx.Status -eq [System.Net.WebExceptionStatus]::Timeout) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-    }
-    if ($webEx.Response) {
-      # A real HTTP response came back, just with a non-2xx status --
-      # read it the same way curl would, rather than treating it as
-      # unreachable.
-      $stream = $webEx.Response.GetResponseStream()
-      $reader = New-Object System.IO.StreamReader($stream)
-      $body = $reader.ReadToEnd()
-      $reader.Close()
-      return [PSCustomObject]@{
-        Body             = $body
-        StatusCode       = [int]$webEx.Response.StatusCode
-        TimedOut         = $false
-        ConnectionFailed = $false
-      }
-    }
-    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-  } catch {
-    # Anything else (DNS failure, TLS error, etc.) -- treat the same as
-    # "unreachable" rather than letting the script crash.
-    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-  }
+  return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
+    -ContentType "multipart/form-data; boundary=$boundary" `
+    -AuthToken $AuthToken -TimeoutSec $TimeoutSec
 }
 
 # Write-DebugLog -Message ... -LogPath ...

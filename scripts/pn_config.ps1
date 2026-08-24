@@ -110,11 +110,27 @@ function Invoke-PnTokenRefresh {
 
   $tokenUrl = "$($BaseUrl.TrimEnd('/'))/api/v1/plugin/token"
   $body = "grant_type=refresh_token&refresh_token=$([System.Uri]::EscapeDataString($RefreshToken))&client_id=$([System.Uri]::EscapeDataString($Script:PnClientId))"
+  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
 
+  # Invoke-HttpPostRaw (common.ps1), not Invoke-RestMethod: -TimeoutSec was
+  # observed to not reliably abort a hung request on Windows in this
+  # plugin's own testing -- see that function's comment for detail. This
+  # refresh call sits on the critical path of every scan while a token is
+  # expiring, so a silent hang here is exactly what previously showed up
+  # as check-prompt.ps1 hanging with no error and no log past "Read stdin".
+  $result = Invoke-HttpPostRaw -Url $tokenUrl -BodyBytes $bodyBytes `
+    -ContentType "application/x-www-form-urlencoded" -TimeoutSec $Script:PnTokenTimeoutSec
+
+  if ($result.TimedOut -or $result.ConnectionFailed -or -not $result.Body) {
+    return $null
+  }
+  if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
+    return $null
+  }
+
+  $response = $null
   try {
-    $response = Invoke-RestMethod -Uri $tokenUrl -Method Post `
-      -ContentType "application/x-www-form-urlencoded" -Body $body `
-      -TimeoutSec $Script:PnTokenTimeoutSec -ErrorAction Stop
+    $response = $result.Body | ConvertFrom-Json -ErrorAction Stop
   } catch {
     return $null
   }
