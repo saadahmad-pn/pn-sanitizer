@@ -1,0 +1,211 @@
+# beforeSubmitPrompt hook (Windows): scan prompt via Paradigm Networks API
+# before submitting. Returns {continue: true/false, user_message: "..."}.
+# Mirrors scripts/check-prompt.sh -- see that file's comments for the
+# reasoning behind which failures honor PROMPT_FAILURE_MODE and which
+# (not-configured) always allow unconditionally.
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Continue"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $ScriptDir "lib\common.ps1")
+. (Join-Path $ScriptDir "pn_config.ps1")
+
+$ScanUrlOverride = $env:SNANTIZER_SCAN_URL
+# 40s (not 20s, matching the bash side): observed directly that
+# establishing the HTTPS connection to the scan API from a real Windows
+# target can itself take ~20-25s (likely a slow/blocked certificate
+# revocation check), before any actual server-side work even starts --
+# a stopgap while that root cause is investigated separately.
+$TimeoutSeconds = 40
+if ($env:SNANTIZER_TIMEOUT) {
+  $parsedTimeout = 0
+  if ([int]::TryParse($env:SNANTIZER_TIMEOUT, [ref]$parsedTimeout)) {
+    $TimeoutSeconds = $parsedTimeout
+  }
+}
+$DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
+
+$rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
+if (-not $rawMode) { $rawMode = $env:SNANTIZER_PROMPT_FAILURE_MODE }
+if (-not $rawMode) { $rawMode = "allow" }
+$rawMode = $rawMode.ToLowerInvariant()
+$PromptFailureMode = if ($rawMode -eq "block" -or $rawMode -eq "closed") { "closed" } else { "open" }
+
+Write-DebugLog -Message "===== check-prompt.ps1 invoked ===== HOME=$HOME | USERPROFILE=$env:USERPROFILE | USERNAME=$env:USERNAME | CredPath=$($Script:PnCredPath) | CredFileExists=$(Test-Path $Script:PnCredPath)" -LogPath $DebugLogPath
+
+try {
+  $payload = Get-StdinText
+  Write-DebugLog -Message "Read stdin | length=$($payload.Length)" -LogPath $DebugLogPath
+
+  $parsedPayload = $null
+  try {
+    $parsedPayload = $payload | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    Write-DebugLog -Message "Payload failed to parse as JSON | error=$($_.Exception.Message) | raw(first 300 chars)=$($payload.Substring(0, [Math]::Min(300, $payload.Length)))" -LogPath $DebugLogPath
+    Write-JsonDeny -Message "Received invalid input. Prompt blocked."
+    return
+  }
+
+  $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
+
+  # Temporary, extra-verbose diagnostic: mirrors the manual field-by-field
+  # check exactly, from inside this hook's own process, so a mismatch
+  # against a manual interactive check points straight at an environment
+  # difference (e.g. $HOME) rather than the credentials file's content.
+  if (Test-Path $Script:PnCredPath -PathType Leaf) {
+    try {
+      $diagRaw = Get-Utf8FileText -Path $Script:PnCredPath
+      $diagParsed = $diagRaw | ConvertFrom-Json -ErrorAction Stop
+      Write-DebugLog -Message "DIAG credentials file | has base_url=$([bool]$diagParsed.base_url) has access_token=$([bool]$diagParsed.access_token) has refresh_token=$([bool]$diagParsed.refresh_token) has expires_at=$([bool]$diagParsed.expires_at)" -LogPath $DebugLogPath
+    } catch {
+      Write-DebugLog -Message "DIAG credentials file exists but failed to parse | error=$($_.Exception.Message)" -LogPath $DebugLogPath
+    }
+  } else {
+    Write-DebugLog -Message "DIAG credentials file does not exist at $($Script:PnCredPath)" -LogPath $DebugLogPath
+  }
+
+  Write-DebugLog -Message "Resolving config (may refresh an expiring token)..." -LogPath $DebugLogPath
+  $config = Resolve-PnConfig
+  Write-DebugLog -Message "Config resolved | configured=$($null -ne $config)" -LogPath $DebugLogPath
+  if ($null -eq $config) {
+    Write-JsonAllow -Message "Paradigm Networks is not configured (no login found). Allowing prompt -- run the paradigmnetworks-login skill to authenticate Paradigm Networks. Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup."
+    return
+  }
+
+  $scanUrl = $ScanUrlOverride
+  if (-not $scanUrl) {
+    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/api/v1/codedefense/scan"
+  }
+
+  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | scan_url=$scanUrl | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
+
+  $callStart = Get-Date
+  Write-DebugLog -Message "POST starting -> $scanUrl" -LogPath $DebugLogPath
+  $result = Invoke-ScanHttpPost -Url $scanUrl -TextData $prompt -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
+
+  $bodyPreview = ""
+  if ($result.Body) {
+    $bodyPreview = $result.Body.Substring(0, [Math]::Min(500, $result.Body.Length))
+  }
+  Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode) | body(first 500 chars)=$bodyPreview" -LogPath $DebugLogPath
+
+  if ($result.TimedOut) {
+    Write-DebugLog -Message "API timeout | after ${TimeoutSeconds}s | url=$scanUrl" -LogPath $DebugLogPath
+    if ($PromptFailureMode -eq "closed") {
+      Write-JsonDeny -Message "The scanning service timed out (${TimeoutSeconds}s). Prompt blocked."
+    } else {
+      Write-JsonAllow -Message "The scanning service timed out (${TimeoutSeconds}s). Allowing prompt."
+    }
+    return
+  }
+  if ($result.ConnectionFailed) {
+    Write-DebugLog -Message "API unreachable | url=$scanUrl" -LogPath $DebugLogPath
+    if ($PromptFailureMode -eq "closed") {
+      Write-JsonDeny -Message "The scanning service is unreachable. Prompt blocked."
+    } else {
+      Write-JsonAllow -Message "The scanning service is unreachable. Allowing prompt."
+    }
+    return
+  }
+
+  if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
+    Write-DebugLog -Message "API HTTP error | status=$($result.StatusCode) | url=$scanUrl" -LogPath $DebugLogPath
+    if ($PromptFailureMode -eq "closed") {
+      Write-JsonDeny -Message "The scanning service returned an error (HTTP $($result.StatusCode)). Prompt blocked."
+    } else {
+      Write-JsonAllow -Message "The scanning service returned an error (HTTP $($result.StatusCode)). Allowing prompt."
+    }
+    return
+  }
+
+  $responseObject = $null
+  try {
+    $responseObject = $result.Body | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    Write-DebugLog -Message "API invalid JSON response | url=$scanUrl" -LogPath $DebugLogPath
+    if ($PromptFailureMode -eq "closed") {
+      Write-JsonDeny -Message "The scanning service returned an invalid response. Prompt blocked."
+    } else {
+      Write-JsonAllow -Message "The scanning service returned an invalid response. Allowing prompt."
+    }
+    return
+  }
+
+  $action = Get-JsonProperty -InputObject $responseObject -Name "action_to_take" -Default "allow"
+  $message = Get-JsonProperty -InputObject $responseObject -Name "message" -Default "Prompt blocked by Paradigm Networks."
+
+  Write-DebugLog -Message "API response received | action=$action" -LogPath $DebugLogPath
+
+  switch ($action) {
+    "block" {
+      # Mirrors scripts/check-prompt.sh's block-message formatting
+      # exactly -- see that file's comments for the full rationale. Note
+      # from testing on a real Windows target: one specific Cursor UI
+      # surface ("Submission blocked by hook") silently drops **bold**
+      # weight (the markdown gets stripped, but no bold is applied),
+      # while `inline code` highlighting does render correctly there.
+      # Porting the same design anyway to get a clean, direct read on how
+      # the new ### heading / > blockquote parts render in that surface.
+      $reason = $message
+      if ($message -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
+        $reason = $Matches[1]
+      }
+
+      # Preview of the actual prompt that got flagged, capped at 60 words
+      # so a long prompt doesn't blow up the message. Collapsed to a
+      # single line first: markdown's ">" blockquote syntax only quotes
+      # the line it's on, so a multi-line prompt would otherwise break out
+      # of the quote after the first line.
+      $flaggedPreview = ($prompt -replace '\s+', ' ').Trim()
+      # @(...) matters even though Where-Object already returns a
+      # collection: a single-word prompt would otherwise reduce to a bare
+      # string crossing this pipeline, and .Count would throw the same way
+      # it did once already this session for a single-item collection.
+      $words = @($flaggedPreview -split ' ' | Where-Object { $_ -ne '' })
+      $wasTruncated = $words.Count -gt 60
+      $flaggedPreview = ($words | Select-Object -First 60) -join ' '
+      if ($wasTruncated) {
+        $flaggedPreview = "$flaggedPreview..."
+      }
+
+      # Built via single-quoted (fully literal) fragments concatenated in,
+      # not backtick-escaped inside a double-quoted string: backtick is
+      # PowerShell's own escape character, so embedding a literal backtick
+      # directly in a double-quoted string needs doubling it up, which is
+      # easy to get wrong -- concatenating literal single-quoted pieces
+      # sidesteps that entirely.
+      $concernLine = '**Concern** `' + $reason + '`'
+      $quotedContent = '> ' + $flaggedPreview
+
+      # Built from its Unicode code points, not embedded as a literal
+      # character in this source file: a literal multi-byte emoji here
+      # depends on the file being read back with the exact encoding it was
+      # saved with, which is exactly the kind of ambiguity that produced
+      # mojibake ("dY>...") on a real Windows target even after forcing
+      # [Console]::OutputEncoding to UTF-8 in common.ps1. The shield emoji
+      # is two code points -- U+1F6E1 SHIELD, U+FE0F VARIATION SELECTOR-16
+      # (selects the emoji-style presentation) -- constructing both from
+      # their code points sidesteps source-file encoding entirely.
+      $shieldEmoji = [char]::ConvertFromUtf32(0x1F6E1) + [char]::ConvertFromUtf32(0xFE0F)
+      $brandedMessage = "### $shieldEmoji Request blocked by Paradigm Networks`n`n" +
+        "This message wasn't sent to the model. Your organization's proxy inspects`n" +
+        "outbound requests and held this one for review.`n`n" +
+        "$concernLine`n`n" +
+        "**Flagged content**`n`n" +
+        "$quotedContent"
+      Write-JsonDeny -Message $brandedMessage
+    }
+    "warn" {
+      Write-JsonAllow -Message $message
+    }
+    default {
+      Write-JsonAllow
+    }
+  }
+} catch {
+  # Anything unexpected -- fail open, same posture as an unreachable API.
+  Write-DebugLog -Message "UNEXPECTED ERROR | $($_.Exception.GetType().FullName): $($_.Exception.Message)" -LogPath $DebugLogPath
+  Write-JsonAllow -Message "The scanning service is unreachable. Allowing prompt."
+}

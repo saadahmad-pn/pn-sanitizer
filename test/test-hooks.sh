@@ -113,6 +113,42 @@ else
 fi
 
 echo ""
+echo -e "${BLUE}=== Integration Tests: check-repo-context.sh ===${NC}"
+
+# Uses a workspace under the test directory itself, not $TEST_TEMP_DIR —
+# mktemp -d resolves under /var/folders on macOS, which check-repo-context.sh
+# deliberately treats as an unsafe system path to write into.
+REPO_CTX_WORKSPACE="$TEST_DIR/tmp-repo-context-workspace"
+rm -rf "$REPO_CTX_WORKSPACE"
+mkdir -p "$REPO_CTX_WORKSPACE/repo-a"
+(cd "$REPO_CTX_WORKSPACE/repo-a" && git init -q && \
+  git remote add origin "https://x-token-abc123@github.com/acme/repo-a.git" && \
+  git commit --allow-empty -qm init) >/dev/null 2>&1
+
+test_case "check-repo-context.sh writes a rule file with sanitized git context"
+payload=$(jq -n --arg root "$REPO_CTX_WORKSPACE" '{workspace_roots: [$root]}')
+result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "continue" "true" "Always continues"
+assert_file_exists "$REPO_CTX_WORKSPACE/.cursor/rules/paradigm-repo-context.mdc" "Rule file created"
+assert_output_contains "cat '$REPO_CTX_WORKSPACE/.cursor/rules/paradigm-repo-context.mdc'" \
+  "<GIT>https://github.com/acme/repo-a.git|master</GIT>" "Rule file has sanitized GIT tag"
+assert_output_contains "cat '$REPO_CTX_WORKSPACE/.gitignore'" \
+  ".cursor/rules/paradigm-repo-context.mdc" "Rule file path added to workspace .gitignore"
+
+test_case "check-repo-context.sh with no workspace_roots"
+result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< '{}')
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "continue" "true" "Still continues with no workspace_roots"
+
+test_case "check-repo-context.sh with invalid JSON input"
+result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< "not valid json" 2>/dev/null)
+assert_json_valid "$result" "Valid JSON output even with bad input"
+assert_json_field_equals "$result" "continue" "true" "Fails open on invalid input, never blocks"
+
+rm -rf "$REPO_CTX_WORKSPACE"
+
+echo ""
 echo ""
 test_summary
 FINAL_RESULT=$?

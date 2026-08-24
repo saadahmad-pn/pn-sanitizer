@@ -4,6 +4,19 @@
 
 set -o pipefail
 
+# Unlike the hook scripts, this is invoked directly (by the login skill),
+# not run unconditionally by Cursor on every platform -- so there's no
+# double-execution risk to guard against here, only a wrong-script risk:
+# if the agent runs this instead of login.ps1 on Windows (Git Bash, MSYS2,
+# Cygwin all provide a real bash), point it at the right one instead of
+# attempting a login that depends on openssl/nc, which may not be present.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo "error: this is the Unix login script. On Windows, run login.ps1 instead (via scripts/run-powershell.cmd login.ps1 -BaseUrl <url>)." >&2
+    exit 1
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
