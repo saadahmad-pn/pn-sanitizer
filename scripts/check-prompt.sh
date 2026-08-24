@@ -165,7 +165,13 @@ main() {
   # Return verdict
   case "$action" in
     block)
-      local branded_message="[Paradigm Networks] $message"
+      # EXPERIMENT (revert to a single space if this doesn't render as a
+      # line break in Cursor's UI): testing whether a blank line here
+      # actually shows up as one, since user_message's formatting isn't
+      # documented and known reliability regressions exist for this field.
+      local branded_message="[Paradigm Networks]
+
+$message"
       json_deny "$branded_message"
       ;;
     warn)
