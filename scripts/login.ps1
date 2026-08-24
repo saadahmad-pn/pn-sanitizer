@@ -23,7 +23,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $ClientId = "cursor-plugin"
 $CallbackTimeoutSeconds = 60
-$TokenTimeoutSeconds = 15
+# 40s, not 15s: same reasoning as pn_config.ps1's refresh timeout -- this
+# hits the same host for the token exchange, and establishing the HTTPS
+# connection alone has been observed to take ~20-25s on a real Windows
+# target (likely a slow/blocked certificate revocation check).
+$TokenTimeoutSeconds = 40
 
 function New-PkcePair {
   $verifierBytes = New-Object byte[] 40

@@ -22,7 +22,7 @@
       },
       {
         "command": "./scripts/run-powershell.cmd ./scripts/check-prompt.ps1",
-        "timeout": 25
+        "timeout": 45
       },
       {
         "command": "bash ./scripts/check-repo-context.sh",
@@ -42,7 +42,7 @@
       {
         "matcher": "Write",
         "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
-        "timeout": 25
+        "timeout": 45
       }
     ]
   }

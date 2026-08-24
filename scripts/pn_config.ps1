@@ -11,7 +11,12 @@ Set-StrictMode -Version Latest
 $Script:PnClientId = "cursor-plugin"
 $Script:PnCredDir = Join-Path $HOME ".pn"
 $Script:PnCredPath = Join-Path $Script:PnCredDir "credentials.json"
-$Script:PnTokenTimeoutSec = 10
+# 40s, not 10s: same reasoning as check-prompt.ps1/check-write.ps1 -- this
+# hits the same host, and establishing the HTTPS connection alone has been
+# observed to take ~20-25s on a real Windows target (likely a slow/blocked
+# certificate revocation check). This is the silent, on-the-critical-path
+# refresh call, so it needs the same margin, not less.
+$Script:PnTokenTimeoutSec = 40
 $Script:PnExpiryMarginSeconds = 60
 
 # Restricts a file or directory to the current user only -- the Windows

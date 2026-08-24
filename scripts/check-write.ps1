@@ -11,7 +11,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ScanUrlOverride = $env:SNANTIZER_SCAN_URL
-$TimeoutSeconds = 20
+# 40s (not 20s, matching the bash side): observed directly that
+# establishing the HTTPS connection to the scan API from a real Windows
+# target can itself take ~20-25s (likely a slow/blocked certificate
+# revocation check), before any actual server-side work even starts --
+# a stopgap while that root cause is investigated separately.
+$TimeoutSeconds = 40
 if ($env:SNANTIZER_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:SNANTIZER_TIMEOUT, [ref]$parsedTimeout)) {
