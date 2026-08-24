@@ -140,7 +140,20 @@ try {
 
   switch ($action) {
     "block" {
-      Write-JsonDeny -Message "[Paradigm Networks] $message"
+      # Mirrors scripts/check-prompt.sh's block-message formatting:
+      # confirmed on the bash side that newlines and **bold** both render
+      # correctly in Cursor's UI, and that wrapping the flagged reason
+      # (e.g. "privilege escalation") in `inline code` reads well too.
+      # Heuristic, not a structured field from the API response -- matches
+      # the two message shapes observed so far ("...security concerns:
+      # X." and "...security concerns (X, Y) and..."); falls back to the
+      # message unmodified if neither pattern matches.
+      $highlightedMessage = $message
+      if ($message -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
+        $reason = $Matches[1]
+        $highlightedMessage = $message -replace [regex]::Escape($reason), ('`' + $reason + '`')
+      }
+      Write-JsonDeny -Message "**[Paradigm Networks]**`n`n$highlightedMessage"
     }
     "warn" {
       Write-JsonAllow -Message $message

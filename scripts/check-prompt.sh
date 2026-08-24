@@ -165,14 +165,51 @@ main() {
   # Return verdict
   case "$action" in
     block)
-      # EXPERIMENT (revert to a single space + no ** if this doesn't render
-      # as intended in Cursor's UI): confirmed newlines render as real line
-      # breaks; now also testing whether **bold** renders as bold text or
-      # shows literal asterisks, since user_message's formatting isn't
-      # documented and known reliability regressions exist for this field.
-      local branded_message="**[Paradigm Networks]**
+      # EXPERIMENT (revert to the plain "[Paradigm Networks] $message"
+      # form if this doesn't render as intended): confirmed **bold**,
+      # blank-line breaks, and `inline code` all render correctly in
+      # Cursor's UI. `### heading` and `> blockquote` below are new,
+      # untested here -- worth checking specifically.
+      #
+      # Reason extraction is a heuristic, not a structured field from the
+      # API response -- matches the two message shapes observed so far
+      # ("...security concerns: X." and "...security concerns (X, Y)
+      # and..."); falls back to the full message if neither matches, so a
+      # future message shape still shows something instead of nothing.
+      local reason="$message"
+      # Pattern kept in a variable, not inline in [[ =~ ]]: bash's own
+      # conditional-expression parser (not the regex engine) trips on
+      # unquoted parentheses when the pattern is written directly inside
+      # [[ ]] -- this is the standard, documented workaround.
+      local reason_pattern="security concerns:? \(?([^.)]+)[.)]"
+      if [[ "$message" =~ $reason_pattern ]]; then
+        reason="${BASH_REMATCH[1]}"
+      fi
 
-$message"
+      # Preview of the actual prompt that got flagged, capped at 60 words
+      # so a long prompt doesn't blow up the message. Collapsed to a
+      # single line first: markdown's ">" blockquote syntax only quotes
+      # the line it's on, so a multi-line prompt would otherwise break out
+      # of the quote after the first line.
+      local flagged_preview
+      flagged_preview=$(echo "$prompt" | tr '\n' ' ' | tr -s ' ')
+      local prompt_word_count
+      prompt_word_count=$(echo "$flagged_preview" | wc -w | tr -d ' ')
+      flagged_preview=$(echo "$flagged_preview" | cut -d' ' -f1-60)
+      if [[ "$prompt_word_count" -gt 60 ]]; then
+        flagged_preview="${flagged_preview}..."
+      fi
+
+      local branded_message="### 🛡️ Request blocked by Paradigm Networks
+
+This message wasn't sent to the model. Your organization's proxy inspects
+outbound requests and held this one for review.
+
+**Concern** \`$reason\`
+
+**Flagged content**
+
+> $flagged_preview"
       json_deny "$branded_message"
       ;;
     warn)
