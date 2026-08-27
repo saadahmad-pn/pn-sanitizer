@@ -234,5 +234,14 @@ tag just rides along as part of the prompt content already covered in
    the plugin.
 3. Submit anything Paradigm Networks allows — it should proceed normally.
 
-Check **Cursor Settings → Hooks** or the Hooks output channel if something
-does not fire.
+If something doesn't fire as expected, check **Cursor Settings → Hooks** or
+the Hooks output channel.
+
+## Support
+
+Found a bug or have a question? Open an issue on this repository, or reach
+out to your Paradigm Networks contact. Security issues should be reported
+privately — see [SECURITY.md](SECURITY.md).
+
+For contributing changes to this plugin itself, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
