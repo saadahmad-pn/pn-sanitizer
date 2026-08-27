@@ -1,32 +1,27 @@
 # Security Policy
 
-Paradigm Networks gates prompts and file writes in Cursor through your
-organization's Paradigm Networks scanning backend. Because it sits in that path,
-we treat vulnerability reports in this repository seriously and want to
-hear about them.
+This plugin integrates Cursor with Paradigm Networks' security scanning,
+checking prompts and responses before they're sent. 
 
 ## Reporting a vulnerability
 
-Please report security issues privately using
-[GitHub's private security advisory feature](../../security/advisories/new)
-on this repository, or by emailing plugins@paradigmnetworks.ai, rather than
-opening a public issue. This lets us assess and fix the problem before it's
-publicly disclosed.
+Please report security issues privately, using either:
 
-Include, where possible:
+- [GitHub's private security advisory feature](../../security/advisories/new)
+  on this repository, or
+- Email: **plugins@paradigmnetworks.ai**
+
+Please do not open a public issue for security reports. Reporting
+privately gives us the chance to assess and ship a fix before the issue
+is publicly disclosed.
+
+### What to include
+
+Where possible, please include:
 
 - A description of the issue and its potential impact.
 - Steps to reproduce it, or a proof of concept.
 - The plugin version and platform (macOS/Linux/Windows) you tested on.
-
-## Scope
-
-In scope: the hook scripts (`scripts/`), the plugin manifest and hook
-configuration (`.cursor-plugin/`, `hooks/`), and the login/credential flow.
-
-Out of scope: the Paradigm Networks scanning backend itself (a separate,
-organization-hosted service this plugin talks to, not part of this
-repository).
 
 ## Response
 
