@@ -1,0 +1,17 @@
+{
+  "name": "paradigm-networks",
+  "owner": {
+    "name": "Paradigm Networks"
+  },
+  "metadata": {
+    "description": "Paradigm Networks security scanning plugin for Cursor"
+  },
+  "plugins": [
+    {
+      "name": "paradigm-scanner",
+      "source": ".",
+      "description": "Checks prompts and file changes for security risks — like destructive commands or unsafe code — before they're allowed through, using your organization's Paradigm Networks deployment.",
+      "category": "security"
+    }
+  ]
+}
