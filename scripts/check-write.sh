@@ -28,7 +28,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 # Configuration from environment
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
-TRANSCRIPT_BYTES="${SNANTIZER_TRANSCRIPT_BYTES:-4000}"
+TRANSCRIPT_LINES="${SNANTIZER_TRANSCRIPT_LINES:-500}"
 # PARADIGM_NETWORKS_FAILURE_MODE (marketplace setting: block/allow) takes
 # precedence; SNANTIZER_FAILURE_MODE (legacy shared-host override:
 # closed/open) is the fallback.
@@ -95,32 +95,39 @@ main() {
   file_path=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')
   file_content=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.content // ""')
 
-  log_debug "tool_input | file_path=$file_path | content_len=${#file_content} | agent_message_len=${#agent_message}" "$DEBUG_LOG_PATH"
-
   # Determine what to scan
-  local transcript_content=""
-  if [[ -n "$transcript_path" ]] && [[ -f "$transcript_path" ]]; then
-    transcript_content=$(file_read_tail "$transcript_path" "$TRANSCRIPT_BYTES")
+  local turn_text=""
+  if [[ -n "$transcript_path" ]]; then
+    turn_text=$(get_current_turn_text "$transcript_path" "$TRANSCRIPT_LINES")
   fi
 
-  # Scan the actual file content being written, not conversation text --
-  # this previously fell back straight to agent_message or a tail of the
-  # whole transcript, which meant an unrelated write shortly after any
-  # flagged topic could inherit that verdict from leftover chat context
-  # instead of being judged on what it actually contains (confirmed
-  # directly: trivial follow-up writes were blocked purely because recent
-  # transcript text mentioned a security topic from an earlier, unrelated
-  # prompt). Only fall back to conversation text when the payload genuinely
-  # has no file content to look at.
-  local scan_text="$file_content"
-  local scan_source="content"
-  if [[ -z "$scan_text" ]]; then
+  log_debug "tool_input | file_path=$file_path | content_len=${#file_content} | turn_text_len=${#turn_text} | agent_message_len=${#agent_message}" "$DEBUG_LOG_PATH"
+
+  # Scan the current turn's conversation together with the file content --
+  # neither alone is enough. File-content-only can miss malicious *intent*
+  # that doesn't show up in code that looks ordinary on its own (e.g. the
+  # user's actual ask was the problem, not the resulting file). A raw
+  # transcript tail on its own can drag in stale context from an earlier,
+  # unrelated turn (confirmed directly: a trivial follow-up write was
+  # blocked purely because recent transcript text mentioned a security
+  # topic from a previous, unrelated prompt). get_current_turn_text() above
+  # scopes to the most recent user message onward, so it can't repeat that
+  # -- combining it with the actual file content covers both what was
+  # asked for and what's actually about to be written.
+  local scan_text=""
+  local scan_source=""
+  if [[ -n "$turn_text" ]] && [[ -n "$file_content" ]]; then
+    scan_text="${turn_text}"$'\n\n---\n\n'"${file_content}"
+    scan_source="turn+content"
+  elif [[ -n "$file_content" ]]; then
+    scan_text="$file_content"
+    scan_source="content"
+  elif [[ -n "$turn_text" ]]; then
+    scan_text="$turn_text"
+    scan_source="turn"
+  elif [[ -n "$agent_message" ]]; then
     scan_text="$agent_message"
     scan_source="agent_message"
-  fi
-  if [[ -z "$scan_text" ]]; then
-    scan_text="$transcript_content"
-    scan_source="transcript"
   fi
   log_debug "Scan source selected | source=$scan_source | length=${#scan_text}" "$DEBUG_LOG_PATH"
 

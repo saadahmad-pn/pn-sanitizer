@@ -23,11 +23,11 @@ if ($env:SNANTIZER_TIMEOUT) {
     $TimeoutSeconds = $parsedTimeout
   }
 }
-$TranscriptBytes = 4000
-if ($env:SNANTIZER_TRANSCRIPT_BYTES) {
-  $parsedBytes = 0
-  if ([int]::TryParse($env:SNANTIZER_TRANSCRIPT_BYTES, [ref]$parsedBytes)) {
-    $TranscriptBytes = $parsedBytes
+$TranscriptLines = 500
+if ($env:SNANTIZER_TRANSCRIPT_LINES) {
+  $parsedLines = 0
+  if ([int]::TryParse($env:SNANTIZER_TRANSCRIPT_LINES, [ref]$parsedLines)) {
+    $TranscriptLines = $parsedLines
   }
 }
 
@@ -92,31 +92,38 @@ try {
   $filePath = Get-JsonProperty -InputObject $toolInput -Name "file_path" -Default ""
   $fileContent = [string](Get-JsonProperty -InputObject $toolInput -Name "content" -Default "")
 
-  Write-DebugLog -Message "tool_input | file_path=$filePath | content_len=$($fileContent.Length) | agent_message_len=$($agentMessage.Length)" -LogPath $DebugLogPath
-
-  $transcriptContent = ""
-  if ($transcriptPath -and (Test-Path $transcriptPath -PathType Leaf)) {
-    $transcriptContent = Get-FileTail -Path $transcriptPath -MaxBytes $TranscriptBytes
+  $turnText = ""
+  if ($transcriptPath) {
+    $turnText = Get-CurrentTurnText -TranscriptPath $transcriptPath -MaxLines $TranscriptLines
   }
 
-  # Scan the actual file content being written, not conversation text --
-  # this previously fell back straight to agent_message or a tail of the
-  # whole transcript, which meant an unrelated write shortly after any
-  # flagged topic could inherit that verdict from leftover chat context
-  # instead of being judged on what it actually contains (confirmed
-  # directly: trivial follow-up writes were blocked purely because recent
-  # transcript text mentioned a security topic from an earlier, unrelated
-  # prompt). Only fall back to conversation text when the payload genuinely
-  # has no file content to look at.
-  $scanText = $fileContent
-  $scanSource = "content"
-  if (-not $scanText) {
+  Write-DebugLog -Message "tool_input | file_path=$filePath | content_len=$($fileContent.Length) | turn_text_len=$($turnText.Length) | agent_message_len=$($agentMessage.Length)" -LogPath $DebugLogPath
+
+  # Scan the current turn's conversation together with the file content --
+  # neither alone is enough. File-content-only can miss malicious *intent*
+  # that doesn't show up in code that looks ordinary on its own (e.g. the
+  # user's actual ask was the problem, not the resulting file). A raw
+  # transcript tail on its own can drag in stale context from an earlier,
+  # unrelated turn (confirmed directly: a trivial follow-up write was
+  # blocked purely because recent transcript text mentioned a security
+  # topic from a previous, unrelated prompt). Get-CurrentTurnText above
+  # scopes to the most recent user message onward, so it can't repeat that
+  # -- combining it with the actual file content covers both what was
+  # asked for and what's actually about to be written.
+  $scanText = ""
+  $scanSource = ""
+  if ($turnText -and $fileContent) {
+    $scanText = "$turnText`n`n---`n`n$fileContent"
+    $scanSource = "turn+content"
+  } elseif ($fileContent) {
+    $scanText = $fileContent
+    $scanSource = "content"
+  } elseif ($turnText) {
+    $scanText = $turnText
+    $scanSource = "turn"
+  } elseif ($agentMessage) {
     $scanText = $agentMessage
     $scanSource = "agent_message"
-  }
-  if (-not $scanText) {
-    $scanText = $transcriptContent
-    $scanSource = "transcript"
   }
   Write-DebugLog -Message "Scan source selected | source=$scanSource | length=$($scanText.Length)" -LogPath $DebugLogPath
 

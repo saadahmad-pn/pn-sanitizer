@@ -334,6 +334,78 @@ function Test-CommandExists {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+# Extracts the text of the current conversation turn from a Cursor
+# transcript.jsonl -- everything from the most recent user message to the
+# end of the file (the assistant's own turn-in-progress). Scoped this way
+# rather than a raw byte-count tail (Get-FileTail above): a byte cut can
+# straddle multiple unrelated previous turns and drag stale context into an
+# unrelated write's scan (confirmed directly as the cause of a false
+# positive -- a trivial follow-up write inherited a flagged verdict from
+# leftover text in an earlier, unrelated request). Each transcript line is
+# either {"role": "user"|"assistant", "message": {"content": [...]}} or a
+# turn-status marker with no "role" at all; finding the last "user" line
+# gives an exact turn boundary instead of guessing one.
+# Bounded to the last MaxLines lines first (before parsing) so a
+# pathologically large transcript can't make this expensive; a single turn
+# is never remotely close to that many lines in practice.
+function Get-CurrentTurnText {
+  param(
+    [Parameter(Mandatory = $true)][string]$TranscriptPath,
+    [int]$MaxLines = 500
+  )
+  if (-not (Test-Path $TranscriptPath -PathType Leaf)) {
+    return ""
+  }
+
+  try {
+    $lines = @(Get-Content -Path $TranscriptPath -Tail $MaxLines -ErrorAction Stop)
+  } catch {
+    return ""
+  }
+
+  $parsed = New-Object System.Collections.Generic.List[object]
+  foreach ($line in $lines) {
+    if (-not $line) { continue }
+    try {
+      $parsed.Add(($line | ConvertFrom-Json -ErrorAction Stop))
+    } catch {
+      # Skip a malformed/partial line -- e.g. the last line while Cursor
+      # is still actively appending to this file.
+    }
+  }
+  if ($parsed.Count -eq 0) {
+    return ""
+  }
+
+  $startIndex = 0
+  for ($i = $parsed.Count - 1; $i -ge 0; $i--) {
+    $role = Get-JsonProperty -InputObject $parsed[$i] -Name "role" -Default ""
+    if ($role -eq "user") {
+      $startIndex = $i
+      break
+    }
+  }
+
+  $textParts = New-Object System.Collections.Generic.List[string]
+  for ($i = $startIndex; $i -lt $parsed.Count; $i++) {
+    $message = Get-JsonProperty -InputObject $parsed[$i] -Name "message" -Default $null
+    if ($null -eq $message) { continue }
+    # @(...) matters here the same way it has elsewhere in this codebase:
+    # a message with exactly one content block would otherwise unwrap to a
+    # bare object instead of a one-element array, and the foreach below
+    # would iterate its properties instead of the (single) block itself.
+    $content = @(Get-JsonProperty -InputObject $message -Name "content" -Default @())
+    foreach ($block in $content) {
+      $blockType = Get-JsonProperty -InputObject $block -Name "type" -Default ""
+      if ($blockType -eq "text") {
+        $text = Get-JsonProperty -InputObject $block -Name "text" -Default ""
+        if ($text) { $textParts.Add($text) }
+      }
+    }
+  }
+  return ($textParts -join "`n`n")
+}
+
 # --- Hook response helpers (for beforeSubmitPrompt / preToolUse) ---
 
 function Write-JsonAllow {
