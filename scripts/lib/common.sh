@@ -281,3 +281,45 @@ file_read_tail() {
 command_exists() {
   command -v "$1" &>/dev/null
 }
+
+# Extracts the text of the current conversation turn from a Cursor
+# transcript.jsonl -- everything from the most recent user message to the
+# end of the file (the assistant's own turn-in-progress). Scoped this way
+# rather than a raw byte-count tail: a byte cut can straddle multiple
+# unrelated previous turns and drag stale context into an unrelated write's
+# scan (confirmed directly as the cause of a false positive -- a trivial
+# follow-up write inherited a flagged verdict from leftover text in an
+# earlier, unrelated request). Each transcript line is either
+# {"role": "user"|"assistant", "message": {"content": [...]}} or a
+# turn-status marker with no "role" at all; finding the last "user" line
+# gives an exact turn boundary instead of guessing one.
+# Bounded to the last max_lines lines first (tail, before parsing) so a
+# pathologically large transcript can't make this expensive; a single
+# turn is never remotely close to that many lines in practice.
+get_current_turn_text() {
+  local transcript_path="$1"
+  local max_lines="${2:-500}"
+
+  if [[ ! -f "$transcript_path" ]]; then
+    echo ""
+    return 0
+  fi
+
+  # Two jq passes, not one -s (slurp): slurp mode fails its ENTIRE input if
+  # even a single line isn't valid JSON, which a naive one-pass version
+  # hit immediately -- Cursor can still be appending to this file while
+  # this hook reads it, so a truncated/partial last line is a real,
+  # expected case, not a hypothetical one. The first pass reads line by
+  # line (-R) and drops anything that doesn't parse (`fromjson?`, the `?`
+  # suppresses a per-line failure instead of aborting); only the survivors
+  # reach the second pass's -s slurp.
+  tail -n "$max_lines" "$transcript_path" 2>/dev/null \
+    | "$JQ_BIN" -R -r 'fromjson? | @json' 2>/dev/null \
+    | "$JQ_BIN" -s -r '
+      . as $lines
+      | ([range(0; ($lines | length)) | select($lines[.].role == "user")] | last) as $start
+      | $lines[($start // 0):]
+      | [.[] | (.message.content // [])[]? | select(.type == "text") | .text]
+      | join("\n\n")
+    ' 2>/dev/null
+}

@@ -28,7 +28,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 # Configuration from environment
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
-TRANSCRIPT_BYTES="${SNANTIZER_TRANSCRIPT_BYTES:-4000}"
+TRANSCRIPT_LINES="${SNANTIZER_TRANSCRIPT_LINES:-500}"
 # PARADIGM_NETWORKS_FAILURE_MODE (marketplace setting: block/allow) takes
 # precedence; SNANTIZER_FAILURE_MODE (legacy shared-host override:
 # closed/open) is the fallback.
@@ -39,6 +39,7 @@ case "$RAW_FAILURE_MODE" in
 esac
 
 AUDIT_LOG_PATH="${HOME}/.paradigm-scanner/audit.jsonl"
+DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-write.log"
 
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
@@ -87,22 +88,48 @@ main() {
   local agent_message
   local transcript_path
   local file_path
+  local file_content
 
   agent_message=$(echo "$payload" | "$JQ_BIN" -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   transcript_path=$(echo "$payload" | "$JQ_BIN" -r '.transcript_path // ""')
   file_path=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')
+  file_content=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.content // ""')
 
   # Determine what to scan
-  local transcript_content=""
-  if [[ -n "$transcript_path" ]] && [[ -f "$transcript_path" ]]; then
-    transcript_content=$(file_read_tail "$transcript_path" "$TRANSCRIPT_BYTES")
+  local turn_text=""
+  if [[ -n "$transcript_path" ]]; then
+    turn_text=$(get_current_turn_text "$transcript_path" "$TRANSCRIPT_LINES")
   fi
 
-  local scan_text="$agent_message"
-  if [[ -z "$scan_text" ]]; then
-    scan_text="$transcript_content"
-  fi
+  log_debug "tool_input | file_path=$file_path | content_len=${#file_content} | turn_text_len=${#turn_text} | agent_message_len=${#agent_message}" "$DEBUG_LOG_PATH"
 
+  # Scan the current turn's conversation together with the file content --
+  # neither alone is enough. File-content-only can miss malicious *intent*
+  # that doesn't show up in code that looks ordinary on its own (e.g. the
+  # user's actual ask was the problem, not the resulting file). A raw
+  # transcript tail on its own can drag in stale context from an earlier,
+  # unrelated turn (confirmed directly: a trivial follow-up write was
+  # blocked purely because recent transcript text mentioned a security
+  # topic from a previous, unrelated prompt). get_current_turn_text() above
+  # scopes to the most recent user message onward, so it can't repeat that
+  # -- combining it with the actual file content covers both what was
+  # asked for and what's actually about to be written.
+  local scan_text=""
+  local scan_source=""
+  if [[ -n "$turn_text" ]] && [[ -n "$file_content" ]]; then
+    scan_text="${turn_text}"$'\n\n---\n\n'"${file_content}"
+    scan_source="turn+content"
+  elif [[ -n "$file_content" ]]; then
+    scan_text="$file_content"
+    scan_source="content"
+  elif [[ -n "$turn_text" ]]; then
+    scan_text="$turn_text"
+    scan_source="turn"
+  elif [[ -n "$agent_message" ]]; then
+    scan_text="$agent_message"
+    scan_source="agent_message"
+  fi
+  log_debug "Scan source selected | source=$scan_source | length=${#scan_text}" "$DEBUG_LOG_PATH"
 
   # If nothing to scan, allow
   if [[ -z "$scan_text" ]]; then
