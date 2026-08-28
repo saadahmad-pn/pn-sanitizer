@@ -1,51 +1,27 @@
 # Security Policy
 
-Paradigm Networks gates prompts and file writes in Cursor through your
-organization's Paradigm Networks scanning backend. Because it sits in that path,
-we treat vulnerability reports in this repository seriously and want to
-hear about them.
+This plugin integrates Cursor with Paradigm Networks' security scanning,
+checking prompts and responses before they're sent. 
 
 ## Reporting a vulnerability
 
-Please report security issues privately using
-[GitHub's private security advisory feature](../../security/advisories/new)
-on this repository, rather than opening a public issue. This lets us assess
-and fix the problem before it's publicly disclosed.
+Please report security issues privately, using either:
 
-Include, where possible:
+- [GitHub's private security advisory feature](../../security/advisories/new)
+  on this repository, or
+- Email: **plugins@paradigmnetworks.ai**
+
+Please do not open a public issue for security reports. Reporting
+privately gives us the chance to assess and ship a fix before the issue
+is publicly disclosed.
+
+### What to include
+
+Where possible, please include:
 
 - A description of the issue and its potential impact.
 - Steps to reproduce it, or a proof of concept.
 - The plugin version and platform (macOS/Linux/Windows) you tested on.
-
-## Scope
-
-In scope: the hook scripts (`scripts/`), the plugin manifest and hook
-configuration (`.cursor-plugin/`, `hooks/`), and the login/credential flow.
-
-Out of scope: the Paradigm Networks scanning backend itself (a separate,
-organization-hosted service this plugin talks to, not part of this
-repository).
-
-## Data handling
-
-This plugin sends the text of submitted prompts and the content of file
-writes to your organization's Paradigm Networks deployment so it can be
-scanned before being allowed through.
-
-- **Transport:** all traffic to Paradigm Networks is sent over HTTPS.
-- **Storage:** Paradigm Networks is a tenant-based product — scanned content
-  is stored indefinitely in your organization's own tenant database and is
-  visible on your tenant's dashboard. Data from different tenants isn't
-  shared or mixed.
-- **Disclosure:** this data flow is already covered under Paradigm Networks'
-  main product customer agreement — installing this plugin doesn't introduce
-  a separate or additional disclosure.
-
-If your organization has its own data-handling or compliance review process
-for tools that send code to an external service, this section should cover
-what it needs — reach out to Paradigm Networks if you need more detail than
-what's here.
 
 ## Response
 
