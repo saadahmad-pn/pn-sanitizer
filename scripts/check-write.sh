@@ -39,6 +39,7 @@ case "$RAW_FAILURE_MODE" in
 esac
 
 AUDIT_LOG_PATH="${HOME}/.paradigm-scanner/audit.jsonl"
+DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-write.log"
 
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
@@ -87,10 +88,14 @@ main() {
   local agent_message
   local transcript_path
   local file_path
+  local file_content
 
   agent_message=$(echo "$payload" | "$JQ_BIN" -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   transcript_path=$(echo "$payload" | "$JQ_BIN" -r '.transcript_path // ""')
   file_path=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')
+  file_content=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.content // ""')
+
+  log_debug "tool_input | file_path=$file_path | content_len=${#file_content} | agent_message_len=${#agent_message}" "$DEBUG_LOG_PATH"
 
   # Determine what to scan
   local transcript_content=""
@@ -98,11 +103,26 @@ main() {
     transcript_content=$(file_read_tail "$transcript_path" "$TRANSCRIPT_BYTES")
   fi
 
-  local scan_text="$agent_message"
+  # Scan the actual file content being written, not conversation text --
+  # this previously fell back straight to agent_message or a tail of the
+  # whole transcript, which meant an unrelated write shortly after any
+  # flagged topic could inherit that verdict from leftover chat context
+  # instead of being judged on what it actually contains (confirmed
+  # directly: trivial follow-up writes were blocked purely because recent
+  # transcript text mentioned a security topic from an earlier, unrelated
+  # prompt). Only fall back to conversation text when the payload genuinely
+  # has no file content to look at.
+  local scan_text="$file_content"
+  local scan_source="content"
+  if [[ -z "$scan_text" ]]; then
+    scan_text="$agent_message"
+    scan_source="agent_message"
+  fi
   if [[ -z "$scan_text" ]]; then
     scan_text="$transcript_content"
+    scan_source="transcript"
   fi
-
+  log_debug "Scan source selected | source=$scan_source | length=${#scan_text}" "$DEBUG_LOG_PATH"
 
   # If nothing to scan, allow
   if [[ -z "$scan_text" ]]; then

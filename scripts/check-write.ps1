@@ -90,16 +90,35 @@ try {
   $transcriptPath = Get-JsonProperty -InputObject $parsedPayload -Name "transcript_path" -Default ""
   $toolInput = Get-JsonProperty -InputObject $parsedPayload -Name "tool_input" -Default $null
   $filePath = Get-JsonProperty -InputObject $toolInput -Name "file_path" -Default ""
+  $fileContent = [string](Get-JsonProperty -InputObject $toolInput -Name "content" -Default "")
+
+  Write-DebugLog -Message "tool_input | file_path=$filePath | content_len=$($fileContent.Length) | agent_message_len=$($agentMessage.Length)" -LogPath $DebugLogPath
 
   $transcriptContent = ""
   if ($transcriptPath -and (Test-Path $transcriptPath -PathType Leaf)) {
     $transcriptContent = Get-FileTail -Path $transcriptPath -MaxBytes $TranscriptBytes
   }
 
-  $scanText = $agentMessage
+  # Scan the actual file content being written, not conversation text --
+  # this previously fell back straight to agent_message or a tail of the
+  # whole transcript, which meant an unrelated write shortly after any
+  # flagged topic could inherit that verdict from leftover chat context
+  # instead of being judged on what it actually contains (confirmed
+  # directly: trivial follow-up writes were blocked purely because recent
+  # transcript text mentioned a security topic from an earlier, unrelated
+  # prompt). Only fall back to conversation text when the payload genuinely
+  # has no file content to look at.
+  $scanText = $fileContent
+  $scanSource = "content"
+  if (-not $scanText) {
+    $scanText = $agentMessage
+    $scanSource = "agent_message"
+  }
   if (-not $scanText) {
     $scanText = $transcriptContent
+    $scanSource = "transcript"
   }
+  Write-DebugLog -Message "Scan source selected | source=$scanSource | length=$($scanText.Length)" -LogPath $DebugLogPath
 
   if (-not $scanText) {
     Write-JsonPermissionAllow
