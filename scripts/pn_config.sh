@@ -31,13 +31,25 @@ pn_save_credentials() {
   mkdir -p "$CRED_DIR" 2>/dev/null
   chmod 700 "$CRED_DIR" 2>/dev/null || true
 
+  # Merge into whatever's already on disk, not a from-scratch rebuild --
+  # this function runs automatically and silently on every token refresh
+  # (see pn_get_valid_access_token below), so a naive rebuild would wipe
+  # any field this function doesn't itself know about (e.g. a saved
+  # preferred_model, see pn_save_preferred_model) the very next time a
+  # session runs long enough to trigger a refresh.
+  local existing_json="{}"
+  if [[ -f "$CRED_PATH" ]]; then
+    existing_json=$(cat "$CRED_PATH" 2>/dev/null)
+    echo "$existing_json" | "$JQ_BIN" empty 2>/dev/null || existing_json="{}"
+  fi
+
   local creds_json
-  creds_json=$("$JQ_BIN" -n \
+  creds_json=$(echo "$existing_json" | "$JQ_BIN" \
     --arg base_url "$base_url" \
     --arg access_token "$access_token" \
     --arg refresh_token "$refresh_token" \
     --argjson expires_at "$expires_at" \
-    '{base_url: $base_url, access_token: $access_token, refresh_token: $refresh_token, expires_at: $expires_at}')
+    '. + {base_url: $base_url, access_token: $access_token, refresh_token: $refresh_token, expires_at: $expires_at}')
 
   # Write with secure temp file to avoid race conditions
   local temp_file
@@ -53,6 +65,53 @@ pn_save_credentials() {
   }
 
   chmod 600 "$CRED_PATH" 2>/dev/null || true
+}
+
+# Save (or clear, if model_id is empty) the user's preferred scanning
+# model. Separate from pn_save_credentials -- a model change shouldn't
+# require also supplying base_url/access_token/refresh_token/expires_at --
+# but uses the same merge-then-atomic-write pattern. Requires an existing,
+# valid credentials file (there's nothing meaningful to merge a model
+# preference into otherwise).
+pn_save_preferred_model() {
+  local model_id="$1"
+
+  if [[ ! -f "$CRED_PATH" ]]; then
+    return 1
+  fi
+
+  local existing_json
+  existing_json=$(cat "$CRED_PATH" 2>/dev/null)
+  echo "$existing_json" | "$JQ_BIN" empty 2>/dev/null || return 1
+
+  local creds_json
+  creds_json=$(echo "$existing_json" | "$JQ_BIN" \
+    --arg model_id "$model_id" \
+    '. + {preferred_model: $model_id}')
+
+  local temp_file
+  temp_file=$(mktemp "$CRED_PATH.XXXXXX") || return 1
+
+  echo "$creds_json" > "$temp_file"
+  chmod 600 "$temp_file"
+
+  mv "$temp_file" "$CRED_PATH" || {
+    rm -f "$temp_file"
+    return 1
+  }
+
+  chmod 600 "$CRED_PATH" 2>/dev/null || true
+}
+
+# Returns the stored preferred_model, or an empty string if unset or not
+# configured. Deliberately independent of pn_resolve_config -- this is a
+# plain file read, no auth/refresh machinery needed.
+pn_get_preferred_model() {
+  if [[ ! -f "$CRED_PATH" ]]; then
+    echo ""
+    return 0
+  fi
+  "$JQ_BIN" -r '.preferred_model // ""' "$CRED_PATH" 2>/dev/null
 }
 
 # Refresh an expired access token

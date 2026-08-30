@@ -230,6 +230,30 @@ result=$(pn_resolve_config)
 assert_output_contains "echo '$result'" "https://file.example.com" "Uses file base_url"
 assert_output_contains "echo '$result'" "file-token" "Uses file token"
 
+test_case "pn_get_preferred_model returns empty when never set"
+rm -f "$HOME/.pn/credentials.json"
+future_expiry=$(($(date +%s) + 7200))
+pn_save_credentials "https://model-test.example.com" "token" "refresh" "$future_expiry"
+result=$(pn_get_preferred_model)
+assert_output_equals "echo '$result'" "" "Empty string, not an error, when unset"
+
+test_case "pn_save_preferred_model then pn_get_preferred_model round-trips"
+pn_save_preferred_model "anthropic/claude-opus-4-7"
+result=$(pn_get_preferred_model)
+assert_output_equals "echo '$result'" "anthropic/claude-opus-4-7" "Round-trips the saved model id"
+
+test_case "pn_save_credentials (simulating a token refresh) does not wipe a saved preferred_model"
+new_expiry=$(($(date +%s) + 3600))
+pn_save_credentials "https://model-test.example.com" "refreshed-token" "refreshed-refresh" "$new_expiry"
+result=$(pn_get_preferred_model)
+assert_output_equals "echo '$result'" "anthropic/claude-opus-4-7" "Survives a credentials refresh unchanged"
+result=$(pn_load_credentials | "$JQ_BIN" -r '.access_token')
+assert_output_equals "echo '$result'" "refreshed-token" "The refreshed fields themselves still updated correctly"
+
+test_case "pn_save_preferred_model fails when not configured"
+rm -f "$HOME/.pn/credentials.json"
+assert_failure "pn_save_preferred_model 'some-model'" "Returns failure with no credentials file to merge into"
+
 echo ""
 test_summary
 FINAL_RESULT=$?
