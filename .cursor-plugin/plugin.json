@@ -37,6 +37,11 @@
         "title": "If the scanner is unreachable while submitting a prompt",
         "description": "Allow the prompt through unscanned (default — required so a not-yet-logged-in user is never blocked), or block it once your team is fully onboarded.",
         "enum": ["allow", "block"]
+      },
+      "PARADIGM_NETWORKS_MODEL": {
+        "type": "string",
+        "title": "AI model used for scanning (advanced)",
+        "description": "Leave blank to use the default. Ask the agent \"what models are available\" to see the exact model IDs your organization can use, then paste one here."
       }
     },
     "required": ["PARADIGM_NETWORKS_URL"]

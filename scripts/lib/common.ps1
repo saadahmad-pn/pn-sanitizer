@@ -215,6 +215,62 @@ function Invoke-HttpPostRaw {
   }
 }
 
+# Invoke-HttpGetRaw -Url ... -AuthToken ... -TimeoutSec ...
+# Same hard-timeout design as Invoke-HttpPostRaw above (Task.Wait-based, not
+# CancelAfter alone -- see that function's comment for why), for GET
+# requests -- used for GET /v1/models.
+function Invoke-HttpGetRaw {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [string]$AuthToken = "",
+    [int]$TimeoutSec = 5
+  )
+
+  $cts = New-Object System.Threading.CancellationTokenSource
+  $client = New-Object System.Net.Http.HttpClient
+  try {
+    $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
+    if ($AuthToken) {
+      $client.DefaultRequestHeaders.Authorization =
+        New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $AuthToken)
+    }
+
+    $getTask = $client.GetAsync($Url, $cts.Token)
+    try {
+      $completedInTime = $getTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
+    } catch {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+    if (-not $completedInTime) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+    }
+    if ($getTask.IsFaulted) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+
+    $response = $getTask.Result
+    $readTask = $response.Content.ReadAsStringAsync()
+    try {
+      $readCompletedInTime = $readTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
+    } catch {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+    if (-not $readCompletedInTime) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+    }
+
+    return [PSCustomObject]@{
+      Body             = $readTask.Result
+      StatusCode       = [int]$response.StatusCode
+      TimedOut         = $false
+      ConnectionFailed = $false
+    }
+  } finally {
+    $client.Dispose()
+    $cts.Dispose()
+  }
+}
+
 # Invoke-ScanHttpPost -Url ... -TextData ... -AuthToken ... -TimeoutSec ...
 # Mirrors http_post_form + http_post_split_status combined into one call:
 # sends TextData as a literal multipart/form-data field named "text" (never

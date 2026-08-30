@@ -98,6 +98,26 @@ http_post() {
   return $?
 }
 
+# Same body+status-via-trailing-line contract as http_post_form/
+# http_post_json below (split off with http_post_split_status, which works
+# for any of the three despite its name) -- used for GET /v1/models.
+http_get() {
+  local url="$1"
+  local auth_token="$2"
+  local timeout="${3:-5}"
+
+  local headers=()
+  if [[ -n "$auth_token" ]]; then
+    headers+=(-H "Authorization: Bearer $auth_token")
+  fi
+
+  curl -s -X GET "$url" \
+    "${headers[@]}" \
+    --max-time "$timeout" \
+    -w $'\n%{http_code}' \
+    2>/dev/null
+}
+
 http_post_form() {
   local url="$1"
   local text_data="$2"
