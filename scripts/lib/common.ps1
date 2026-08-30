@@ -244,6 +244,105 @@ function Invoke-ScanHttpPost {
     -AuthToken $AuthToken -TimeoutSec $TimeoutSec
 }
 
+# Invoke-MessagesHttpPost -Url ... -TextData ... -Model ... -MaxTokens ... -AuthToken ... -TimeoutSec ...
+# Same pairing pattern as Invoke-ScanHttpPost above, but for the Anthropic-
+# compatible /v1/messages endpoint: builds a proper JSON request body via
+# ConvertTo-Json (not hand-built string interpolation -- TextData can
+# contain quotes/backslashes/newlines that must be escaped correctly) and
+# posts it through the same generic Invoke-HttpPostRaw.
+function Invoke-MessagesHttpPost {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [Parameter(Mandatory = $true)][string]$TextData,
+    [Parameter(Mandatory = $true)][string]$Model,
+    [int]$MaxTokens = 150,
+    [string]$AuthToken = "",
+    [int]$TimeoutSec = 5
+  )
+
+  $requestBody = [PSCustomObject]@{
+    model      = $Model
+    max_tokens = $MaxTokens
+    stream     = $false
+    messages   = @(
+      [PSCustomObject]@{ role = "user"; content = $TextData }
+    )
+  }
+  # -Depth 5 matters: the default depth (2) would silently truncate the
+  # nested messages[0] object down to its string representation instead of
+  # a real JSON object.
+  $bodyJson = $requestBody | ConvertTo-Json -Depth 5 -Compress
+  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
+
+  return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
+    -ContentType "application/json" `
+    -AuthToken $AuthToken -TimeoutSec $TimeoutSec
+}
+
+# ConvertFrom-PnMessagesResponse -ResponseBody ...
+# Mirrors pn_parse_messages_response (common.sh) exactly -- see that
+# function's comment for the full detection-rule rationale (why zero usage
+# alone is treated as "anomaly" rather than guessed as allow/block, why
+# content[] is scanned by type instead of indexed at [0], etc).
+# Returns [PSCustomObject]@{ Action = "allow"|"block"|"anomaly"; Message = "..." }
+# (Message only meaningful when Action is "block".)
+function ConvertFrom-PnMessagesResponse {
+  param(
+    [Parameter(Mandatory = $true)][string]$ResponseBody
+  )
+
+  $result = [PSCustomObject]@{ Action = "allow"; Message = "" }
+
+  $parsed = $null
+  try {
+    $parsed = $ResponseBody | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $result.Action = "anomaly"
+    return $result
+  }
+
+  $usage = Get-JsonProperty -InputObject $parsed -Name "usage" -Default $null
+  $inputTokens = $null
+  $outputTokens = $null
+  if ($usage) {
+    $inputTokens = Get-JsonProperty -InputObject $usage -Name "input_tokens" -Default $null
+    $outputTokens = Get-JsonProperty -InputObject $usage -Name "output_tokens" -Default $null
+  }
+
+  # @(...) matters: Get-JsonProperty returning a single content block would
+  # otherwise unwrap to a bare object instead of a one-element array, and
+  # the foreach below would iterate its properties instead of the block.
+  $contentBlocks = @(Get-JsonProperty -InputObject $parsed -Name "content" -Default @())
+  $textBlock = $null
+  foreach ($block in $contentBlocks) {
+    $blockType = Get-JsonProperty -InputObject $block -Name "type" -Default ""
+    if ($blockType -eq "text") {
+      $textBlock = Get-JsonProperty -InputObject $block -Name "text" -Default ""
+      break
+    }
+  }
+
+  if ($null -eq $inputTokens -or $null -eq $outputTokens -or $null -eq $textBlock) {
+    $result.Action = "anomaly"
+    return $result
+  }
+
+  if ([int]$inputTokens -eq 0 -and [int]$outputTokens -eq 0) {
+    if ($textBlock -like "*REQUEST BLOCKED*") {
+      $result.Action = "block"
+      $reason = $textBlock
+      if ($textBlock -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
+        $reason = $Matches[1]
+      }
+      $result.Message = $reason
+    } else {
+      $result.Action = "anomaly"
+    }
+  }
+
+  return $result
+}
+
 # Write-DebugLog -Message ... -LogPath ...
 function Write-DebugLog {
   param(

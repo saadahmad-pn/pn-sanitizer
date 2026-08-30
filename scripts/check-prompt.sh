@@ -29,6 +29,23 @@ SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 
+# codedefense/scan is retired; this now calls the Anthropic-compatible
+# /v1/messages endpoint on the same backend, which requires a model. No
+# per-user model preference exists yet (that's a separate, later addition
+# -- see PARADIGM_NETWORKS_MODEL below for the only override that exists
+# today), so this is a hardcoded default: cheap/fast tier, chosen because
+# testing showed the block/allow verdict is identical across models and
+# max_tokens values -- the platform's guard fires before the requested
+# model ever runs, so model choice only affects cost/latency on the
+# (always-discarded) allow-path reply, not detection accuracy.
+DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
+MODEL="${PARADIGM_NETWORKS_MODEL:-$DEFAULT_MODEL}"
+# 150 comfortably covers the block banner + reason sentence; confirmed via
+# live testing that the banner is injected by the guard without ever being
+# subject to max_tokens (output_tokens is 0 even for the full banner), so
+# this only trades off cost/latency on the allow path, not truncation risk.
+MAX_TOKENS=150
+
 # PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (marketplace setting: block/allow)
 # takes precedence; SNANTIZER_PROMPT_FAILURE_MODE (legacy shared-host
 # override: closed/open) is the fallback. Defaults to "open" (unlike
@@ -85,22 +102,30 @@ main() {
 
   local scan_url="${SCAN_URL_OVERRIDE}"
   if [[ -z "$scan_url" ]]; then
-    scan_url="${base_url%/}/api/v1/codedefense/scan"
+    scan_url="${base_url%/}/v1/messages"
   fi
 
   # Log debug info
-  log_debug "Scanning prompt | base_url=$base_url | scan_url=$scan_url | prompt_len=${#prompt}" "$DEBUG_LOG_PATH"
+  log_debug "Scanning prompt | base_url=$base_url | scan_url=$scan_url | model=$MODEL | prompt_len=${#prompt}" "$DEBUG_LOG_PATH"
   log_debug "Request body: ${prompt:0:200}$([ ${#prompt} -gt 200 ] && echo '...' || true)" "$DEBUG_LOG_PATH"
   log_debug "Timeout: ${TIMEOUT_SECONDS}s" "$DEBUG_LOG_PATH"
 
   # Log request details
   log_debug "Sending POST request to $scan_url" "$DEBUG_LOG_PATH"
 
-  # POST to API (--form-string sends this as a literal value, not a file
-  # reference, even if it happens to start with "@")
+  # Built via jq -n --arg, not string interpolation: the prompt can contain
+  # quotes/backslashes/newlines that must be escaped correctly, and jq
+  # handles that safely where hand-built JSON would not.
+  local json_body
+  json_body=$("$JQ_BIN" -n \
+    --arg model "$MODEL" \
+    --argjson max_tokens "$MAX_TOKENS" \
+    --arg content "$prompt" \
+    '{model: $model, max_tokens: $max_tokens, stream: false, messages: [{role: "user", content: $content}]}')
+
   local response
   local raw_response
-  raw_response=$(http_post_form "$scan_url" "$prompt" "$access_token" "$TIMEOUT_SECONDS")
+  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
   http_post_split_status "$raw_response"
   response="$HTTP_POST_BODY"
@@ -153,17 +178,29 @@ main() {
     return 0
   fi
 
-  local action
-  local message
-
-  action=$(echo "$response" | "$JQ_BIN" -r '.action_to_take // "allow"')
-  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Prompt blocked by Paradigm Networks."')
+  # pn_parse_messages_response (lib/common.sh) classifies this response --
+  # see that function's comment for the full detection-rule rationale.
+  # Called as a plain statement, not $(...): it sets PN_MSG_ACTION /
+  # PN_MSG_MESSAGE as globals in this shell, same contract as
+  # http_post_split_status above.
+  pn_parse_messages_response "$response"
+  local action="$PN_MSG_ACTION"
 
   log_debug "API response received | action=$action" "$DEBUG_LOG_PATH"
 
-
   # Return verdict
   case "$action" in
+    anomaly)
+      # Zero usage without the block banner -- an unrecognized response
+      # shape, not a confirmed verdict either way. Same posture as an
+      # invalid-JSON or non-2xx response above: don't guess allow or block.
+      log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "The scanning service returned an unexpected response. Prompt blocked."
+      else
+        json_allow "The scanning service returned an unexpected response. Allowing prompt."
+      fi
+      ;;
     block)
       # EXPERIMENT (revert to the plain "[Paradigm Networks] $message"
       # form if this doesn't render as intended): confirmed **bold**,
@@ -171,20 +208,10 @@ main() {
       # Cursor's UI. `### heading` and `> blockquote` below are new,
       # untested here -- worth checking specifically.
       #
-      # Reason extraction is a heuristic, not a structured field from the
-      # API response -- matches the two message shapes observed so far
-      # ("...security concerns: X." and "...security concerns (X, Y)
-      # and..."); falls back to the full message if neither matches, so a
-      # future message shape still shows something instead of nothing.
-      local reason="$message"
-      # Pattern kept in a variable, not inline in [[ =~ ]]: bash's own
-      # conditional-expression parser (not the regex engine) trips on
-      # unquoted parentheses when the pattern is written directly inside
-      # [[ ]] -- this is the standard, documented workaround.
-      local reason_pattern="security concerns:? \(?([^.)]+)[.)]"
-      if [[ "$message" =~ $reason_pattern ]]; then
-        reason="${BASH_REMATCH[1]}"
-      fi
+      # PN_MSG_MESSAGE is already the extracted reason (pn_parse_messages_
+      # response applies the same "security concerns: X" pattern before
+      # returning it) -- no second extraction pass needed here.
+      local reason="$PN_MSG_MESSAGE"
 
       # Preview of the actual prompt that got flagged, capped at 60 words
       # so a long prompt doesn't blow up the message. Collapsed to a
@@ -212,10 +239,11 @@ outbound requests and held this one for review.
 > $flagged_preview"
       json_deny "$branded_message"
       ;;
-    warn)
-      json_allow "$message"
-      ;;
     *)
+      # "allow" is the only other action pn_parse_messages_response
+      # produces -- there is no "warn" state on this endpoint (see that
+      # function's comment); the model's actual reply is discarded either
+      # way, only the verdict matters.
       json_allow
       ;;
   esac

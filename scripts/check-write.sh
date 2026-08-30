@@ -43,6 +43,23 @@ DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-write.log"
 
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
+# codedefense/scan is retired; this now calls the Anthropic-compatible
+# /v1/messages endpoint on the same backend, which requires a model. No
+# per-user model preference exists yet (that's a separate, later addition
+# -- see PARADIGM_NETWORKS_MODEL below for the only override that exists
+# today), so this is a hardcoded default: cheap/fast tier, chosen because
+# testing showed the block/allow verdict is identical across models and
+# max_tokens values -- the platform's guard fires before the requested
+# model ever runs, so model choice only affects cost/latency on the
+# (always-discarded) allow-path reply, not detection accuracy.
+DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
+MODEL="${PARADIGM_NETWORKS_MODEL:-$DEFAULT_MODEL}"
+# 150 comfortably covers the block banner + reason sentence; confirmed via
+# live testing that the banner is injected by the guard without ever being
+# subject to max_tokens (output_tokens is 0 even for the full banner), so
+# this only trades off cost/latency on the allow path, not truncation risk.
+MAX_TOKENS=150
+
 main() {
   # Read and validate JSON from stdin (skip if nothing is piped in — avoids
   # hanging when invoked without a payload, e.g. manual testing)
@@ -164,15 +181,24 @@ main() {
 
   local scan_url="${SCAN_URL_OVERRIDE}"
   if [[ -z "$scan_url" ]]; then
-    scan_url="${base_url%/}/api/v1/codedefense/scan"
+    scan_url="${base_url%/}/v1/messages"
   fi
 
+  log_debug "Scanning write | scan_url=$scan_url | model=$MODEL | scan_text_len=${#scan_text}" "$DEBUG_LOG_PATH"
 
-  # POST to API (--form-string sends this as a literal value, not a file
-  # reference, even if it happens to start with "@")
+  # Built via jq -n --arg, not string interpolation: scan_text can contain
+  # quotes/backslashes/newlines that must be escaped correctly, and jq
+  # handles that safely where hand-built JSON would not.
+  local json_body
+  json_body=$("$JQ_BIN" -n \
+    --arg model "$MODEL" \
+    --argjson max_tokens "$MAX_TOKENS" \
+    --arg content "$scan_text" \
+    '{model: $model, max_tokens: $max_tokens, stream: false, messages: [{role: "user", content: $content}]}')
+
   local response
   local raw_response
-  raw_response=$(http_post_form "$scan_url" "$scan_text" "$access_token" "$TIMEOUT_SECONDS")
+  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS")
   local curl_exit=$?
   http_post_split_status "$raw_response"
   response="$HTTP_POST_BODY"
@@ -255,32 +281,53 @@ main() {
     return 0
   fi
 
-  local action
-  local message
-  local scan_id
+  # pn_parse_messages_response (lib/common.sh) classifies this response --
+  # see that function's comment for the full detection-rule rationale.
+  # Called as a plain statement, not $(...): it sets PN_MSG_ACTION /
+  # PN_MSG_MESSAGE as globals in this shell, same contract as
+  # http_post_split_status above.
+  pn_parse_messages_response "$response"
+  local action="$PN_MSG_ACTION"
 
-  action=$(echo "$response" | "$JQ_BIN" -r '.action_to_take // "allow"')
-  message=$(echo "$response" | "$JQ_BIN" -r '.message // "Agent response blocked by Paradigm Networks."')
-  scan_id=$(echo "$response" | "$JQ_BIN" -r '.scan_id // ""')
-
-
-  # Audit log the decision
+  # Audit log the decision. "message_id" (the /v1/messages response's own
+  # "id" field) replaces the old scan_id -- different endpoint, same
+  # purpose: a value to correlate this decision against backend logs.
+  local message_id
+  message_id=$(echo "$response" | "$JQ_BIN" -r '.id // ""')
   audit_log_entry=$("$JQ_BIN" -n \
     --arg file_path "$file_path" \
     --arg decision "$action" \
-    --arg scan_id "$scan_id" \
-    '{file_path: $file_path, decision: $decision, scan_id: $scan_id}')
+    --arg message_id "$message_id" \
+    '{file_path: $file_path, decision: $decision, message_id: $message_id}')
   audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
   # Return verdict
   case "$action" in
-    block)
-      json_permission_deny "$message" "$message $STOP_INSTRUCTION"
+    anomaly)
+      # Zero usage without the block banner -- an unrecognized response
+      # shape, not a confirmed verdict either way. Same posture as an
+      # invalid-JSON or non-2xx response above: don't guess allow or block.
+      log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+      if [[ "$FAILURE_MODE" == "open" ]]; then
+        json_permission_allow "The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+      else
+        json_permission_deny "The scanning service returned an unexpected response. Write blocked." "The scanning service returned an unexpected response. Do not retry this write."
+      fi
       ;;
-    warn)
-      json_permission_allow "$message"
+    block)
+      # PN_MSG_MESSAGE is only the short extracted reason (e.g.
+      # "destructive operation"), not a full sentence -- wrap it into the
+      # same phrasing the platform's own block banner uses, rather than
+      # showing the bare phrase or (worse) the raw ASCII-art banner text
+      # verbatim to the user.
+      local user_message="The submitted content was flagged because it triggered the following security concerns: ${PN_MSG_MESSAGE}."
+      json_permission_deny "$user_message" "$user_message $STOP_INSTRUCTION"
       ;;
     *)
+      # "allow" is the only other action pn_parse_messages_response
+      # produces -- there is no "warn" state on this endpoint (see that
+      # function's comment); the model's actual reply is discarded either
+      # way, only the verdict matters.
       json_permission_allow
       ;;
   esac

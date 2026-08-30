@@ -41,6 +41,24 @@ $AuditLogPath = Join-Path $HOME ".paradigm-scanner\audit.jsonl"
 $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
 $StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
+# codedefense/scan is retired; this now calls the Anthropic-compatible
+# /v1/messages endpoint on the same backend, which requires a model. No
+# per-user model preference exists yet (that's a separate, later addition
+# -- PARADIGM_NETWORKS_MODEL below is the only override that exists
+# today), so this is a hardcoded default: cheap/fast tier, chosen because
+# testing showed the block/allow verdict is identical across models and
+# max_tokens values -- the platform's guard fires before the requested
+# model ever runs, so model choice only affects cost/latency on the
+# (always-discarded) allow-path reply, not detection accuracy.
+$DefaultModel = "anthropic/claude-haiku-4-5-20251001"
+$Model = $env:PARADIGM_NETWORKS_MODEL
+if (-not $Model) { $Model = $DefaultModel }
+# 150 comfortably covers the block banner + reason sentence; confirmed via
+# live testing that the banner is injected by the guard without ever being
+# subject to max_tokens (output_tokens is 0 even for the full banner), so
+# this only trades off cost/latency on the allow path, not truncation risk.
+$MaxTokens = 150
+
 function Write-CheckWriteAuditLog {
   param(
     [string]$FilePath,
@@ -48,7 +66,7 @@ function Write-CheckWriteAuditLog {
     [string]$Reason = "",
     [string]$Detail = "",
     [string]$ScanUrl = "",
-    [string]$ScanId = ""
+    [string]$MessageId = ""
   )
   $entry = [PSCustomObject]@{ file_path = $FilePath; decision = $Decision }
   # -PassThru not used, and piped through Out-Null regardless: Add-Member's
@@ -57,7 +75,10 @@ function Write-CheckWriteAuditLog {
   if ($Reason) { $entry | Add-Member -NotePropertyName "reason" -NotePropertyValue $Reason | Out-Null }
   if ($Detail) { $entry | Add-Member -NotePropertyName "detail" -NotePropertyValue $Detail | Out-Null }
   if ($ScanUrl) { $entry | Add-Member -NotePropertyName "scan_url" -NotePropertyValue $ScanUrl | Out-Null }
-  if ($PSBoundParameters.ContainsKey('ScanId')) { $entry | Add-Member -NotePropertyName "scan_id" -NotePropertyValue $ScanId | Out-Null }
+  # "message_id" (the /v1/messages response's own "id" field) replaces the
+  # old scan_id -- different endpoint, same purpose: a value to correlate
+  # this decision against backend logs.
+  if ($PSBoundParameters.ContainsKey('MessageId')) { $entry | Add-Member -NotePropertyName "message_id" -NotePropertyValue $MessageId | Out-Null }
   Write-AuditLog -Entry $entry -LogPath $AuditLogPath | Out-Null
 }
 
@@ -152,12 +173,12 @@ try {
 
   $scanUrl = $ScanUrlOverride
   if (-not $scanUrl) {
-    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/api/v1/codedefense/scan"
+    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/v1/messages"
   }
 
   $callStart = Get-Date
-  Write-DebugLog -Message "POST starting -> $scanUrl | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
-  $result = Invoke-ScanHttpPost -Url $scanUrl -TextData $scanText -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  Write-DebugLog -Message "POST starting -> $scanUrl | model=$Model | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
+  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $scanText -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
   Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode)" -LogPath $DebugLogPath
 
@@ -211,20 +232,43 @@ try {
     return
   }
 
-  $action = Get-JsonProperty -InputObject $responseObject -Name "action_to_take" -Default "allow"
-  $message = Get-JsonProperty -InputObject $responseObject -Name "message" -Default "Agent response blocked by Paradigm Networks."
-  $scanId = Get-JsonProperty -InputObject $responseObject -Name "scan_id" -Default ""
+  # ConvertFrom-PnMessagesResponse (lib/common.ps1) classifies this
+  # response -- see that function's (and its bash sibling
+  # pn_parse_messages_response's) comment for the full detection-rule
+  # rationale.
+  $parsedVerdict = ConvertFrom-PnMessagesResponse -ResponseBody $result.Body
+  $action = $parsedVerdict.Action
+  $messageId = Get-JsonProperty -InputObject $responseObject -Name "id" -Default ""
 
-  Write-CheckWriteAuditLog -FilePath $filePath -Decision $action -ScanId $scanId
+  Write-CheckWriteAuditLog -FilePath $filePath -Decision $action -MessageId $messageId
 
   switch ($action) {
-    "block" {
-      Write-JsonPermissionDeny -UserMessage $message -AgentMessage "$message $StopInstruction"
+    "anomaly" {
+      # Zero usage without the block banner -- an unrecognized response
+      # shape, not a confirmed verdict either way. Same posture as an
+      # invalid-JSON or non-2xx response above: don't guess allow or block.
+      Write-DebugLog -Message "API response shape unexpected (zero usage, no block banner) | url=$scanUrl" -LogPath $DebugLogPath
+      if ($FailureMode -eq "open") {
+        Write-JsonPermissionAllow -Message "The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+      } else {
+        Write-JsonPermissionDeny -UserMessage "The scanning service returned an unexpected response. Write blocked." `
+          -AgentMessage "The scanning service returned an unexpected response. Do not retry this write."
+      }
     }
-    "warn" {
-      Write-JsonPermissionAllow -Message $message
+    "block" {
+      # $parsedVerdict.Message is only the short extracted reason (e.g.
+      # "destructive operation"), not a full sentence -- wrap it into the
+      # same phrasing the platform's own block banner uses, rather than
+      # showing the bare phrase or (worse) the raw ASCII-art banner text
+      # verbatim to the user.
+      $userMessage = "The submitted content was flagged because it triggered the following security concerns: $($parsedVerdict.Message)."
+      Write-JsonPermissionDeny -UserMessage $userMessage -AgentMessage "$userMessage $StopInstruction"
     }
     default {
+      # "allow" is the only other action ConvertFrom-PnMessagesResponse
+      # produces -- there is no "warn" state on this endpoint (see that
+      # function's comment); the model's actual reply is discarded either
+      # way, only the verdict matters.
       Write-JsonPermissionAllow
     }
   }

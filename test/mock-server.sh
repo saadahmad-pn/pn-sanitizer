@@ -1,7 +1,14 @@
 #!/bin/bash
 # Mock Paradigm Networks API server for testing
 # Usage: start_mock_server <port> [mode]
-# Modes: allow, block, warn, timeout, error500, error401
+# Modes: allow, block, anomaly, timeout, error500, error401
+#
+# Response bodies match the /v1/messages (Anthropic-compatible) shape, not
+# the old codedefense/scan shape -- see pn_parse_messages_response in
+# lib/common.sh for what each mode is meant to exercise. "warn" is retired:
+# the new endpoint has no equivalent signal (see that function's comment).
+# "anomaly" is new: zero usage without the block banner, the case that must
+# NOT be silently guessed as either allow or block.
 
 PORT=""
 MODE="allow"
@@ -26,13 +33,13 @@ start_mock_server() {
           # Generate response based on mode
           case "$MODE" in
             allow)
-              send_response "200" '{"action_to_take": "allow", "scan_id": "scan-123"}'
+              send_response "200" '{"content":[{"type":"text","text":"mock allow reply"}],"usage":{"input_tokens":10,"output_tokens":5}}'
               ;;
             block)
-              send_response "200" '{"action_to_take": "block", "message": "Policy violation detected", "scan_id": "scan-456"}'
+              send_response "200" '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: mock policy violation.\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
               ;;
-            warn)
-              send_response "200" '{"action_to_take": "warn", "message": "Warning: suspicious pattern", "scan_id": "scan-789"}'
+            anomaly)
+              send_response "200" '{"content":[{"type":"text","text":"mock anomaly: zero usage without a block banner"}],"usage":{"input_tokens":0,"output_tokens":0}}'
               ;;
             timeout)
               # Don't respond (causes timeout)
@@ -89,13 +96,13 @@ start_simple_mock_server() {
 
   case "$mode" in
     allow)
-      echo '{"action_to_take": "allow", "scan_id": "scan-123"}' >"$response_file"
+      echo '{"content":[{"type":"text","text":"mock allow reply"}],"usage":{"input_tokens":10,"output_tokens":5}}' >"$response_file"
       ;;
     block)
-      echo '{"action_to_take": "block", "message": "Policy violation", "scan_id": "scan-456"}' >"$response_file"
+      echo '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: mock policy violation.\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}' >"$response_file"
       ;;
-    warn)
-      echo '{"action_to_take": "warn", "message": "Warning detected", "scan_id": "scan-789"}' >"$response_file"
+    anomaly)
+      echo '{"content":[{"type":"text","text":"mock anomaly: zero usage without a block banner"}],"usage":{"input_tokens":0,"output_tokens":0}}' >"$response_file"
       ;;
     error500)
       echo 'HTTP/1.1 500 Internal Server Error\r\n\r\n{"error": "server error"}' >"$response_file"
