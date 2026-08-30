@@ -70,17 +70,23 @@ main() {
     return 1
   fi
 
-  # Same precedence as check-prompt.sh/check-write.sh's own MODEL
+  # Markdown on purpose, not plain text: this output is meant to be
+  # relayed verbatim into a chat UI (see the paradigmnetworks-models
+  # skill), which renders markdown -- backticked ids and real bullets
+  # read far better there than the plain-indented text this used to
+  # print. Same precedence as check-prompt.sh/check-write.sh's own MODEL
   # resolution -- kept in sync by hand, not shared code, matching this
   # codebase's existing convention for small resolution snippets.
-  local current_model="${PARADIGM_NETWORKS_MODEL:-}"
+  local current_model
+  current_model="${PARADIGM_NETWORKS_MODEL:-}"
   if [[ -z "$current_model" ]]; then
     current_model="$(pn_get_preferred_model)"
   fi
   if [[ -z "$current_model" ]]; then
-    current_model="$DEFAULT_MODEL (default)"
+    echo "**Currently scanning with:** \`$DEFAULT_MODEL\` (default)"
+  else
+    echo "**Currently scanning with:** \`$current_model\`"
   fi
-  echo "Currently scanning with: $current_model"
   echo ""
 
   local count
@@ -90,15 +96,15 @@ main() {
     return 0
   fi
 
-  echo "Available models:"
+  echo "**Available models:**"
   echo ""
-  echo "$HTTP_POST_BODY" | "$JQ_BIN" -r '.data[] | "  \(.id)  --  \(.display_name)"'
+  echo "$HTTP_POST_BODY" | "$JQ_BIN" -r '.data[] | "- `\(.id)` — \(.display_name)"'
 
   local has_more
   has_more=$(echo "$HTTP_POST_BODY" | "$JQ_BIN" -r '.has_more // false')
   if [[ "$has_more" == "true" ]]; then
     echo ""
-    echo "(more models exist beyond this list)"
+    echo "_(more models exist beyond this list)_"
   fi
 
   return 0

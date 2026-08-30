@@ -62,36 +62,43 @@ function Invoke-Main {
     exit 1
   }
 
+  # Markdown on purpose, not plain text: this output is meant to be
+  # relayed verbatim into a chat UI (see the paradigmnetworks-models
+  # skill), which renders markdown -- backticked ids and real bullets
+  # read far better there than the plain-indented text this used to
+  # print. Same precedence as check-prompt.ps1/check-write.ps1's own
+  # $Model resolution -- kept in sync by hand, not shared code, matching
+  # this codebase's existing convention for small resolution snippets.
+  $currentModel = $env:PARADIGM_NETWORKS_MODEL
+  if (-not $currentModel) { $currentModel = Get-PnPreferredModel }
+  if (-not $currentModel) {
+    Write-ConsoleLine "**Currently scanning with:** ``$DefaultModel`` (default)"
+  } else {
+    Write-ConsoleLine "**Currently scanning with:** ``$currentModel``"
+  }
+  Write-ConsoleLine ""
+
   # @(...) matters: a response with exactly one model would otherwise
   # unwrap to a bare object instead of a one-element array, the same
   # single-item-collection gotcha seen elsewhere in this codebase.
-  # Same precedence as check-prompt.ps1/check-write.ps1's own $Model
-  # resolution -- kept in sync by hand, not shared code, matching this
-  # codebase's existing convention for small resolution snippets.
-  $currentModel = $env:PARADIGM_NETWORKS_MODEL
-  if (-not $currentModel) { $currentModel = Get-PnPreferredModel }
-  if (-not $currentModel) { $currentModel = "$DefaultModel (default)" }
-  Write-ConsoleLine "Currently scanning with: $currentModel"
-  Write-ConsoleLine ""
-
   $models = @(Get-JsonProperty -InputObject $parsed -Name "data" -Default @())
   if ($models.Count -eq 0) {
     Write-ConsoleLine "No models are available for this account."
     exit 0
   }
 
-  Write-ConsoleLine "Available models:"
+  Write-ConsoleLine "**Available models:**"
   Write-ConsoleLine ""
   foreach ($model in $models) {
     $id = Get-JsonProperty -InputObject $model -Name "id" -Default ""
     $displayName = Get-JsonProperty -InputObject $model -Name "display_name" -Default ""
-    Write-ConsoleLine "  $id  --  $displayName"
+    Write-ConsoleLine "- ``$id`` — $displayName"
   }
 
   $hasMore = Get-JsonProperty -InputObject $parsed -Name "has_more" -Default $false
   if ($hasMore) {
     Write-ConsoleLine ""
-    Write-ConsoleLine "(more models exist beyond this list)"
+    Write-ConsoleLine "_(more models exist beyond this list)_"
   }
 
   exit 0
