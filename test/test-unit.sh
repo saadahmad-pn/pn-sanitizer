@@ -52,6 +52,35 @@ result=$(json_session_context "Configure Paradigm Networks")
 assert_json_valid "$result" "Valid JSON"
 assert_json_has_key "$result" "additional_context" "Has additional_context key"
 
+# Test pn_parse_messages_response (the /v1/messages response-classification
+# heuristic -- see the function's own comment in lib/common.sh for why each
+# of these cases lands where it does)
+test_case "pn_parse_messages_response: normal reply, nonzero usage -> allow"
+pn_parse_messages_response '{"content":[{"type":"text","text":"Hello there!"}],"usage":{"input_tokens":50,"output_tokens":10}}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "allow" "action is allow"
+
+test_case "pn_parse_messages_response: banner + zero usage -> block, reason extracted"
+pn_parse_messages_response '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: destructive operation.\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "destructive operation" "reason extracted cleanly"
+
+test_case "pn_parse_messages_response: zero usage, no banner -> anomaly (not guessed either way)"
+pn_parse_messages_response '{"content":[{"type":"text","text":"just a normal-looking short reply"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+
+test_case "pn_parse_messages_response: empty content array -> anomaly"
+pn_parse_messages_response '{"content":[],"usage":{"input_tokens":10,"output_tokens":5}}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+
+test_case "pn_parse_messages_response: leading thinking block -> still finds block signal in the text block after it"
+pn_parse_messages_response '{"content":[{"type":"thinking","thinking":"reasoning..."},{"type":"text","text":"```\n===\n  REQUEST BLOCKED\n===\n\n  The submitted content was flagged because it triggered the following security concerns: prompt injection.\n\n===\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block (not derailed by the leading thinking block)"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "prompt injection" "reason extracted from the correct block"
+
+test_case "pn_parse_messages_response: usage entirely missing -> anomaly"
+pn_parse_messages_response '{"content":[{"type":"text","text":"some reply"}]}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+
 # Test command checking
 test_case "command_exists with available command"
 assert_success "command_exists bash" "bash command exists"

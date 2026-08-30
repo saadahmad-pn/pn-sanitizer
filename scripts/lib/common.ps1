@@ -215,6 +215,62 @@ function Invoke-HttpPostRaw {
   }
 }
 
+# Invoke-HttpGetRaw -Url ... -AuthToken ... -TimeoutSec ...
+# Same hard-timeout design as Invoke-HttpPostRaw above (Task.Wait-based, not
+# CancelAfter alone -- see that function's comment for why), for GET
+# requests -- used for GET /v1/models.
+function Invoke-HttpGetRaw {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [string]$AuthToken = "",
+    [int]$TimeoutSec = 5
+  )
+
+  $cts = New-Object System.Threading.CancellationTokenSource
+  $client = New-Object System.Net.Http.HttpClient
+  try {
+    $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
+    if ($AuthToken) {
+      $client.DefaultRequestHeaders.Authorization =
+        New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $AuthToken)
+    }
+
+    $getTask = $client.GetAsync($Url, $cts.Token)
+    try {
+      $completedInTime = $getTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
+    } catch {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+    if (-not $completedInTime) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+    }
+    if ($getTask.IsFaulted) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+
+    $response = $getTask.Result
+    $readTask = $response.Content.ReadAsStringAsync()
+    try {
+      $readCompletedInTime = $readTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
+    } catch {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+    }
+    if (-not $readCompletedInTime) {
+      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+    }
+
+    return [PSCustomObject]@{
+      Body             = $readTask.Result
+      StatusCode       = [int]$response.StatusCode
+      TimedOut         = $false
+      ConnectionFailed = $false
+    }
+  } finally {
+    $client.Dispose()
+    $cts.Dispose()
+  }
+}
+
 # Invoke-ScanHttpPost -Url ... -TextData ... -AuthToken ... -TimeoutSec ...
 # Mirrors http_post_form + http_post_split_status combined into one call:
 # sends TextData as a literal multipart/form-data field named "text" (never
@@ -242,6 +298,105 @@ function Invoke-ScanHttpPost {
   return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
     -ContentType "multipart/form-data; boundary=$boundary" `
     -AuthToken $AuthToken -TimeoutSec $TimeoutSec
+}
+
+# Invoke-MessagesHttpPost -Url ... -TextData ... -Model ... -MaxTokens ... -AuthToken ... -TimeoutSec ...
+# Same pairing pattern as Invoke-ScanHttpPost above, but for the Anthropic-
+# compatible /v1/messages endpoint: builds a proper JSON request body via
+# ConvertTo-Json (not hand-built string interpolation -- TextData can
+# contain quotes/backslashes/newlines that must be escaped correctly) and
+# posts it through the same generic Invoke-HttpPostRaw.
+function Invoke-MessagesHttpPost {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [Parameter(Mandatory = $true)][string]$TextData,
+    [Parameter(Mandatory = $true)][string]$Model,
+    [int]$MaxTokens = 150,
+    [string]$AuthToken = "",
+    [int]$TimeoutSec = 5
+  )
+
+  $requestBody = [PSCustomObject]@{
+    model      = $Model
+    max_tokens = $MaxTokens
+    stream     = $false
+    messages   = @(
+      [PSCustomObject]@{ role = "user"; content = $TextData }
+    )
+  }
+  # -Depth 5 matters: the default depth (2) would silently truncate the
+  # nested messages[0] object down to its string representation instead of
+  # a real JSON object.
+  $bodyJson = $requestBody | ConvertTo-Json -Depth 5 -Compress
+  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
+
+  return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
+    -ContentType "application/json" `
+    -AuthToken $AuthToken -TimeoutSec $TimeoutSec
+}
+
+# ConvertFrom-PnMessagesResponse -ResponseBody ...
+# Mirrors pn_parse_messages_response (common.sh) exactly -- see that
+# function's comment for the full detection-rule rationale (why zero usage
+# alone is treated as "anomaly" rather than guessed as allow/block, why
+# content[] is scanned by type instead of indexed at [0], etc).
+# Returns [PSCustomObject]@{ Action = "allow"|"block"|"anomaly"; Message = "..." }
+# (Message only meaningful when Action is "block".)
+function ConvertFrom-PnMessagesResponse {
+  param(
+    [Parameter(Mandatory = $true)][string]$ResponseBody
+  )
+
+  $result = [PSCustomObject]@{ Action = "allow"; Message = "" }
+
+  $parsed = $null
+  try {
+    $parsed = $ResponseBody | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $result.Action = "anomaly"
+    return $result
+  }
+
+  $usage = Get-JsonProperty -InputObject $parsed -Name "usage" -Default $null
+  $inputTokens = $null
+  $outputTokens = $null
+  if ($usage) {
+    $inputTokens = Get-JsonProperty -InputObject $usage -Name "input_tokens" -Default $null
+    $outputTokens = Get-JsonProperty -InputObject $usage -Name "output_tokens" -Default $null
+  }
+
+  # @(...) matters: Get-JsonProperty returning a single content block would
+  # otherwise unwrap to a bare object instead of a one-element array, and
+  # the foreach below would iterate its properties instead of the block.
+  $contentBlocks = @(Get-JsonProperty -InputObject $parsed -Name "content" -Default @())
+  $textBlock = $null
+  foreach ($block in $contentBlocks) {
+    $blockType = Get-JsonProperty -InputObject $block -Name "type" -Default ""
+    if ($blockType -eq "text") {
+      $textBlock = Get-JsonProperty -InputObject $block -Name "text" -Default ""
+      break
+    }
+  }
+
+  if ($null -eq $inputTokens -or $null -eq $outputTokens -or $null -eq $textBlock) {
+    $result.Action = "anomaly"
+    return $result
+  }
+
+  if ([int]$inputTokens -eq 0 -and [int]$outputTokens -eq 0) {
+    if ($textBlock -like "*REQUEST BLOCKED*") {
+      $result.Action = "block"
+      $reason = $textBlock
+      if ($textBlock -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
+        $reason = $Matches[1]
+      }
+      $result.Message = $reason
+    } else {
+      $result.Action = "anomaly"
+    }
+  }
+
+  return $result
 }
 
 # Write-DebugLog -Message ... -LogPath ...

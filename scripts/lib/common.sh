@@ -98,6 +98,26 @@ http_post() {
   return $?
 }
 
+# Same body+status-via-trailing-line contract as http_post_form/
+# http_post_json below (split off with http_post_split_status, which works
+# for any of the three despite its name) -- used for GET /v1/models.
+http_get() {
+  local url="$1"
+  local auth_token="$2"
+  local timeout="${3:-5}"
+
+  local headers=()
+  if [[ -n "$auth_token" ]]; then
+    headers+=(-H "Authorization: Bearer $auth_token")
+  fi
+
+  curl -s -X GET "$url" \
+    "${headers[@]}" \
+    --max-time "$timeout" \
+    -w $'\n%{http_code}' \
+    2>/dev/null
+}
+
 http_post_form() {
   local url="$1"
   local text_data="$2"
@@ -123,9 +143,37 @@ http_post_form() {
     2>/dev/null
 }
 
-# Splits the combined body+status output of http_post_form. Must be called
-# as a plain function call (never via $(...)) so HTTP_POST_BODY/HTTP_POST_STATUS
-# persist in the caller's own shell instead of vanishing with a subshell.
+# Same contract as http_post_form (body+status via the trailing \n%{http_code}
+# line, split off by http_post_split_status below) but posts a raw JSON body
+# instead of a multipart form field -- used for the Anthropic-compatible
+# /v1/messages endpoint. Deliberately mirrors http_post_form exactly rather
+# than reusing http_post() (which already sends raw JSON via --data-binary,
+# but has no status-code capture, and every caller of http_post_form's
+# result depends on HTTP_POST_STATUS being set).
+http_post_json() {
+  local url="$1"
+  local json_body="$2"
+  local auth_token="$3"
+  local timeout="${4:-5}"
+
+  local headers=()
+  headers+=(-H "Content-Type: application/json")
+  if [[ -n "$auth_token" ]]; then
+    headers+=(-H "Authorization: Bearer $auth_token")
+  fi
+
+  curl -s -X POST "$url" \
+    "${headers[@]}" \
+    --data-binary "$json_body" \
+    --max-time "$timeout" \
+    -w $'\n%{http_code}' \
+    2>/dev/null
+}
+
+# Splits the combined body+status output of http_post_form / http_post_json.
+# Must be called as a plain function call (never via $(...)) so
+# HTTP_POST_BODY/HTTP_POST_STATUS persist in the caller's own shell instead
+# of vanishing with a subshell.
 http_post_split_status() {
   local raw="$1"
   HTTP_POST_BODY="${raw%$'\n'*}"
@@ -255,6 +303,68 @@ json_session_context() {
   local ctx_json
   ctx_json=$(echo "$context" | "$JQ_BIN" -Rs .)
   echo "{\"additional_context\": $ctx_json}"
+}
+
+# pn_parse_messages_response <raw_json_response>
+# Classifies a /v1/messages (Anthropic-compatible) response as
+# "allow"/"block"/"anomaly" -- there is no purpose-built status field on
+# this endpoint, only a chat-completion shape, so this is reverse-engineered
+# from observed behavior: a request the platform's guard blocks comes back
+# as a normal 200 with usage.input_tokens/output_tokens both exactly 0 (a
+# real completion is never 0/0) and a "REQUEST BLOCKED" banner injected
+# into a text content block in place of an actual model reply.
+#
+# Deliberately NOT a simple "banner text AND zero usage" check: that fails
+# OPEN (the wrong direction for a security gate) if the banner wording ever
+# changes upstream -- zero usage would still be true, but a text match
+# alone would then read as "allow". Zero usage without the banner text is
+# instead treated as "anomaly", the same posture as an invalid-JSON or
+# non-2xx response: an unrecognized shape must not be silently guessed as
+# "allow" or "block", it needs to fail through the caller's existing
+# FAILURE_MODE/PROMPT_FAILURE_MODE branching. Missing usage numbers or no
+# text content block at all are anomalies for the same reason.
+#
+# Sets globals PN_MSG_ACTION ("allow"|"block"|"anomaly") and
+# PN_MSG_MESSAGE (the extracted block reason -- only meaningful when
+# PN_MSG_ACTION is "block"). Must be called as a plain function call
+# (never via $(...)), same requirement as http_post_split_status above.
+pn_parse_messages_response() {
+  local response="$1"
+
+  PN_MSG_ACTION="allow"
+  PN_MSG_MESSAGE=""
+
+  local input_tokens output_tokens has_text_block text_content
+  input_tokens=$(echo "$response" | "$JQ_BIN" -r '.usage.input_tokens // "missing"')
+  output_tokens=$(echo "$response" | "$JQ_BIN" -r '.usage.output_tokens // "missing"')
+  # Never assume content[0] is the text block -- a thinking-capable model
+  # could put a non-text block first, silently degrading the reason to
+  # empty if indexed positionally instead of by type.
+  has_text_block=$(echo "$response" | "$JQ_BIN" -r '[.content[]? | select(.type == "text")] | length > 0')
+  text_content=$(echo "$response" | "$JQ_BIN" -r '[.content[]? | select(.type == "text") | .text][0] // ""')
+
+  if [[ "$input_tokens" == "missing" ]] || [[ "$output_tokens" == "missing" ]] || [[ "$has_text_block" != "true" ]]; then
+    PN_MSG_ACTION="anomaly"
+    return 0
+  fi
+
+  if [[ "$input_tokens" == "0" ]] && [[ "$output_tokens" == "0" ]]; then
+    if [[ "$text_content" == *"REQUEST BLOCKED"* ]]; then
+      PN_MSG_ACTION="block"
+      # Same reason-extraction pattern used in check-prompt.sh's block-
+      # message formatting -- kept in a variable, not inline in [[ =~ ]]:
+      # bash's own conditional-expression parser trips on unquoted
+      # parentheses when the pattern is written directly inside [[ ]].
+      local reason="$text_content"
+      local reason_pattern="security concerns:? \(?([^.)]+)[.)]"
+      if [[ "$text_content" =~ $reason_pattern ]]; then
+        reason="${BASH_REMATCH[1]}"
+      fi
+      PN_MSG_MESSAGE="$reason"
+    else
+      PN_MSG_ACTION="anomaly"
+    fi
+  fi
 }
 
 # Utility functions

@@ -155,7 +155,12 @@ server has to actually receive the redirect.
 ### 6. Relay the outcome
 
 - Exit `0` → Paradigm Networks is configured and its checks are active. No
-  further action needed.
+  further action needed. **Also mention, in one line, that prompts and
+  writes are scanned using a default model, and that the user can ask
+  "what models are available" any time to see or change it** (see the
+  `paradigmnetworks-models` skill) — this is the only point in the whole
+  flow where a user would have a reason to learn this exists, so don't
+  skip it. Keep it to one line; don't explain the mechanism unless asked.
 - Non-zero → share the error the script printed (timeout, denied, network
   error, etc.) and offer to retry with a fresh run. If retrying, remind the
   user they'll need to click through within the one-minute window.

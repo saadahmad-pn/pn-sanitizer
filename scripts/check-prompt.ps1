@@ -26,6 +26,24 @@ if ($env:SNANTIZER_TIMEOUT) {
 }
 $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
 
+# codedefense/scan is retired; this now calls the Anthropic-compatible
+# /v1/messages endpoint on the same backend, which requires a model. No
+# per-user model preference exists yet (that's a separate, later addition
+# -- PARADIGM_NETWORKS_MODEL below is the only override that exists
+# today), so this is a hardcoded default: cheap/fast tier, chosen because
+# testing showed the block/allow verdict is identical across models and
+# max_tokens values -- the platform's guard fires before the requested
+# model ever runs, so model choice only affects cost/latency on the
+# (always-discarded) allow-path reply, not detection accuracy.
+$DefaultModel = "anthropic/claude-haiku-4-5-20251001"
+$Model = $env:PARADIGM_NETWORKS_MODEL
+if (-not $Model) { $Model = $DefaultModel }
+# 150 comfortably covers the block banner + reason sentence; confirmed via
+# live testing that the banner is injected by the guard without ever being
+# subject to max_tokens (output_tokens is 0 even for the full banner), so
+# this only trades off cost/latency on the allow path, not truncation risk.
+$MaxTokens = 150
+
 $rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
 if (-not $rawMode) { $rawMode = $env:SNANTIZER_PROMPT_FAILURE_MODE }
 if (-not $rawMode) { $rawMode = "allow" }
@@ -75,14 +93,14 @@ try {
 
   $scanUrl = $ScanUrlOverride
   if (-not $scanUrl) {
-    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/api/v1/codedefense/scan"
+    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/v1/messages"
   }
 
-  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | scan_url=$scanUrl | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
+  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | scan_url=$scanUrl | model=$Model | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
   $callStart = Get-Date
   Write-DebugLog -Message "POST starting -> $scanUrl" -LogPath $DebugLogPath
-  $result = Invoke-ScanHttpPost -Url $scanUrl -TextData $prompt -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $prompt -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
 
   $bodyPreview = ""
@@ -133,12 +151,27 @@ try {
     return
   }
 
-  $action = Get-JsonProperty -InputObject $responseObject -Name "action_to_take" -Default "allow"
-  $message = Get-JsonProperty -InputObject $responseObject -Name "message" -Default "Prompt blocked by Paradigm Networks."
+  # ConvertFrom-PnMessagesResponse (lib/common.ps1) classifies this
+  # response -- see that function's (and its bash sibling
+  # pn_parse_messages_response's) comment for the full detection-rule
+  # rationale.
+  $parsedVerdict = ConvertFrom-PnMessagesResponse -ResponseBody $result.Body
+  $action = $parsedVerdict.Action
 
   Write-DebugLog -Message "API response received | action=$action" -LogPath $DebugLogPath
 
   switch ($action) {
+    "anomaly" {
+      # Zero usage without the block banner -- an unrecognized response
+      # shape, not a confirmed verdict either way. Same posture as an
+      # invalid-JSON or non-2xx response above: don't guess allow or block.
+      Write-DebugLog -Message "API response shape unexpected (zero usage, no block banner) | url=$scanUrl" -LogPath $DebugLogPath
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service returned an unexpected response. Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service returned an unexpected response. Allowing prompt."
+      }
+    }
     "block" {
       # Mirrors scripts/check-prompt.sh's block-message formatting
       # exactly -- see that file's comments for the full rationale. Note
@@ -148,10 +181,12 @@ try {
       # while `inline code` highlighting does render correctly there.
       # Porting the same design anyway to get a clean, direct read on how
       # the new ### heading / > blockquote parts render in that surface.
-      $reason = $message
-      if ($message -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
-        $reason = $Matches[1]
-      }
+      #
+      # $parsedVerdict.Message is already the extracted reason
+      # (ConvertFrom-PnMessagesResponse applies the same "security
+      # concerns: X" pattern before returning it) -- no second extraction
+      # pass needed here.
+      $reason = $parsedVerdict.Message
 
       # Preview of the actual prompt that got flagged, capped at 60 words
       # so a long prompt doesn't blow up the message. Collapsed to a
@@ -197,10 +232,11 @@ try {
         "$quotedContent"
       Write-JsonDeny -Message $brandedMessage
     }
-    "warn" {
-      Write-JsonAllow -Message $message
-    }
     default {
+      # "allow" is the only other action ConvertFrom-PnMessagesResponse
+      # produces -- there is no "warn" state on this endpoint (see that
+      # function's comment); the model's actual reply is discarded either
+      # way, only the verdict matters.
       Write-JsonAllow
     }
   }
