@@ -17,7 +17,7 @@
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "bash ./scripts/check-prompt.sh",
+        "command": "PARADIGM_NETWORKS_MODEL='${PARADIGM_NETWORKS_MODEL}' bash ./scripts/check-prompt.sh",
         "timeout": 25
       },
       {
