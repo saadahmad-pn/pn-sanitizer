@@ -260,5 +260,12 @@ outbound requests and held this one for review.
   return 0
 }
 
+# TEMPORARY diagnostic: log the raw command-line arguments this script was
+# invoked with, to determine whether Cursor substitutes ${VAR} placeholders
+# written as plain trailing arguments in a hooks.json command string (as
+# opposed to inside a shell VAR='...' prefix assignment, already tested and
+# found not to work). Remove once that's settled.
+log_debug "DIAG argv dump: $*" "$DEBUG_LOG_PATH"
+
 main
 exit $?
