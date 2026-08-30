@@ -1,11 +1,12 @@
 # Fetches and displays the AI models available to the logged-in user's
 # Paradigm Networks org, via GET {base_url}/v1/models -- shows the exact
-# model IDs a user can paste into the "AI model used for scanning"
-# setting (Cursor Settings -> Plugins -> Paradigm Networks,
-# PARADIGM_NETWORKS_MODEL) to override the default model used for
-# scanning prompts and writes. Standalone CLI script (invoked by the
-# paradigmnetworks-models skill), not a hook. Mirrors
-# scripts/paradigmnetworks-models.sh.
+# model IDs that can be passed to set-model.ps1 to change which model is
+# used for scanning prompts and writes (a Cursor plugin Settings field
+# for this does exist, but does not actually reach hook scripts -- see
+# check-prompt.ps1's comment on its own $Model resolution for how that
+# was confirmed; set-model.ps1/Save-PnPreferredModel is the real
+# mechanism). Standalone CLI script (invoked by the paradigmnetworks-models
+# skill), not a hook. Mirrors scripts/paradigmnetworks-models.sh.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -19,6 +20,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # observed to take ~20-25s on a real Windows target (likely a slow/blocked
 # certificate revocation check).
 $TimeoutSeconds = 40
+$DefaultModel = "anthropic/claude-haiku-4-5-20251001"
 
 # Writes directly to the console's stdout stream rather than PowerShell's
 # own output pipeline -- same reasoning as login.ps1's identical helper:
@@ -63,13 +65,22 @@ function Invoke-Main {
   # @(...) matters: a response with exactly one model would otherwise
   # unwrap to a bare object instead of a one-element array, the same
   # single-item-collection gotcha seen elsewhere in this codebase.
+  # Same precedence as check-prompt.ps1/check-write.ps1's own $Model
+  # resolution -- kept in sync by hand, not shared code, matching this
+  # codebase's existing convention for small resolution snippets.
+  $currentModel = $env:PARADIGM_NETWORKS_MODEL
+  if (-not $currentModel) { $currentModel = Get-PnPreferredModel }
+  if (-not $currentModel) { $currentModel = "$DefaultModel (default)" }
+  Write-ConsoleLine "Currently scanning with: $currentModel"
+  Write-ConsoleLine ""
+
   $models = @(Get-JsonProperty -InputObject $parsed -Name "data" -Default @())
   if ($models.Count -eq 0) {
     Write-ConsoleLine "No models are available for this account."
     exit 0
   }
 
-  Write-ConsoleLine "Available models -- paste the ID (not the name) into the `"AI model used for scanning`" setting to change it:"
+  Write-ConsoleLine "Available models:"
   Write-ConsoleLine ""
   foreach ($model in $models) {
     $id = Get-JsonProperty -InputObject $model -Name "id" -Default ""

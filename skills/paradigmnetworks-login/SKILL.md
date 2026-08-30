@@ -148,9 +148,15 @@ the newest URL.
 
 ### 5. Wait for the result
 
-Give it up to a minute, then check the script's actual exit code — don't
-infer success just because the user says "done," since the local callback
-server has to actually receive the redirect.
+**Poll for completion — do not sleep for a fixed duration and check once.**
+Check whether the background process has finished every few seconds,
+starting almost immediately, and stop the moment it has — most logins
+complete in well under 60 seconds once the user clicks through, and there's
+no reason to sit idle after it's already done. 60 seconds is only the
+outer bound for giving up, not a wait you should run out every time. Once
+it's finished, check the script's actual exit code — don't infer success
+just because the user says "done," since the local callback server has to
+actually receive the redirect.
 
 ### 6. Relay the outcome
 

@@ -51,7 +51,15 @@ $StopInstruction = "A security scan blocked this write due to a detected policy 
 # model ever runs, so model choice only affects cost/latency on the
 # (always-discarded) allow-path reply, not detection accuracy.
 $DefaultModel = "anthropic/claude-haiku-4-5-20251001"
+# Precedence: PARADIGM_NETWORKS_MODEL env var (works if it's ever actually
+# set -- e.g. a shared-host setup exporting it directly; Cursor's own
+# plugin Settings panel does NOT deliver this to hook scripts, confirmed
+# directly against a real installed plugin -- there is no live channel
+# from that settings field to here) > the model saved locally via the
+# paradigmnetworks-models skill / set-model.ps1 (Get-PnPreferredModel, in
+# pn_config.ps1) > hardcoded default.
 $Model = $env:PARADIGM_NETWORKS_MODEL
+if (-not $Model) { $Model = Get-PnPreferredModel }
 if (-not $Model) { $Model = $DefaultModel }
 # 150 comfortably covers the block banner + reason sentence; confirmed via
 # live testing that the banner is injected by the guard without ever being
