@@ -62,6 +62,15 @@ case "$RAW_PROMPT_FAILURE_MODE" in
 esac
 
 main() {
+  # TEMPORARY diagnostic: dump every PARADIGM_NETWORKS_*/SNANTIZER_* env
+  # var this process actually sees, to determine whether Cursor's plugin
+  # "variables" settings are really being injected into hook subprocesses
+  # at all -- hooks.json has no ${VAR} placeholders anywhere in it (unlike
+  # mcp.json's documented env block), so this has never actually been
+  # confirmed against a real Cursor-launched hook process before. Remove
+  # once that's settled.
+  log_debug "DIAG env dump: $(env | grep -E '^(PARADIGM_NETWORKS_|SNANTIZER_)' | tr '\n' ' ')" "$DEBUG_LOG_PATH"
+
   # Read and validate JSON from stdin (skip if nothing is piped in — avoids
   # hanging when invoked without a payload, e.g. manual testing)
   local payload=""
