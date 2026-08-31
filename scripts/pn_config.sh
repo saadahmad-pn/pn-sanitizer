@@ -114,6 +114,46 @@ pn_get_preferred_model() {
   "$JQ_BIN" -r '.preferred_model // ""' "$CRED_PATH" 2>/dev/null
 }
 
+# pn_resolve_model
+# Resolves which model to use for a /v1/messages scan. Precedence:
+# PARADIGM_NETWORKS_MODEL env var (a manual override -- only takes effect
+# if something exports it directly into the process environment, e.g. a
+# shared-host setup; there is no Cursor Settings UI for this -- an
+# earlier version had one, but it was removed after confirming, against
+# a real installed plugin, that Cursor's plugin Settings panel never
+# delivers configured values to hook scripts) > the model saved locally
+# via the paradigmnetworks-models skill / set-model.sh
+# (pn_get_preferred_model, above -- this is the real, user-facing way to
+# change it) > PN_DEFAULT_MODEL.
+#
+# Formerly this exact precedence chain (constant + three-way if/fi) was
+# duplicated by hand across six files (check-prompt.sh/.ps1, check-
+# write.sh/.ps1, paradigmnetworks-models.sh/.ps1) -- a stale default in
+# one file would mean prompts and writes get scanned by a different model
+# than the one paradigmnetworks-models reports as current, exactly the
+# kind of drift nobody notices until it matters (P2-3).
+#
+# Sets PN_RESOLVED_MODEL and PN_RESOLVED_MODEL_IS_DEFAULT ("true"/"false"
+# -- paradigmnetworks-models.sh needs to know this to print "(default)")
+# as globals, same "plain statement call, not $(...)" contract as
+# CALLBACK_CODE/etc in login.sh, since a second value can't ride along a
+# plain return.
+PN_DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
+PN_RESOLVED_MODEL=""
+PN_RESOLVED_MODEL_IS_DEFAULT="false"
+pn_resolve_model() {
+  PN_RESOLVED_MODEL="${PARADIGM_NETWORKS_MODEL:-}"
+  if [[ -z "$PN_RESOLVED_MODEL" ]]; then
+    PN_RESOLVED_MODEL="$(pn_get_preferred_model)"
+  fi
+  if [[ -z "$PN_RESOLVED_MODEL" ]]; then
+    PN_RESOLVED_MODEL="$PN_DEFAULT_MODEL"
+    PN_RESOLVED_MODEL_IS_DEFAULT="true"
+  else
+    PN_RESOLVED_MODEL_IS_DEFAULT="false"
+  fi
+}
+
 # Refresh an expired access token
 pn_refresh_token() {
   local base_url="$1"
@@ -121,11 +161,15 @@ pn_refresh_token() {
 
   local token_url="${base_url%/}/api/v1/plugin/token"
 
+  # urlencode_strict (lib/common.sh): a refresh token is just as capable of
+  # containing a URL-reserved character as an authorization code is (see
+  # login.sh's exchange_code, which already encodes every field it sends).
+  # An unencoded "+" in particular is common in base64-ish tokens and
+  # decodes server-side as a space, so an affected refresh silently
+  # corrupts the token instead of erroring clearly -- the failure mode is
+  # "user is mysteriously logged out" on whichever refresh first hits one.
   local body
-  body=$(cat <<EOF
-grant_type=refresh_token&refresh_token=${refresh_token}&client_id=${CLIENT_ID}
-EOF
-)
+  body="grant_type=refresh_token&refresh_token=$(urlencode_strict "$refresh_token")&client_id=$(urlencode_strict "$CLIENT_ID")"
 
   local response
   response=$(curl -s -X POST "$token_url" \
@@ -207,23 +251,14 @@ pn_get_valid_access_token() {
   return 0
 }
 
-# Resolve config: new PARADIGM_NETWORKS_* names take precedence, then SNANTIZER_* names, then file
+# Resolve config: PARADIGM_NETWORKS_URL/PARADIGM_NETWORKS_TOKEN env vars
+# take precedence, then the stored file (with refresh).
 pn_resolve_config() {
   local env_base
   local env_token
 
-  # Check new variable names first (PARADIGM_NETWORKS_URL, PARADIGM_NETWORKS_TOKEN)
   env_base="${PARADIGM_NETWORKS_URL:-}"
   env_token="${PARADIGM_NETWORKS_TOKEN:-}"
-
-  if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
-    echo "$env_base $env_token"
-    return 0
-  fi
-
-  # Fall back to legacy names (SNANTIZER_BASE_URL, SNANTIZER_TOKEN)
-  env_base="${SNANTIZER_BASE_URL:-}"
-  env_token="${SNANTIZER_TOKEN:-}"
 
   if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
     echo "$env_base $env_token"

@@ -342,6 +342,13 @@ function Invoke-MessagesHttpPost {
 # content[] is scanned by type instead of indexed at [0], etc).
 # Returns [PSCustomObject]@{ Action = "allow"|"block"|"anomaly"; Message = "..." }
 # (Message only meaningful when Action is "block".)
+#
+# This whole function is a stopgap, not a permanent design (P2-1) --
+# mirrors pn_parse_messages_response in common.sh, see that function's
+# comment for the full rationale. The real fix is a backend change (an
+# explicit verdict field or response header); Add-PnScanAnomaly /
+# Reset-PnScanAnomaly (below) are a mitigation for the silent-failure
+# risk in the meantime, not a fix for the underlying fragility.
 function ConvertFrom-PnMessagesResponse {
   param(
     [Parameter(Mandatory = $true)][string]$ResponseBody
@@ -453,6 +460,52 @@ function Write-AuditLog {
   } catch {
     # Audit logging must never be the reason a hook fails.
   }
+}
+
+# Anomaly-streak tracking. Mirrors pn_record_scan_anomaly/
+# pn_reset_scan_anomaly in common.sh -- see that comment for the full
+# rationale: ConvertFrom-PnMessagesResponse's block/allow verdict is a
+# reverse-engineered heuristic with no real structured field from the
+# backend yet, so a silent, complete loss of enforcement (every scan
+# landing on "anomaly") needs a loud signal past a threshold instead of
+# staying invisible. Scoped narrowly to that classification, not
+# transport-level failures, same as the bash side.
+$Script:PnAnomalyStatePath = Join-Path $HOME ".paradigm-scanner\anomaly_state.json"
+$Script:PnAnomalyWarningThreshold = 3
+
+function Add-PnScanAnomaly {
+  $count = 0
+  if (Test-Path $Script:PnAnomalyStatePath -PathType Leaf) {
+    try {
+      $existing = Get-Content -Path $Script:PnAnomalyStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $existingCount = Get-JsonProperty -InputObject $existing -Name "consecutive_anomaly_count" -Default 0
+      if ($existingCount -match '^\d+$') { $count = [int]$existingCount }
+    } catch {
+      $count = 0
+    }
+  }
+  $count++
+
+  # Best-effort persistence, same posture as Write-DebugLog/Write-AuditLog
+  # above: if this fails, the count returned for this one call is still
+  # correct, it just won't be remembered for the next invocation.
+  try {
+    $dir = Split-Path -Parent $Script:PnAnomalyStatePath
+    if ($dir -and -not (Test-Path $dir)) {
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+    }
+    $tempFile = "$($Script:PnAnomalyStatePath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    (ConvertTo-CompactJson @{ consecutive_anomaly_count = $count }) | Set-Content -Path $tempFile -Encoding UTF8 -ErrorAction Stop
+    Move-Item -Path $tempFile -Destination $Script:PnAnomalyStatePath -Force -ErrorAction Stop
+  } catch {
+    # Non-fatal -- see comment above.
+  }
+
+  return $count
+}
+
+function Reset-PnScanAnomaly {
+  Remove-Item -Path $Script:PnAnomalyStatePath -Force -ErrorAction SilentlyContinue
 }
 
 # Get-FileTail -Path ... -MaxBytes ...

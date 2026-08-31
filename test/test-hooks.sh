@@ -57,7 +57,13 @@ fi
 test_case "check-prompt.sh with invalid JSON input"
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "not valid json" 2>/dev/null)
 assert_json_valid "$result" "Valid JSON output even with bad input"
-assert_json_field_equals "$result" "continue" "false" "Denies on invalid input"
+# A malformed payload is a Cursor integration/encoding quirk, not an
+# unreachable scanner -- it must always allow, the same way check-write.sh
+# already does for the identical situation (see P0-1: this used to
+# hardcode a deny here regardless of PROMPT_FAILURE_MODE, which meant a
+# payload-shape change could block every prompt for an affected user with
+# no escape hatch).
+assert_json_field_equals "$result" "continue" "true" "Allows on invalid input (fails open, not closed)"
 
 test_case "check-prompt.sh with empty prompt"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
@@ -85,17 +91,17 @@ rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Write", "agent_message": "test content", "tool_input": {"file_path": "test.txt"}}'
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
-# With SNANTIZER_FAILURE_MODE=closed (default), should deny
+# With PARADIGM_NETWORKS_FAILURE_MODE=closed (default), should deny
 assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured"
 
 test_case "check-write.sh with FAILURE_MODE=open"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Write", "agent_message": "test", "tool_input": {"file_path": "f.txt"}}'
-export SNANTIZER_FAILURE_MODE="open"
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Fails open when mode=open"
-unset SNANTIZER_FAILURE_MODE
+unset PARADIGM_NETWORKS_FAILURE_MODE
 
 test_case "check-write.sh audit log written"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
@@ -126,7 +132,7 @@ mkdir -p "$REPO_CTX_WORKSPACE/repo-a"
   git commit --allow-empty -qm init) >/dev/null 2>&1
 
 test_case "check-repo-context.sh writes a rule file with sanitized git context"
-payload=$(jq -n --arg root "$REPO_CTX_WORKSPACE" '{workspace_roots: [$root]}')
+payload=$("$JQ_BIN" -n --arg root "$REPO_CTX_WORKSPACE" '{workspace_roots: [$root]}')
 result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "continue" "true" "Always continues"

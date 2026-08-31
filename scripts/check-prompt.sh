@@ -25,50 +25,38 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
-SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
-TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
+SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-20}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model. No
-# per-user model preference exists yet (that's a separate, later addition
-# -- see PARADIGM_NETWORKS_MODEL below for the only override that exists
-# today), so this is a hardcoded default: cheap/fast tier, chosen because
-# testing showed the block/allow verdict is identical across models and
-# max_tokens values -- the platform's guard fires before the requested
-# model ever runs, so model choice only affects cost/latency on the
-# (always-discarded) allow-path reply, not detection accuracy.
-DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
-# Precedence: PARADIGM_NETWORKS_MODEL env var (works if it's ever actually
-# set -- e.g. a shared-host setup exporting it directly; Cursor's own
-# plugin Settings panel does NOT deliver this to hook scripts, confirmed
-# directly against a real installed plugin -- there is no live channel
-# from that settings field to here) > the model saved locally via the
-# paradigmnetworks-models skill / set-model.sh (pn_get_preferred_model,
-# in pn_config.sh) > hardcoded default.
-MODEL="${PARADIGM_NETWORKS_MODEL:-}"
-if [[ -z "$MODEL" ]]; then
-  MODEL="$(pn_get_preferred_model)"
-fi
-if [[ -z "$MODEL" ]]; then
-  MODEL="$DEFAULT_MODEL"
-fi
+# /v1/messages endpoint on the same backend, which requires a model.
+# pn_resolve_model (pn_config.sh) is the shared precedence chain (env var
+# override > saved preference > hardcoded default) -- see its own
+# comment for the full rationale. The hardcoded default is a cheap/fast
+# tier, chosen because testing showed the block/allow verdict is
+# identical across models and max_tokens values -- the platform's guard
+# fires before the requested model ever runs, so model choice only
+# affects cost/latency on the (always-discarded) allow-path reply, not
+# detection accuracy.
+pn_resolve_model
+MODEL="$PN_RESOLVED_MODEL"
 # 150 comfortably covers the block banner + reason sentence; confirmed via
 # live testing that the banner is injected by the guard without ever being
 # subject to max_tokens (output_tokens is 0 even for the full banner), so
 # this only trades off cost/latency on the allow path, not truncation risk.
 MAX_TOKENS=150
 
-# PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (marketplace setting: block/allow)
-# takes precedence; SNANTIZER_PROMPT_FAILURE_MODE (legacy shared-host
-# override: closed/open) is the fallback. Defaults to "open" (unlike
-# check-write.sh's PARADIGM_NETWORKS_FAILURE_MODE, which defaults to
-# "closed"). This only governs failures below that happen *after*
-# pn_resolve_config succeeds — i.e. the user is already logged in.
-# "Paradigm Networks not configured" and "jq missing" always allow
-# unconditionally, regardless of this setting, so a not-yet-logged-in user
-# (or a machine without jq) can never get stuck on their first message.
-RAW_PROMPT_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_PROMPT_FAILURE_MODE:-${SNANTIZER_PROMPT_FAILURE_MODE:-allow}}" | tr '[:upper:]' '[:lower:]')
+# PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (manual env var override:
+# block/allow — no Cursor Settings UI for this, must be set directly in
+# the environment). Defaults to "open" (unlike check-write.sh's
+# PARADIGM_NETWORKS_FAILURE_MODE, which defaults to "closed"). This only
+# governs failures below that happen *after* pn_resolve_config succeeds
+# -- i.e. the user is already logged in. "Paradigm Networks not
+# configured" and "jq missing" always allow unconditionally, regardless
+# of this setting, so a not-yet-logged-in user (or a machine without jq)
+# can never get stuck on their first message.
+RAW_PROMPT_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_PROMPT_FAILURE_MODE:-allow}" | tr '[:upper:]' '[:lower:]')
 case "$RAW_PROMPT_FAILURE_MODE" in
   block|closed) PROMPT_FAILURE_MODE="closed" ;;
   *)            PROMPT_FAILURE_MODE="open" ;;
@@ -93,8 +81,17 @@ main() {
     return 0
   fi
 
+  # Deliberately always allow here, unlike the PROMPT_FAILURE_MODE-driven
+  # branches below: a malformed payload usually signals a Cursor
+  # integration/encoding quirk, not an unreachable scanner. Routing it
+  # through PROMPT_FAILURE_MODE would mean an affected machine gets every
+  # single prompt blocked persistently, which is worse than a transient
+  # scanner outage -- and here the blast radius is the whole product, not
+  # just file writes (see check-write.sh's identical handling of this
+  # same situation for the write side).
   if ! echo "$payload" | "$JQ_BIN" empty 2>/dev/null; then
-    json_deny "Received invalid input. Prompt blocked."
+    log_debug "Received invalid/unparseable stdin payload; allowing prompt unscanned." "$DEBUG_LOG_PATH"
+    json_allow "Received invalid input. Allowing prompt — it was not scanned."
     return 0
   fi
 
@@ -208,18 +205,23 @@ main() {
       # shape, not a confirmed verdict either way. Same posture as an
       # invalid-JSON or non-2xx response above: don't guess allow or block.
       log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+      local anomaly_streak
+      anomaly_streak=$(pn_record_scan_anomaly)
+      local anomaly_prefix=""
+      if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
+        anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
+      fi
       if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-        json_deny "The scanning service returned an unexpected response. Prompt blocked."
+        json_deny "${anomaly_prefix}The scanning service returned an unexpected response. Prompt blocked."
       else
-        json_allow "The scanning service returned an unexpected response. Allowing prompt."
+        json_allow "${anomaly_prefix}The scanning service returned an unexpected response. Allowing prompt."
       fi
       ;;
     block)
-      # EXPERIMENT (revert to the plain "[Paradigm Networks] $message"
-      # form if this doesn't render as intended): confirmed **bold**,
-      # blank-line breaks, and `inline code` all render correctly in
-      # Cursor's UI. `### heading` and `> blockquote` below are new,
-      # untested here -- worth checking specifically.
+      pn_reset_scan_anomaly
+      # Markdown formatting (**bold**, blank-line breaks, `inline code`,
+      # `### heading`, and `> blockquote`) confirmed rendering correctly
+      # in Cursor's UI.
       #
       # PN_MSG_MESSAGE is already the extracted reason (pn_parse_messages_
       # response applies the same "security concerns: X" pattern before
@@ -257,6 +259,7 @@ outbound requests and held this one for review.
       # produces -- there is no "warn" state on this endpoint (see that
       # function's comment); the model's actual reply is discarded either
       # way, only the verdict matters.
+      pn_reset_scan_anomaly
       json_allow
       ;;
   esac

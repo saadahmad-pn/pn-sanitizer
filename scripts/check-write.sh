@@ -26,13 +26,13 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
-SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
-TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
-TRANSCRIPT_LINES="${SNANTIZER_TRANSCRIPT_LINES:-500}"
-# PARADIGM_NETWORKS_FAILURE_MODE (marketplace setting: block/allow) takes
-# precedence; SNANTIZER_FAILURE_MODE (legacy shared-host override:
-# closed/open) is the fallback.
-RAW_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_FAILURE_MODE:-${SNANTIZER_FAILURE_MODE:-block}}" | tr '[:upper:]' '[:lower:]')
+SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-20}"
+TRANSCRIPT_LINES="${PARADIGM_NETWORKS_TRANSCRIPT_LINES:-500}"
+# PARADIGM_NETWORKS_FAILURE_MODE (manual env var override: block/allow —
+# no Cursor Settings UI for this, must be set directly in the
+# environment).
+RAW_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_FAILURE_MODE:-block}" | tr '[:upper:]' '[:lower:]')
 case "$RAW_FAILURE_MODE" in
   allow|open) FAILURE_MODE="open" ;;
   *)          FAILURE_MODE="closed" ;;
@@ -44,29 +44,17 @@ DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-write.log"
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model. No
-# per-user model preference exists yet (that's a separate, later addition
-# -- see PARADIGM_NETWORKS_MODEL below for the only override that exists
-# today), so this is a hardcoded default: cheap/fast tier, chosen because
-# testing showed the block/allow verdict is identical across models and
-# max_tokens values -- the platform's guard fires before the requested
-# model ever runs, so model choice only affects cost/latency on the
-# (always-discarded) allow-path reply, not detection accuracy.
-DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
-# Precedence: PARADIGM_NETWORKS_MODEL env var (works if it's ever actually
-# set -- e.g. a shared-host setup exporting it directly; Cursor's own
-# plugin Settings panel does NOT deliver this to hook scripts, confirmed
-# directly against a real installed plugin -- there is no live channel
-# from that settings field to here) > the model saved locally via the
-# paradigmnetworks-models skill / set-model.sh (pn_get_preferred_model,
-# in pn_config.sh) > hardcoded default.
-MODEL="${PARADIGM_NETWORKS_MODEL:-}"
-if [[ -z "$MODEL" ]]; then
-  MODEL="$(pn_get_preferred_model)"
-fi
-if [[ -z "$MODEL" ]]; then
-  MODEL="$DEFAULT_MODEL"
-fi
+# /v1/messages endpoint on the same backend, which requires a model.
+# pn_resolve_model (pn_config.sh) is the shared precedence chain (env var
+# override > saved preference > hardcoded default) -- see its own
+# comment for the full rationale. The hardcoded default is a cheap/fast
+# tier, chosen because testing showed the block/allow verdict is
+# identical across models and max_tokens values -- the platform's guard
+# fires before the requested model ever runs, so model choice only
+# affects cost/latency on the (always-discarded) allow-path reply, not
+# detection accuracy.
+pn_resolve_model
+MODEL="$PN_RESOLVED_MODEL"
 # 150 comfortably covers the block banner + reason sentence; confirmed via
 # live testing that the banner is injected by the guard without ever being
 # subject to max_tokens (output_tokens is 0 even for the full banner), so
@@ -321,13 +309,20 @@ main() {
       # shape, not a confirmed verdict either way. Same posture as an
       # invalid-JSON or non-2xx response above: don't guess allow or block.
       log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+      local anomaly_streak
+      anomaly_streak=$(pn_record_scan_anomaly)
+      local anomaly_prefix=""
+      if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
+        anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
+      fi
       if [[ "$FAILURE_MODE" == "open" ]]; then
-        json_permission_allow "The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+        json_permission_allow "${anomaly_prefix}The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
       else
-        json_permission_deny "The scanning service returned an unexpected response. Write blocked." "The scanning service returned an unexpected response. Do not retry this write."
+        json_permission_deny "${anomaly_prefix}The scanning service returned an unexpected response. Write blocked." "The scanning service returned an unexpected response. Do not retry this write."
       fi
       ;;
     block)
+      pn_reset_scan_anomaly
       # PN_MSG_MESSAGE is only the short extracted reason (e.g.
       # "destructive operation"), not a full sentence -- wrap it into the
       # same phrasing the platform's own block banner uses, rather than
@@ -341,6 +336,7 @@ main() {
       # produces -- there is no "warn" state on this endpoint (see that
       # function's comment); the model's actual reply is discarded either
       # way, only the verdict matters.
+      pn_reset_scan_anomaly
       json_permission_allow
       ;;
   esac

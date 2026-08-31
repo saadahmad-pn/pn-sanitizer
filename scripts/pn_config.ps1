@@ -171,6 +171,36 @@ function Get-PnPreferredModel {
   return [string](Get-JsonProperty -InputObject $creds -Name "preferred_model" -Default "")
 }
 
+# Resolve-PnModel
+# Resolves which model to use for a /v1/messages scan. Precedence:
+# PARADIGM_NETWORKS_MODEL env var (a manual override -- only takes effect
+# if something exports it directly into the process environment, e.g. a
+# shared-host setup; there is no Cursor Settings UI for this -- an
+# earlier version had one, but it was removed after confirming, against
+# a real installed plugin, that Cursor's plugin Settings panel never
+# delivers configured values to hook scripts) > the model saved locally
+# via the paradigmnetworks-models skill / set-model.ps1
+# (Get-PnPreferredModel, above -- this is the real, user-facing way to
+# change it) > $Script:PnDefaultModel.
+#
+# Formerly this exact precedence chain was duplicated by hand across six
+# files (check-prompt.sh/.ps1, check-write.sh/.ps1, paradigmnetworks-
+# models.sh/.ps1) -- see P2-3, and pn_resolve_model in pn_config.sh for
+# the bash mirror.
+#
+# Returns [PSCustomObject]@{ Model = "..."; IsDefault = $true/$false }
+# ($true only when nothing else resolved and the hardcoded default was
+# used -- paradigmnetworks-models.ps1 needs this to print "(default)").
+$Script:PnDefaultModel = "anthropic/claude-haiku-4-5-20251001"
+function Resolve-PnModel {
+  $model = $env:PARADIGM_NETWORKS_MODEL
+  if (-not $model) { $model = Get-PnPreferredModel }
+  if (-not $model) {
+    return [PSCustomObject]@{ Model = $Script:PnDefaultModel; IsDefault = $true }
+  }
+  return [PSCustomObject]@{ Model = $model; IsDefault = $false }
+}
+
 # Returns a PSCustomObject with AccessToken/RefreshToken/ExpiresIn, or
 # $null on any failure (unreachable, non-2xx, missing fields).
 function Invoke-PnTokenRefresh {
@@ -251,17 +281,11 @@ function Get-PnValidAccessToken {
   return [PSCustomObject]@{ BaseUrl = $creds.BaseUrl; AccessToken = $refreshed.AccessToken }
 }
 
-# Resolve config: PARADIGM_NETWORKS_* env vars take precedence, then
-# legacy SNANTIZER_* env vars, then the stored file (with refresh).
+# Resolve config: PARADIGM_NETWORKS_URL/PARADIGM_NETWORKS_TOKEN env vars
+# take precedence, then the stored file (with refresh).
 function Resolve-PnConfig {
   $envBase = $env:PARADIGM_NETWORKS_URL
   $envToken = $env:PARADIGM_NETWORKS_TOKEN
-  if ($envBase -and $envToken) {
-    return [PSCustomObject]@{ BaseUrl = $envBase; AccessToken = $envToken }
-  }
-
-  $envBase = $env:SNANTIZER_BASE_URL
-  $envToken = $env:SNANTIZER_TOKEN
   if ($envBase -and $envToken) {
     return [PSCustomObject]@{ BaseUrl = $envBase; AccessToken = $envToken }
   }

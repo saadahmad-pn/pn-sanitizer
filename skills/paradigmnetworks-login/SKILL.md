@@ -39,10 +39,8 @@ reliable:
 macOS/Linux:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; }; then
   echo CONFIGURED
-elif [ -n "$PARADIGM_NETWORKS_URL" ]; then
-  echo NOT_CONFIGURED_URL_KNOWN
 else
   echo NOT_CONFIGURED
 fi
@@ -51,23 +49,17 @@ fi
 Windows (PowerShell):
 
 ```powershell
-if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN) -or ($env:SNANTIZER_BASE_URL -and $env:SNANTIZER_TOKEN)) {
+if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN)) {
   Write-Output "CONFIGURED"
-} elseif ($env:PARADIGM_NETWORKS_URL) {
-  Write-Output "NOT_CONFIGURED_URL_KNOWN"
 } else {
   Write-Output "NOT_CONFIGURED"
 }
 ```
 
 - `CONFIGURED` → tell the user they're already logged in and stop here.
-- `NOT_CONFIGURED_URL_KNOWN` → an admin already set `PARADIGM_NETWORKS_URL`
-  for this workspace. Skip step 2 entirely — don't ask the user for a base
-  URL they've never needed to know — and go straight to step 3 using
-  `$PARADIGM_NETWORKS_URL` as the value. (This doesn't apply if the user is
-  explicitly asking to log into a *different* org — in that case use
-  whatever URL they give you instead, same as step 2 below would.)
-- `NOT_CONFIGURED` → no base URL is known at all; continue to step 2.
+- `NOT_CONFIGURED` → no base URL is known at all; continue to step 2. There
+  is no Cursor Settings field or other admin-preconfiguration path for the
+  base URL — the user is always the source of it, every time, via step 2.
 
 ### 2. Get the base URL
 
@@ -128,7 +120,7 @@ Windows:
 <scripts-dir>\run-powershell.cmd <scripts-dir>\login.ps1 -BaseUrl <the-base-url>
 ```
 
-("the base URL" is `$PARADIGM_NETWORKS_URL` if step 1 returned `NOT_CONFIGURED_URL_KNOWN`, or whatever the user gave you in step 2 otherwise.)
+("the base URL" is whatever the user gave you in step 2.)
 
 Run it in the background rather than blocking the turn on it — it can take
 up to a minute, and you need to relay its output as soon as it appears

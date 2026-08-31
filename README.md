@@ -43,6 +43,13 @@ Once you're signed in, Cursor remembers it on this machine.
 To switch organizations later, just ask to log in again — it replaces the
 old login.
 
+### Changing the scanning model
+
+Prompts and writes are scanned using a default model out of the box.
+Ask "what models are available" any time to see which models your
+organization can use and which one is currently active, or to switch to
+a different one — the **paradigmnetworks-models** skill handles both.
+
 ## Try it
 
 1. Install the plugin and log in (see above).
@@ -53,3 +60,23 @@ old login.
 
 Check **Cursor Settings → Hooks** or the Hooks output channel if something
 does not fire.
+
+## Limitations
+
+- **Only file edits made through Cursor's own Write tool are scanned
+  today.** Commands run in the terminal (e.g. `cat >`, `sed -i`, or a
+  script the agent runs) are not — a change made that way goes through
+  unscanned.
+- **If the scanning service can't be reached, prompts are allowed
+  through by default; file writes are blocked by default.** This
+  asymmetry is intentional — it exists so a not-yet-logged-in user is
+  never blocked from sending their very first message — but it also
+  means someone who can block this machine's network access to the
+  scanner can silently disable prompt scanning while write scanning
+  stays in its normal (blocking) state.
+
+## More
+
+- [Security policy](SECURITY.md) — how to report a vulnerability
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE) — MIT

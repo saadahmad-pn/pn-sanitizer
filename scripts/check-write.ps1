@@ -10,29 +10,28 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-$ScanUrlOverride = $env:SNANTIZER_SCAN_URL
+$ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
 # 40s (not 20s, matching the bash side): observed directly that
 # establishing the HTTPS connection to the scan API from a real Windows
 # target can itself take ~20-25s (likely a slow/blocked certificate
 # revocation check), before any actual server-side work even starts --
 # a stopgap while that root cause is investigated separately.
 $TimeoutSeconds = 40
-if ($env:SNANTIZER_TIMEOUT) {
+if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
-  if ([int]::TryParse($env:SNANTIZER_TIMEOUT, [ref]$parsedTimeout)) {
+  if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
     $TimeoutSeconds = $parsedTimeout
   }
 }
 $TranscriptLines = 500
-if ($env:SNANTIZER_TRANSCRIPT_LINES) {
+if ($env:PARADIGM_NETWORKS_TRANSCRIPT_LINES) {
   $parsedLines = 0
-  if ([int]::TryParse($env:SNANTIZER_TRANSCRIPT_LINES, [ref]$parsedLines)) {
+  if ([int]::TryParse($env:PARADIGM_NETWORKS_TRANSCRIPT_LINES, [ref]$parsedLines)) {
     $TranscriptLines = $parsedLines
   }
 }
 
 $rawMode = $env:PARADIGM_NETWORKS_FAILURE_MODE
-if (-not $rawMode) { $rawMode = $env:SNANTIZER_FAILURE_MODE }
 if (-not $rawMode) { $rawMode = "block" }
 $rawMode = $rawMode.ToLowerInvariant()
 $FailureMode = if ($rawMode -eq "allow" -or $rawMode -eq "open") { "open" } else { "closed" }
@@ -42,25 +41,16 @@ $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
 $StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model. No
-# per-user model preference exists yet (that's a separate, later addition
-# -- PARADIGM_NETWORKS_MODEL below is the only override that exists
-# today), so this is a hardcoded default: cheap/fast tier, chosen because
-# testing showed the block/allow verdict is identical across models and
-# max_tokens values -- the platform's guard fires before the requested
-# model ever runs, so model choice only affects cost/latency on the
-# (always-discarded) allow-path reply, not detection accuracy.
-$DefaultModel = "anthropic/claude-haiku-4-5-20251001"
-# Precedence: PARADIGM_NETWORKS_MODEL env var (works if it's ever actually
-# set -- e.g. a shared-host setup exporting it directly; Cursor's own
-# plugin Settings panel does NOT deliver this to hook scripts, confirmed
-# directly against a real installed plugin -- there is no live channel
-# from that settings field to here) > the model saved locally via the
-# paradigmnetworks-models skill / set-model.ps1 (Get-PnPreferredModel, in
-# pn_config.ps1) > hardcoded default.
-$Model = $env:PARADIGM_NETWORKS_MODEL
-if (-not $Model) { $Model = Get-PnPreferredModel }
-if (-not $Model) { $Model = $DefaultModel }
+# /v1/messages endpoint on the same backend, which requires a model.
+# Resolve-PnModel (pn_config.ps1) is the shared precedence chain (env var
+# override > saved preference > hardcoded default) -- see its own
+# comment for the full rationale. The hardcoded default is a cheap/fast
+# tier, chosen because testing showed the block/allow verdict is
+# identical across models and max_tokens values -- the platform's guard
+# fires before the requested model ever runs, so model choice only
+# affects cost/latency on the (always-discarded) allow-path reply, not
+# detection accuracy.
+$Model = (Resolve-PnModel).Model
 # 150 comfortably covers the block banner + reason sentence; confirmed via
 # live testing that the banner is injected by the guard without ever being
 # subject to max_tokens (output_tokens is 0 even for the full banner), so
@@ -256,14 +246,20 @@ try {
       # shape, not a confirmed verdict either way. Same posture as an
       # invalid-JSON or non-2xx response above: don't guess allow or block.
       Write-DebugLog -Message "API response shape unexpected (zero usage, no block banner) | url=$scanUrl" -LogPath $DebugLogPath
+      $anomalyStreak = Add-PnScanAnomaly
+      $anomalyPrefix = ""
+      if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
+        $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+      }
       if ($FailureMode -eq "open") {
-        Write-JsonPermissionAllow -Message "The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+        Write-JsonPermissionAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
       } else {
-        Write-JsonPermissionDeny -UserMessage "The scanning service returned an unexpected response. Write blocked." `
+        Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}The scanning service returned an unexpected response. Write blocked." `
           -AgentMessage "The scanning service returned an unexpected response. Do not retry this write."
       }
     }
     "block" {
+      Reset-PnScanAnomaly
       # $parsedVerdict.Message is only the short extracted reason (e.g.
       # "destructive operation"), not a full sentence -- wrap it into the
       # same phrasing the platform's own block banner uses, rather than
@@ -277,6 +273,7 @@ try {
       # produces -- there is no "warn" state on this endpoint (see that
       # function's comment); the model's actual reply is discarded either
       # way, only the verdict matters.
+      Reset-PnScanAnomaly
       Write-JsonPermissionAllow
     }
   }

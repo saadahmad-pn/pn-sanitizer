@@ -46,11 +46,11 @@ chmod 755 "$readonly_dir"
 
 test_case "Transcript file doesn't exist"
 payload='{"tool_name": "Write", "agent_message": "", "transcript_path": "/nonexistent/path", "tool_input": {"file_path": "f.txt"}}'
-export SNANTIZER_FAILURE_MODE="open"
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Allows when transcript missing"
-unset SNANTIZER_FAILURE_MODE
+unset PARADIGM_NETWORKS_FAILURE_MODE
 
 echo ""
 echo -e "${BLUE}--- Malformed Input Tests ---${NC}"
@@ -58,7 +58,9 @@ echo -e "${BLUE}--- Malformed Input Tests ---${NC}"
 test_case "Invalid JSON in hook payload"
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "not json" 2>/dev/null)
 assert_json_valid "$result" "Returns valid JSON"
-assert_json_field_equals "$result" "continue" "false" "Denies malformed input"
+# See P0-1: malformed input must fail open (like check-write.sh already
+# does), not hard-block every prompt with no PROMPT_FAILURE_MODE escape.
+assert_json_field_equals "$result" "continue" "true" "Allows malformed input (fails open, not closed)"
 
 test_case "Missing required fields in JSON"
 payload='{"other_field": "value"}'
@@ -73,7 +75,7 @@ result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
 
 test_case "Very large prompt (10KB)"
 large_prompt=$(python3 -c "print('x' * 10000)")
-payload=$(jq -n --arg p "$large_prompt" '{prompt: $p}')
+payload=$("$JQ_BIN" -n --arg p "$large_prompt" '{prompt: $p}')
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
 # Should not crash or timeout
 
@@ -83,7 +85,7 @@ echo -e "${BLUE}--- Edge Cases ---${NC}"
 test_case "Token expiring in exactly 60 seconds"
 future_expiry=$(($(date +%s) + 60))
 mkdir -p "$HOME/.pn"
-jq -n \
+"$JQ_BIN" -n \
   --arg base_url "https://test.com" \
   --arg access_token "old-token" \
   --arg refresh_token "refresh-token" \
@@ -96,7 +98,7 @@ pn_resolve_config 2>/dev/null || true
 test_case "Token already expired"
 past_expiry=$(($(date +%s) - 3600))
 mkdir -p "$HOME/.pn"
-jq -n \
+"$JQ_BIN" -n \
   --arg base_url "https://test.com" \
   --arg access_token "old-token" \
   --arg refresh_token "refresh-token" \
@@ -123,11 +125,11 @@ test_file="$TEST_TEMP_DIR/transcript.txt"
 echo "line1
 line2
 line3" > "$test_file"
-payload=$(jq -n --arg path "$test_file" '{tool_name: "Write", agent_message: "", transcript_path: $path, tool_input: {file_path: "f.txt"}}')
-export SNANTIZER_FAILURE_MODE="open"
+payload=$("$JQ_BIN" -n --arg path "$test_file" '{tool_name: "Write", agent_message: "", transcript_path: $path, tool_input: {file_path: "f.txt"}}')
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
 assert_json_field_equals "$result" "permission" "allow" "Reads transcript when message empty"
-unset SNANTIZER_FAILURE_MODE
+unset PARADIGM_NETWORKS_FAILURE_MODE
 
 echo ""
 test_summary

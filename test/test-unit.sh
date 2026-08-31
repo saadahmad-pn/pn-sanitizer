@@ -115,6 +115,25 @@ result=$(cat "$audit_file")
 assert_json_valid "$result" "Valid JSON line"
 assert_json_has_key "$result" "timestamp" "Has timestamp"
 
+# Regression coverage for P2-1: pn_parse_messages_response's block/allow
+# verdict is a reverse-engineered heuristic with no real structured field
+# from the backend -- if an upstream change ever turns every scan into
+# "anomaly", that's a silent, complete loss of enforcement under the
+# prompt hook's fail-open default. These functions track consecutive
+# anomalies so callers can escalate to a visible warning past a
+# threshold instead of staying silent indefinitely.
+test_case "pn_record_scan_anomaly counts consecutive calls and persists across them"
+rm -f "$PN_ANOMALY_STATE_PATH"
+assert_output_equals "pn_record_scan_anomaly" "1" "First call returns 1"
+assert_output_equals "pn_record_scan_anomaly" "2" "Second call returns 2"
+assert_output_equals "pn_record_scan_anomaly" "3" "Third call returns 3, meeting PN_ANOMALY_WARNING_THRESHOLD"
+assert_file_exists "$PN_ANOMALY_STATE_PATH" "State file persisted to disk"
+
+test_case "pn_reset_scan_anomaly clears the streak"
+pn_reset_scan_anomaly
+assert_file_not_exists "$PN_ANOMALY_STATE_PATH" "State file removed"
+assert_output_equals "pn_record_scan_anomaly" "1" "Next call after a reset starts back at 1, not 4"
+
 echo ""
 echo -e "${BLUE}=== Unit Tests: lib/git-utils.sh ===${NC}"
 
@@ -213,13 +232,35 @@ mkdir -p "$HOME/.pn"
 echo '{"base_url": "https://test.com"}' > "$HOME/.pn/credentials.json"
 assert_failure "pn_load_credentials" "pn_load_credentials fails for missing required fields"
 
+test_case "pn_refresh_token URL-encodes the refresh token and client_id in its form body"
+# Regression test for P0-4: the body used to be built by raw
+# interpolation (grant_type=refresh_token&refresh_token=${refresh_token}&
+# client_id=${CLIENT_ID}), so a refresh token containing "+", "&", or "="
+# corrupted the request -- "+" decodes server-side as a space, and both
+# "&" and "=" are the form format's own delimiter characters. Stubs curl
+# to capture the actual --data-raw body instead of hitting the network.
+curl() {
+  local args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "--data-raw" ]]; then
+      echo "${args[$((i + 1))]}" > "$TEST_TEMP_DIR/captured_refresh_body.txt"
+    fi
+  done
+  echo '{"access_token":"a","refresh_token":"b","expires_in":3600}'
+}
+pn_refresh_token "https://test.example.com" "abc+def=ghi&jkl" >/dev/null
+unset -f curl
+captured_body=$(cat "$TEST_TEMP_DIR/captured_refresh_body.txt" 2>/dev/null)
+assert_output_contains "echo '$captured_body'" "refresh_token=abc%2Bdef%3Dghi%26jkl" "Refresh token is fully percent-encoded, not raw-interpolated"
+assert_output_contains "echo '$captured_body'" "client_id=cursor-plugin" "client_id present and unaffected (no reserved characters to encode)"
+
 test_case "pn_resolve_config uses env vars first"
-export SNANTIZER_BASE_URL="https://env.example.com"
-export SNANTIZER_TOKEN="env-token"
+export PARADIGM_NETWORKS_URL="https://env.example.com"
+export PARADIGM_NETWORKS_TOKEN="env-token"
 result=$(pn_resolve_config)
 assert_output_contains "echo '$result'" "https://env.example.com" "Uses env base_url"
 assert_output_contains "echo '$result'" "env-token" "Uses env token"
-unset SNANTIZER_BASE_URL SNANTIZER_TOKEN
+unset PARADIGM_NETWORKS_URL PARADIGM_NETWORKS_TOKEN
 
 test_case "pn_resolve_config falls back to file"
 rm -f "$HOME/.pn/credentials.json"
@@ -253,6 +294,92 @@ assert_output_equals "echo '$result'" "refreshed-token" "The refreshed fields th
 test_case "pn_save_preferred_model fails when not configured"
 rm -f "$HOME/.pn/credentials.json"
 assert_failure "pn_save_preferred_model 'some-model'" "Returns failure with no credentials file to merge into"
+
+# Regression coverage for P2-3: pn_resolve_model is the shared
+# precedence chain (env var > saved preference > default) that used to
+# be duplicated by hand across six files -- covering every tier here is
+# what actually catches a future drift, not just that the function
+# exists.
+test_case "pn_resolve_model: tier 3, nothing set, falls back to the default"
+rm -f "$HOME/.pn/credentials.json"
+unset PARADIGM_NETWORKS_MODEL
+pn_resolve_model
+assert_output_equals "echo '$PN_RESOLVED_MODEL'" "$PN_DEFAULT_MODEL" "Resolves to PN_DEFAULT_MODEL"
+assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "true" "Flags it as the default"
+
+test_case "pn_resolve_model: tier 2, saved preference wins over the default"
+pn_save_credentials "https://model-resolve-test.example.com" "tok" "reftok" "$(($(date +%s) + 3600))"
+pn_save_preferred_model "anthropic/claude-opus-4-7"
+pn_resolve_model
+assert_output_equals "echo '$PN_RESOLVED_MODEL'" "anthropic/claude-opus-4-7" "Resolves to the saved preference"
+assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "false" "Not flagged as the default"
+
+test_case "pn_resolve_model: tier 1, env var wins over the saved preference"
+export PARADIGM_NETWORKS_MODEL="anthropic/claude-sonnet-4-6"
+pn_resolve_model
+assert_output_equals "echo '$PN_RESOLVED_MODEL'" "anthropic/claude-sonnet-4-6" "Resolves to the env var, not the saved preference"
+assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "false" "Not flagged as the default"
+unset PARADIGM_NETWORKS_MODEL
+
+echo ""
+echo -e "${BLUE}=== Unit Tests: login.sh ===${NC}"
+
+# Safe to source directly (rather than sed-extracting functions): login.sh
+# guards its own `main "$@"` call behind a BASH_SOURCE-vs-$0 check
+# specifically so it can be sourced like this for testing.
+source "$SCRIPTS_DIR/login.sh"
+
+test_case "wait_for_callback: a denied-consent callback is reported as a denial, not a false CSRF alarm"
+# Regression test for P0-3: wait_for_callback used to return code/state/
+# error as a single space-joined string (`echo "$CODE $STATE $ERROR"`),
+# read back with `read -r code state_got error_msg`. A denied consent has
+# no code, so that leading empty field shifted STATE into error_msg's
+# slot and ERROR out of the string entirely -- error_msg silently landed
+# empty, the (now-misaligned) state comparison failed instead, and the
+# user saw "possible CSRF, aborting" for what was actually a normal
+# denial. Drives the real function end-to-end via a real local HTTP
+# request, the same mechanism a real browser redirect uses.
+callback_port=18765
+callback_deadline=$(($(date +%s) + 10))
+(
+  sleep 0.5
+  curl -s -o /dev/null "http://127.0.0.1:${callback_port}/callback?state=abc123&error=access_denied"
+) &
+curl_pid=$!
+wait_for_callback "$callback_port" "$callback_deadline"
+wait_for_callback_status=$?
+wait "$curl_pid" 2>/dev/null
+
+assert_output_equals "echo '$wait_for_callback_status'" "0" "wait_for_callback received the request (didn't time out)"
+assert_output_equals "echo '$CALLBACK_CODE'" "" "CALLBACK_CODE is empty (denied consent has no code)"
+assert_output_equals "echo '$CALLBACK_STATE'" "abc123" "CALLBACK_STATE is correctly the real state, not shifted"
+assert_output_equals "echo '$CALLBACK_ERROR'" "access_denied" "CALLBACK_ERROR is correctly the real error, not lost"
+
+# Replicate main()'s own decision sequence (error check, then state check,
+# then code check) to prove the fix end-to-end -- this used to fall
+# through to the state-mismatch branch instead.
+expected_state="abc123"
+login_outcome=""
+if [[ -n "$CALLBACK_ERROR" ]]; then
+  login_outcome="denied:$CALLBACK_ERROR"
+elif [[ "$CALLBACK_STATE" != "$expected_state" ]]; then
+  login_outcome="csrf_mismatch"
+elif [[ -z "$CALLBACK_CODE" ]]; then
+  login_outcome="no_code"
+else
+  login_outcome="proceed"
+fi
+assert_output_equals "echo '$login_outcome'" "denied:access_denied" "Reports as a denial, not a CSRF mismatch"
+
+test_case "urlencode_strict/urldecode_strict round-trip a code containing a reserved character"
+# Regression test for P0-2: the callback used to skip decoding entirely,
+# so a code re-encoded on the way to the token exchange (double-encoding
+# any character outside [a-zA-Z0-9.~_-]).
+wire_value=$(urlencode_strict "AB+CD")
+decoded_value=$(urldecode_strict "$wire_value")
+reencoded_value=$(urlencode_strict "$decoded_value")
+assert_output_equals "echo '$decoded_value'" "AB+CD" "Decodes back to the true value"
+assert_output_equals "echo '$reencoded_value'" "$wire_value" "Re-encoding the decoded value matches the original wire value (single encoding, not double)"
 
 echo ""
 test_summary

@@ -42,37 +42,127 @@ make_pkce_pair() {
   echo "$verifier" "$challenge"
 }
 
-# URL encode a string
-urlencode_strict() {
+# urlencode_strict now lives in lib/common.sh (already sourced above) --
+# pn_config.sh's token refresh needs it too, see that file's comment.
+
+# URL decode a string (the inverse of urlencode_strict): '+' -> space, then
+# %XX -> byte. Used on raw query-string values pulled straight off the
+# callback request line, which are still percent-encoded exactly as the
+# browser sent them.
+urldecode_strict() {
   local string="$1"
-  echo -n "$string" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().rstrip()))" 2>/dev/null || \
-  echo -n "$string" | python3 -c "import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null || \
+  echo -n "$string" | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.stdin.read().rstrip()))" 2>/dev/null || \
+  echo -n "$string" | python3 -c "import sys, urllib.parse; sys.stdout.write(urllib.parse.unquote_plus(sys.stdin.read()))" 2>/dev/null || \
   {
-    # Fallback: pure-bash percent-encoding (used when python3 is unavailable)
-    local result="" c hex i
-    for (( i = 0; i < ${#string}; i++ )); do
-      c="${string:i:1}"
-      case "$c" in
-        [a-zA-Z0-9.~_-]) result+="$c" ;;
-        *) printf -v hex '%%%02X' "'$c"; result+="$hex" ;;
-      esac
-    done
-    echo -n "$result"
+    # Fallback: pure-bash percent-decoding (used when python3 is unavailable)
+    local plus_decoded="${string//+/ }"
+    printf '%b' "${plus_decoded//%/\\x}"
   }
 }
 
-# Wait for HTTP callback on localhost
+# Wait for HTTP callback on localhost. Deliberately does NOT return
+# code/state/error via a space-joined `echo` string read back with `read -r`
+# -- when CODE is empty (e.g. the user denied consent, so there's no code,
+# only state+error), positional fields shift left and error_msg silently
+# lands empty, so the real error is lost and the (now-misaligned) state
+# comparison fails instead, misreporting a denied login as a CSRF attack.
+# Sets these three globals directly instead (same pattern as
+# http_post_split_status in lib/common.sh) -- call this as a plain
+# statement, not via $(...), or the globals won't escape a subshell.
+CALLBACK_CODE=""
+CALLBACK_STATE=""
+CALLBACK_ERROR=""
+# Builds the nc listen-mode argument array for a given style + port, into
+# the NC_LISTEN_ARGS global (arrays can't survive a plain return value,
+# same reasoning as CALLBACK_CODE/etc above). Used both to probe which
+# style actually works (detect_nc_listen_style) and to start the real
+# listener (wait_for_callback), so the two can never drift apart --
+# OpenBSD nc (macOS default, most Linux distros' netcat-openbsd) takes
+# the port positionally ("nc -l HOST PORT"); GNU netcat / netcat-
+# traditional require it after -p, with the bind address via -s instead
+# of positionally ("nc -l -p PORT -s HOST"). Verified directly against
+# GNU netcat 0.7.1 -- busybox nc was not available to test and may
+# differ again, but the failure mode if so (nc exits immediately on an
+# unrecognized flag) is a loud, immediate error, not another silent hang.
+NC_LISTEN_ARGS=()
+_nc_listen_args() {
+  local style="$1" port="$2"
+  case "$style" in
+    openbsd)     NC_LISTEN_ARGS=(-l 127.0.0.1 "$port") ;;
+    traditional) NC_LISTEN_ARGS=(-l -p "$port" -s 127.0.0.1) ;;
+    *)           NC_LISTEN_ARGS=() ;;
+  esac
+}
+
+# Detect which nc listen-mode flag syntax actually binds on this system.
+# Passing the wrong style to GNU netcat does not error or exit --
+# confirmed directly: it silently accepts the arguments and binds
+# nothing usable, which otherwise means the real listener spins for the
+# full login timeout with no hint why (this is not a hypothetical: it
+# reproduces on a stock Mac the moment something else on PATH shadows
+# the system `nc`, e.g. `brew install netcat`).
+#
+# Tests against a disposable, unrelated port picked fresh per attempt --
+# deliberately never the real callback port. A plain `nc -l` (without
+# -k) accepts exactly one connection and then exits; verifying via a
+# real connect would consume that one-shot accept, so if this probed the
+# real port, the actual browser redirect would arrive to find nc already
+# gone. Confirmed this failure mode directly before settling on this
+# design -- an earlier draft probed the real listener this way and broke
+# the real callback.
+detect_nc_listen_style() {
+  local style probe_port probe_pid connected
+
+  for style in openbsd traditional; do
+    probe_port=$((20000 + RANDOM % 20000))
+    _nc_listen_args "$style" "$probe_port"
+    nc "${NC_LISTEN_ARGS[@]}" >/dev/null 2>&1 &
+    probe_pid=$!
+    sleep 0.2
+
+    connected=1
+    if (exec 3<>"/dev/tcp/127.0.0.1/$probe_port") 2>/dev/null; then
+      connected=0
+      exec 3<&- 2>/dev/null
+      exec 3>&- 2>/dev/null
+    fi
+    kill "$probe_pid" 2>/dev/null
+    wait "$probe_pid" 2>/dev/null
+
+    if [[ $connected -eq 0 ]]; then
+      echo "$style"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 wait_for_callback() {
   local port="$1"
   local deadline="$2"
 
-  local CODE=""
-  local STATE=""
-  local ERROR=""
+  CALLBACK_CODE=""
+  CALLBACK_STATE=""
+  CALLBACK_ERROR=""
 
   # Use netcat with explicit response handling
   # Accept ONE connection on the port, send response, capture request
   local request_file="/tmp/callback_request_$$.txt"
+  # Separate from request_file -- previously nc's own stderr was merged
+  # straight into the file being parsed as an HTTP request (2>&1), so a
+  # startup error (e.g. address already in use) tripped the `-s
+  # request_file` non-empty check, failed the GET-line regex, and just
+  # spun silently until the full timeout with no hint that nc never
+  # bound at all.
+  local nc_stderr_file="/tmp/callback_nc_stderr_$$.txt"
+
+  local nc_listen_style
+  nc_listen_style=$(detect_nc_listen_style) || {
+    echo "error: could not start the local login callback listener -- nc on this system doesn't support either of the listen syntaxes this script tries (OpenBSD-style or GNU/traditional-style). Install a compatible netcat (e.g. OpenBSD netcat or GNU netcat) and try again." >&2
+    return 1
+  }
+  _nc_listen_args "$nc_listen_style" "$port"
 
   # Create response body
   local response_body="<!doctype html><html><head><title>Paradigm Networks login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2></body></html>"
@@ -86,10 +176,33 @@ wait_for_callback() {
     echo -ne "Connection: close\r\n"
     echo -ne "\r\n"
     echo -ne "$response_body"
-  } | nc -l 127.0.0.1 "$port" > "$request_file" 2>&1 &
+  } | nc "${NC_LISTEN_ARGS[@]}" > "$request_file" 2>"$nc_stderr_file" &
 
   local nc_pid=$!
   sleep 0.2
+
+  # Best-effort: catch an outright bind failure (e.g. the port got taken
+  # between selection and now -- the TOCTOU race in the port-selection
+  # loop above) immediately rather than waiting out the full deadline.
+  # Not exhaustive: some nc builds tolerate a duplicate bind silently
+  # rather than erroring (confirmed directly: macOS's bundled nc does
+  # this), so this can't catch every case -- but it catches the ones
+  # that do report cleanly, which previously were guaranteed to be
+  # swallowed into $request_file regardless.
+  #
+  # The $request_file check matters: a real client that connects and
+  # completes within this 0.2s window makes nc exit on its own, normally,
+  # having already done its job -- confirmed directly (a fast local test
+  # request beat this check often enough to be a real, not theoretical,
+  # race). Without it, that success would be misreported as the listener
+  # having failed to start.
+  if ! kill -0 "$nc_pid" 2>/dev/null && [[ ! -s "$request_file" ]]; then
+    local nc_error
+    nc_error=$(cat "$nc_stderr_file" 2>/dev/null)
+    rm -f "$request_file" "$nc_stderr_file"
+    echo "error: the local login callback listener exited immediately after starting.${nc_error:+ nc said: $nc_error}" >&2
+    return 1
+  fi
 
   # Wait for request to arrive
   while [[ $(date +%s) -lt $deadline ]]; do
@@ -101,25 +214,30 @@ wait_for_callback() {
       if [[ "$request_line" =~ ^GET\ /callback\?(.*)\ HTTP ]]; then
         local query_string="${BASH_REMATCH[1]}"
 
-        # Parse query parameters
+        # Parse query parameters. Values are decoded immediately here, as
+        # soon as they're split out of the query string -- CODE/STATE must
+        # hold their true, decoded form from this point on. exchange_code
+        # re-encodes CODE before sending it back over the wire; decoding it
+        # here first (rather than leaving it percent-encoded and skipping
+        # the decode there) avoids double-encoding a code that itself
+        # contains a character outside [a-zA-Z0-9.~_-] (e.g. "/", "+").
         IFS='&' read -ra params <<<"$query_string"
         for param in "${params[@]}"; do
           local key="${param%%=*}"
           local value="${param#*=}"
           case "$key" in
-            code) CODE="$value" ;;
-            state) STATE="$value" ;;
-            error) ERROR="$value" ;;
+            code) CALLBACK_CODE="$(urldecode_strict "$value")" ;;
+            state) CALLBACK_STATE="$(urldecode_strict "$value")" ;;
+            error) CALLBACK_ERROR="$(urldecode_strict "$value")" ;;
           esac
         done
 
         # Clean up
         kill $nc_pid 2>/dev/null || true
         wait $nc_pid 2>/dev/null || true
-        rm -f "$request_file"
+        rm -f "$request_file" "$nc_stderr_file"
 
-        if [[ -n "$CODE" ]] || [[ -n "$ERROR" ]]; then
-          echo "$CODE $STATE $ERROR"
+        if [[ -n "$CALLBACK_CODE" ]] || [[ -n "$CALLBACK_ERROR" ]]; then
           return 0
         fi
       fi
@@ -130,7 +248,7 @@ wait_for_callback() {
   # Timeout
   kill $nc_pid 2>/dev/null || true
   wait $nc_pid 2>/dev/null || true
-  rm -f "$request_file"
+  rm -f "$request_file" "$nc_stderr_file"
   return 1
 }
 
@@ -299,33 +417,34 @@ main() {
   local deadline
   deadline=$(($(date +%s) + CALLBACK_TIMEOUT_SECONDS))
 
-  local callback_result
-  callback_result=$(wait_for_callback "$port" "$deadline") || {
+  # Called as a plain statement, not $(...) -- wait_for_callback sets
+  # CALLBACK_CODE/CALLBACK_STATE/CALLBACK_ERROR directly (see its own
+  # comment for why a space-joined echo/read was wrong: a denied login has
+  # no code, and that empty field used to shift the real error message out
+  # of place, misreporting a denial as a CSRF state mismatch instead).
+  wait_for_callback "$port" "$deadline" || {
     echo "error: timed out waiting for login after ${CALLBACK_TIMEOUT_SECONDS}s" >&2
     return 1
   }
 
-  local code state_got error_msg
-  read -r code state_got error_msg <<<"$callback_result"
-
-  if [[ -n "$error_msg" ]]; then
-    echo "error: login was denied or failed: $error_msg" >&2
+  if [[ -n "$CALLBACK_ERROR" ]]; then
+    echo "error: login was denied or failed: $CALLBACK_ERROR" >&2
     return 1
   fi
 
-  if [[ "$state_got" != "$state" ]]; then
+  if [[ "$CALLBACK_STATE" != "$state" ]]; then
     echo "error: state mismatch on login callback — possible CSRF, aborting" >&2
     return 1
   fi
 
-  if [[ -z "$code" ]]; then
+  if [[ -z "$CALLBACK_CODE" ]]; then
     echo "error: login callback did not include an authorization code" >&2
     return 1
   fi
 
   # Exchange code for tokens
   local token_response
-  token_response=$(exchange_code "$base_url" "$code" "$code_verifier" "$redirect_uri") || return 1
+  token_response=$(exchange_code "$base_url" "$CALLBACK_CODE" "$code_verifier" "$redirect_uri") || return 1
 
   local access_token
   local refresh_token
@@ -355,5 +474,12 @@ main() {
   return 0
 }
 
-main "$@"
-exit $?
+# Only run when executed directly, not when sourced (e.g. by a test that
+# wants to call wait_for_callback/urlencode_strict/urldecode_strict in
+# isolation without going through the full login flow). No behavior change
+# for normal use: bash login.sh / ./login.sh still runs main exactly as
+# before, since BASH_SOURCE[0] equals $0 in that case.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+  exit $?
+fi

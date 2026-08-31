@@ -2,10 +2,11 @@
 # Fetches and displays the AI models available to the logged-in user's
 # Paradigm Networks org, via GET {base_url}/v1/models -- shows the exact
 # model IDs that can be passed to set-model.sh to change which model is
-# used for scanning prompts and writes (a Cursor plugin Settings field
-# for this does exist, but does not actually reach hook scripts -- see
-# check-prompt.sh's comment on its own MODEL resolution for how that was
-# confirmed; set-model.sh/pn_save_preferred_model is the real mechanism).
+# used for scanning prompts and writes (an earlier version had a Cursor
+# plugin Settings field for this, but it was removed -- it never actually
+# reached hook scripts -- see check-prompt.sh's comment on its own MODEL
+# resolution for how that was confirmed; set-model.sh/pn_save_preferred_model
+# is the real mechanism).
 # Standalone CLI script (invoked by the paradigmnetworks-models skill),
 # not a hook -- so unlike the hook scripts, nothing runs it
 # unconditionally on every platform, meaning there's no
@@ -27,7 +28,6 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 TIMEOUT_SECONDS=20
-DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
 
 main() {
   if [[ -z "$JQ_BIN" ]]; then
@@ -74,18 +74,14 @@ main() {
   # relayed verbatim into a chat UI (see the paradigmnetworks-models
   # skill), which renders markdown -- backticked ids and real bullets
   # read far better there than the plain-indented text this used to
-  # print. Same precedence as check-prompt.sh/check-write.sh's own MODEL
-  # resolution -- kept in sync by hand, not shared code, matching this
-  # codebase's existing convention for small resolution snippets.
-  local current_model
-  current_model="${PARADIGM_NETWORKS_MODEL:-}"
-  if [[ -z "$current_model" ]]; then
-    current_model="$(pn_get_preferred_model)"
-  fi
-  if [[ -z "$current_model" ]]; then
-    echo "**Currently scanning with:** \`$DEFAULT_MODEL\` (default)"
+  # print. pn_resolve_model (pn_config.sh) is the same shared precedence
+  # chain check-prompt.sh/check-write.sh use for their own MODEL, so this
+  # can never drift from what's actually scanning prompts/writes.
+  pn_resolve_model
+  if [[ "$PN_RESOLVED_MODEL_IS_DEFAULT" == "true" ]]; then
+    echo "**Currently scanning with:** \`$PN_RESOLVED_MODEL\` (default)"
   else
-    echo "**Currently scanning with:** \`$current_model\`"
+    echo "**Currently scanning with:** \`$PN_RESOLVED_MODEL\`"
   fi
   echo ""
 
