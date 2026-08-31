@@ -218,13 +218,20 @@ main() {
       # shape, not a confirmed verdict either way. Same posture as an
       # invalid-JSON or non-2xx response above: don't guess allow or block.
       log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+      local anomaly_streak
+      anomaly_streak=$(pn_record_scan_anomaly)
+      local anomaly_prefix=""
+      if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
+        anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
+      fi
       if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-        json_deny "The scanning service returned an unexpected response. Prompt blocked."
+        json_deny "${anomaly_prefix}The scanning service returned an unexpected response. Prompt blocked."
       else
-        json_allow "The scanning service returned an unexpected response. Allowing prompt."
+        json_allow "${anomaly_prefix}The scanning service returned an unexpected response. Allowing prompt."
       fi
       ;;
     block)
+      pn_reset_scan_anomaly
       # EXPERIMENT (revert to the plain "[Paradigm Networks] $message"
       # form if this doesn't render as intended): confirmed **bold**,
       # blank-line breaks, and `inline code` all render correctly in
@@ -267,6 +274,7 @@ outbound requests and held this one for review.
       # produces -- there is no "warn" state on this endpoint (see that
       # function's comment); the model's actual reply is discarded either
       # way, only the verdict matters.
+      pn_reset_scan_anomaly
       json_allow
       ;;
   esac

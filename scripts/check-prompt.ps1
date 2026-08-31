@@ -192,13 +192,19 @@ try {
       # shape, not a confirmed verdict either way. Same posture as an
       # invalid-JSON or non-2xx response above: don't guess allow or block.
       Write-DebugLog -Message "API response shape unexpected (zero usage, no block banner) | url=$scanUrl" -LogPath $DebugLogPath
+      $anomalyStreak = Add-PnScanAnomaly
+      $anomalyPrefix = ""
+      if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
+        $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+      }
       if ($PromptFailureMode -eq "closed") {
-        Write-JsonDeny -Message "The scanning service returned an unexpected response. Prompt blocked."
+        Write-JsonDeny -Message "${anomalyPrefix}The scanning service returned an unexpected response. Prompt blocked."
       } else {
-        Write-JsonAllow -Message "The scanning service returned an unexpected response. Allowing prompt."
+        Write-JsonAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Allowing prompt."
       }
     }
     "block" {
+      Reset-PnScanAnomaly
       # Mirrors scripts/check-prompt.sh's block-message formatting
       # exactly -- see that file's comments for the full rationale. Note
       # from testing on a real Windows target: one specific Cursor UI
@@ -263,6 +269,7 @@ try {
       # produces -- there is no "warn" state on this endpoint (see that
       # function's comment); the model's actual reply is discarded either
       # way, only the verdict matters.
+      Reset-PnScanAnomaly
       Write-JsonAllow
     }
   }

@@ -258,6 +258,52 @@ audit_log() {
   echo "$entry" >> "$log_path"
 }
 
+# Anomaly-streak tracking. pn_parse_messages_response's block/allow
+# verdict is a reverse-engineered heuristic (see that function's own
+# comment) -- there is no real structured verdict field from the backend
+# yet. If an upstream change to usage accounting or the block banner's
+# wording ever turns every scan into "anomaly", that's a silent, complete
+# loss of enforcement under the prompt hook's fail-open default -- nothing
+# would surface it except a debug log line, and that's opt-in. These two
+# functions track how many scans *in a row* have landed on "anomaly" so a
+# caller can escalate to a loud, visible warning past a threshold instead
+# of staying silent indefinitely. Call pn_record_scan_anomaly on every
+# anomaly verdict, pn_reset_scan_anomaly on every allow/block verdict --
+# scoped narrowly to that classification, not to transport-level failures
+# (timeouts, non-2xx, invalid JSON) which already have their own,
+# well-understood handling and aren't part of what this tracks.
+PN_ANOMALY_STATE_PATH="${HOME}/.paradigm-scanner/anomaly_state.json"
+PN_ANOMALY_WARNING_THRESHOLD=3
+
+pn_record_scan_anomaly() {
+  mkdir -p "$(dirname "$PN_ANOMALY_STATE_PATH")" 2>/dev/null
+
+  local count=0
+  if [[ -f "$PN_ANOMALY_STATE_PATH" ]]; then
+    count=$("$JQ_BIN" -r '.consecutive_anomaly_count // 0' "$PN_ANOMALY_STATE_PATH" 2>/dev/null)
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  fi
+  count=$((count + 1))
+
+  # Best-effort persistence: if this fails, the count returned for this
+  # one call is still correct, it just won't be remembered for the next
+  # invocation -- same posture as this codebase's debug/audit logging,
+  # which already treats a failed write as non-fatal rather than an error
+  # worth surfacing to the user over.
+  local temp_file
+  temp_file=$(mktemp "${PN_ANOMALY_STATE_PATH}.XXXXXX" 2>/dev/null) && {
+    echo "{\"consecutive_anomaly_count\": $count}" > "$temp_file"
+    mv "$temp_file" "$PN_ANOMALY_STATE_PATH" 2>/dev/null || rm -f "$temp_file"
+  }
+
+  echo "$count"
+}
+
+pn_reset_scan_anomaly() {
+  rm -f "$PN_ANOMALY_STATE_PATH" 2>/dev/null
+  return 0
+}
+
 # Timestamp helpers
 
 current_epoch() {
@@ -351,6 +397,20 @@ json_session_context() {
 # PN_MSG_MESSAGE (the extracted block reason -- only meaningful when
 # PN_MSG_ACTION is "block"). Must be called as a plain function call
 # (never via $(...)), same requirement as http_post_split_status above.
+#
+# This whole function is a stopgap, not a permanent design (P2-1): any
+# upstream change to usage accounting or the block banner's wording turns
+# every scan into "anomaly", which is a silent, complete loss of
+# enforcement under the prompt hook's fail-open default. The real fix is
+# a backend change -- an explicit verdict field or response header on
+# this endpoint, at which point this function becomes a one-line check
+# with this heuristic kept only as a fallback. That request should be
+# tracked as an issue against the backend/control-server team (not
+# something this repo can file on their behalf) and linked here once it
+# exists. In the meantime, pn_record_scan_anomaly/pn_reset_scan_anomaly
+# (below) give a caller a way to escalate a sustained anomaly streak into
+# a loud, visible warning instead of staying silent indefinitely --
+# that's a mitigation, not a fix for the underlying fragility.
 pn_parse_messages_response() {
   local response="$1"
 

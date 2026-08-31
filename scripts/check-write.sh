@@ -321,13 +321,20 @@ main() {
       # shape, not a confirmed verdict either way. Same posture as an
       # invalid-JSON or non-2xx response above: don't guess allow or block.
       log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+      local anomaly_streak
+      anomaly_streak=$(pn_record_scan_anomaly)
+      local anomaly_prefix=""
+      if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
+        anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
+      fi
       if [[ "$FAILURE_MODE" == "open" ]]; then
-        json_permission_allow "The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+        json_permission_allow "${anomaly_prefix}The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
       else
-        json_permission_deny "The scanning service returned an unexpected response. Write blocked." "The scanning service returned an unexpected response. Do not retry this write."
+        json_permission_deny "${anomaly_prefix}The scanning service returned an unexpected response. Write blocked." "The scanning service returned an unexpected response. Do not retry this write."
       fi
       ;;
     block)
+      pn_reset_scan_anomaly
       # PN_MSG_MESSAGE is only the short extracted reason (e.g.
       # "destructive operation"), not a full sentence -- wrap it into the
       # same phrasing the platform's own block banner uses, rather than
@@ -341,6 +348,7 @@ main() {
       # produces -- there is no "warn" state on this endpoint (see that
       # function's comment); the model's actual reply is discarded either
       # way, only the verdict matters.
+      pn_reset_scan_anomaly
       json_permission_allow
       ;;
   esac

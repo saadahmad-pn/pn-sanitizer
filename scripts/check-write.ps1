@@ -256,14 +256,20 @@ try {
       # shape, not a confirmed verdict either way. Same posture as an
       # invalid-JSON or non-2xx response above: don't guess allow or block.
       Write-DebugLog -Message "API response shape unexpected (zero usage, no block banner) | url=$scanUrl" -LogPath $DebugLogPath
+      $anomalyStreak = Add-PnScanAnomaly
+      $anomalyPrefix = ""
+      if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
+        $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+      }
       if ($FailureMode -eq "open") {
-        Write-JsonPermissionAllow -Message "The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+        Write-JsonPermissionAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
       } else {
-        Write-JsonPermissionDeny -UserMessage "The scanning service returned an unexpected response. Write blocked." `
+        Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}The scanning service returned an unexpected response. Write blocked." `
           -AgentMessage "The scanning service returned an unexpected response. Do not retry this write."
       }
     }
     "block" {
+      Reset-PnScanAnomaly
       # $parsedVerdict.Message is only the short extracted reason (e.g.
       # "destructive operation"), not a full sentence -- wrap it into the
       # same phrasing the platform's own block banner uses, rather than
@@ -277,6 +283,7 @@ try {
       # produces -- there is no "warn" state on this endpoint (see that
       # function's comment); the model's actual reply is discarded either
       # way, only the verdict matters.
+      Reset-PnScanAnomaly
       Write-JsonPermissionAllow
     }
   }

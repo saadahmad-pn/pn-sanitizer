@@ -115,6 +115,25 @@ result=$(cat "$audit_file")
 assert_json_valid "$result" "Valid JSON line"
 assert_json_has_key "$result" "timestamp" "Has timestamp"
 
+# Regression coverage for P2-1: pn_parse_messages_response's block/allow
+# verdict is a reverse-engineered heuristic with no real structured field
+# from the backend -- if an upstream change ever turns every scan into
+# "anomaly", that's a silent, complete loss of enforcement under the
+# prompt hook's fail-open default. These functions track consecutive
+# anomalies so callers can escalate to a visible warning past a
+# threshold instead of staying silent indefinitely.
+test_case "pn_record_scan_anomaly counts consecutive calls and persists across them"
+rm -f "$PN_ANOMALY_STATE_PATH"
+assert_output_equals "pn_record_scan_anomaly" "1" "First call returns 1"
+assert_output_equals "pn_record_scan_anomaly" "2" "Second call returns 2"
+assert_output_equals "pn_record_scan_anomaly" "3" "Third call returns 3, meeting PN_ANOMALY_WARNING_THRESHOLD"
+assert_file_exists "$PN_ANOMALY_STATE_PATH" "State file persisted to disk"
+
+test_case "pn_reset_scan_anomaly clears the streak"
+pn_reset_scan_anomaly
+assert_file_not_exists "$PN_ANOMALY_STATE_PATH" "State file removed"
+assert_output_equals "pn_record_scan_anomaly" "1" "Next call after a reset starts back at 1, not 4"
+
 echo ""
 echo -e "${BLUE}=== Unit Tests: lib/git-utils.sh ===${NC}"
 
