@@ -1,9 +1,12 @@
 name: CI
 
+# Disabled from running automatically while this project is still in
+# active development -- every push/PR would otherwise trigger it. Left
+# in place, not deleted, so it's a one-line change to re-enable later:
+# restore the `pull_request:` / `push:` triggers below. Can still be run
+# manually any time via the Actions tab (or `gh workflow run ci.yml`).
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   shellcheck:
