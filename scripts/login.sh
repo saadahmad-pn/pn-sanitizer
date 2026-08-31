@@ -61,6 +61,21 @@ urlencode_strict() {
   }
 }
 
+# URL decode a string (the inverse of urlencode_strict): '+' -> space, then
+# %XX -> byte. Used on raw query-string values pulled straight off the
+# callback request line, which are still percent-encoded exactly as the
+# browser sent them.
+urldecode_strict() {
+  local string="$1"
+  echo -n "$string" | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.stdin.read().rstrip()))" 2>/dev/null || \
+  echo -n "$string" | python3 -c "import sys, urllib.parse; sys.stdout.write(urllib.parse.unquote_plus(sys.stdin.read()))" 2>/dev/null || \
+  {
+    # Fallback: pure-bash percent-decoding (used when python3 is unavailable)
+    local plus_decoded="${string//+/ }"
+    printf '%b' "${plus_decoded//%/\\x}"
+  }
+}
+
 # Wait for HTTP callback on localhost
 wait_for_callback() {
   local port="$1"
@@ -101,15 +116,21 @@ wait_for_callback() {
       if [[ "$request_line" =~ ^GET\ /callback\?(.*)\ HTTP ]]; then
         local query_string="${BASH_REMATCH[1]}"
 
-        # Parse query parameters
+        # Parse query parameters. Values are decoded immediately here, as
+        # soon as they're split out of the query string -- CODE/STATE must
+        # hold their true, decoded form from this point on. exchange_code
+        # re-encodes CODE before sending it back over the wire; decoding it
+        # here first (rather than leaving it percent-encoded and skipping
+        # the decode there) avoids double-encoding a code that itself
+        # contains a character outside [a-zA-Z0-9.~_-] (e.g. "/", "+").
         IFS='&' read -ra params <<<"$query_string"
         for param in "${params[@]}"; do
           local key="${param%%=*}"
           local value="${param#*=}"
           case "$key" in
-            code) CODE="$value" ;;
-            state) STATE="$value" ;;
-            error) ERROR="$value" ;;
+            code) CODE="$(urldecode_strict "$value")" ;;
+            state) STATE="$(urldecode_strict "$value")" ;;
+            error) ERROR="$(urldecode_strict "$value")" ;;
           esac
         done
 
