@@ -114,6 +114,46 @@ pn_get_preferred_model() {
   "$JQ_BIN" -r '.preferred_model // ""' "$CRED_PATH" 2>/dev/null
 }
 
+# pn_resolve_model
+# Resolves which model to use for a /v1/messages scan. Precedence:
+# PARADIGM_NETWORKS_MODEL env var (a manual override -- only takes effect
+# if something exports it directly into the process environment, e.g. a
+# shared-host setup; there is no Cursor Settings UI for this -- an
+# earlier version had one, but it was removed after confirming, against
+# a real installed plugin, that Cursor's plugin Settings panel never
+# delivers configured values to hook scripts) > the model saved locally
+# via the paradigmnetworks-models skill / set-model.sh
+# (pn_get_preferred_model, above -- this is the real, user-facing way to
+# change it) > PN_DEFAULT_MODEL.
+#
+# Formerly this exact precedence chain (constant + three-way if/fi) was
+# duplicated by hand across six files (check-prompt.sh/.ps1, check-
+# write.sh/.ps1, paradigmnetworks-models.sh/.ps1) -- a stale default in
+# one file would mean prompts and writes get scanned by a different model
+# than the one paradigmnetworks-models reports as current, exactly the
+# kind of drift nobody notices until it matters (P2-3).
+#
+# Sets PN_RESOLVED_MODEL and PN_RESOLVED_MODEL_IS_DEFAULT ("true"/"false"
+# -- paradigmnetworks-models.sh needs to know this to print "(default)")
+# as globals, same "plain statement call, not $(...)" contract as
+# CALLBACK_CODE/etc in login.sh, since a second value can't ride along a
+# plain return.
+PN_DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
+PN_RESOLVED_MODEL=""
+PN_RESOLVED_MODEL_IS_DEFAULT="false"
+pn_resolve_model() {
+  PN_RESOLVED_MODEL="${PARADIGM_NETWORKS_MODEL:-}"
+  if [[ -z "$PN_RESOLVED_MODEL" ]]; then
+    PN_RESOLVED_MODEL="$(pn_get_preferred_model)"
+  fi
+  if [[ -z "$PN_RESOLVED_MODEL" ]]; then
+    PN_RESOLVED_MODEL="$PN_DEFAULT_MODEL"
+    PN_RESOLVED_MODEL_IS_DEFAULT="true"
+  else
+    PN_RESOLVED_MODEL_IS_DEFAULT="false"
+  fi
+}
+
 # Refresh an expired access token
 pn_refresh_token() {
   local base_url="$1"

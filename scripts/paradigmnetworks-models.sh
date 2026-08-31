@@ -28,7 +28,6 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 TIMEOUT_SECONDS=20
-DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
 
 main() {
   if [[ -z "$JQ_BIN" ]]; then
@@ -75,18 +74,14 @@ main() {
   # relayed verbatim into a chat UI (see the paradigmnetworks-models
   # skill), which renders markdown -- backticked ids and real bullets
   # read far better there than the plain-indented text this used to
-  # print. Same precedence as check-prompt.sh/check-write.sh's own MODEL
-  # resolution -- kept in sync by hand, not shared code, matching this
-  # codebase's existing convention for small resolution snippets.
-  local current_model
-  current_model="${PARADIGM_NETWORKS_MODEL:-}"
-  if [[ -z "$current_model" ]]; then
-    current_model="$(pn_get_preferred_model)"
-  fi
-  if [[ -z "$current_model" ]]; then
-    echo "**Currently scanning with:** \`$DEFAULT_MODEL\` (default)"
+  # print. pn_resolve_model (pn_config.sh) is the same shared precedence
+  # chain check-prompt.sh/check-write.sh use for their own MODEL, so this
+  # can never drift from what's actually scanning prompts/writes.
+  pn_resolve_model
+  if [[ "$PN_RESOLVED_MODEL_IS_DEFAULT" == "true" ]]; then
+    echo "**Currently scanning with:** \`$PN_RESOLVED_MODEL\` (default)"
   else
-    echo "**Currently scanning with:** \`$current_model\`"
+    echo "**Currently scanning with:** \`$PN_RESOLVED_MODEL\`"
   fi
   echo ""
 

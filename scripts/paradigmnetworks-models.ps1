@@ -21,7 +21,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # observed to take ~20-25s on a real Windows target (likely a slow/blocked
 # certificate revocation check).
 $TimeoutSeconds = 40
-$DefaultModel = "anthropic/claude-haiku-4-5-20251001"
 
 # Writes directly to the console's stdout stream rather than PowerShell's
 # own output pipeline -- same reasoning as login.ps1's identical helper:
@@ -67,15 +66,14 @@ function Invoke-Main {
   # relayed verbatim into a chat UI (see the paradigmnetworks-models
   # skill), which renders markdown -- backticked ids and real bullets
   # read far better there than the plain-indented text this used to
-  # print. Same precedence as check-prompt.ps1/check-write.ps1's own
-  # $Model resolution -- kept in sync by hand, not shared code, matching
-  # this codebase's existing convention for small resolution snippets.
-  $currentModel = $env:PARADIGM_NETWORKS_MODEL
-  if (-not $currentModel) { $currentModel = Get-PnPreferredModel }
-  if (-not $currentModel) {
-    Write-ConsoleLine "**Currently scanning with:** ``$DefaultModel`` (default)"
+  # print. Resolve-PnModel (pn_config.ps1) is the same shared precedence
+  # chain check-prompt.ps1/check-write.ps1 use for their own $Model, so
+  # this can never drift from what's actually scanning prompts/writes.
+  $resolvedModel = Resolve-PnModel
+  if ($resolvedModel.IsDefault) {
+    Write-ConsoleLine "**Currently scanning with:** ``$($resolvedModel.Model)`` (default)"
   } else {
-    Write-ConsoleLine "**Currently scanning with:** ``$currentModel``"
+    Write-ConsoleLine "**Currently scanning with:** ``$($resolvedModel.Model)``"
   }
   Write-ConsoleLine ""
 

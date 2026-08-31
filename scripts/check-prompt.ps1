@@ -28,24 +28,15 @@ $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
 # /v1/messages endpoint on the same backend, which requires a model.
-# $DefaultModel is the last-resort fallback: cheap/fast tier, chosen
-# because testing showed the block/allow verdict is identical across
-# models and max_tokens values -- the platform's guard fires before the
-# requested model ever runs, so model choice only affects cost/latency on
-# the (always-discarded) allow-path reply, not detection accuracy.
-$DefaultModel = "anthropic/claude-haiku-4-5-20251001"
-# Precedence: PARADIGM_NETWORKS_MODEL env var (a manual override -- only
-# takes effect if something exports it directly into the process
-# environment, e.g. a shared-host setup; there is no Cursor Settings UI
-# for this -- an earlier version had one, but it was removed after
-# confirming, against a real installed plugin, that Cursor's plugin
-# Settings panel never delivers configured values to hook scripts) > the
-# model saved locally via the paradigmnetworks-models skill /
-# set-model.ps1 (Get-PnPreferredModel, in pn_config.ps1) > hardcoded
-# default.
-$Model = $env:PARADIGM_NETWORKS_MODEL
-if (-not $Model) { $Model = Get-PnPreferredModel }
-if (-not $Model) { $Model = $DefaultModel }
+# Resolve-PnModel (pn_config.ps1) is the shared precedence chain (env var
+# override > saved preference > hardcoded default) -- see its own
+# comment for the full rationale. The hardcoded default is a cheap/fast
+# tier, chosen because testing showed the block/allow verdict is
+# identical across models and max_tokens values -- the platform's guard
+# fires before the requested model ever runs, so model choice only
+# affects cost/latency on the (always-discarded) allow-path reply, not
+# detection accuracy.
+$Model = (Resolve-PnModel).Model
 # 150 comfortably covers the block banner + reason sentence; confirmed via
 # live testing that the banner is injected by the guard without ever being
 # subject to max_tokens (output_tokens is 0 even for the full banner), so
