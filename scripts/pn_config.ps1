@@ -281,17 +281,11 @@ function Get-PnValidAccessToken {
   return [PSCustomObject]@{ BaseUrl = $creds.BaseUrl; AccessToken = $refreshed.AccessToken }
 }
 
-# Resolve config: PARADIGM_NETWORKS_* env vars take precedence, then
-# legacy SNANTIZER_* env vars, then the stored file (with refresh).
+# Resolve config: PARADIGM_NETWORKS_URL/PARADIGM_NETWORKS_TOKEN env vars
+# take precedence, then the stored file (with refresh).
 function Resolve-PnConfig {
   $envBase = $env:PARADIGM_NETWORKS_URL
   $envToken = $env:PARADIGM_NETWORKS_TOKEN
-  if ($envBase -and $envToken) {
-    return [PSCustomObject]@{ BaseUrl = $envBase; AccessToken = $envToken }
-  }
-
-  $envBase = $env:SNANTIZER_BASE_URL
-  $envToken = $env:SNANTIZER_TOKEN
   if ($envBase -and $envToken) {
     return [PSCustomObject]@{ BaseUrl = $envBase; AccessToken = $envToken }
   }

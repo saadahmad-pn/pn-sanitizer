@@ -11,16 +11,16 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-$ScanUrlOverride = $env:SNANTIZER_SCAN_URL
+$ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
 # 40s (not 20s, matching the bash side): observed directly that
 # establishing the HTTPS connection to the scan API from a real Windows
 # target can itself take ~20-25s (likely a slow/blocked certificate
 # revocation check), before any actual server-side work even starts --
 # a stopgap while that root cause is investigated separately.
 $TimeoutSeconds = 40
-if ($env:SNANTIZER_TIMEOUT) {
+if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
-  if ([int]::TryParse($env:SNANTIZER_TIMEOUT, [ref]$parsedTimeout)) {
+  if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
     $TimeoutSeconds = $parsedTimeout
   }
 }
@@ -44,22 +44,11 @@ $Model = (Resolve-PnModel).Model
 $MaxTokens = 150
 
 $rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
-if (-not $rawMode) { $rawMode = $env:SNANTIZER_PROMPT_FAILURE_MODE }
 if (-not $rawMode) { $rawMode = "allow" }
 $rawMode = $rawMode.ToLowerInvariant()
 $PromptFailureMode = if ($rawMode -eq "block" -or $rawMode -eq "closed") { "closed" } else { "open" }
 
 Write-DebugLog -Message "===== check-prompt.ps1 invoked ===== HOME=$HOME | USERPROFILE=$env:USERPROFILE | USERNAME=$env:USERNAME | CredPath=$($Script:PnCredPath) | CredFileExists=$(Test-Path $Script:PnCredPath)" -LogPath $DebugLogPath
-
-# TEMPORARY diagnostic: dump every PARADIGM_NETWORKS_*/SNANTIZER_* env var
-# this process actually sees, to determine whether Cursor's plugin
-# "variables" settings are really being injected into hook subprocesses at
-# all -- hooks.json has no ${VAR} placeholders anywhere in it (unlike
-# mcp.json's documented env block), so this has never actually been
-# confirmed against a real Cursor-launched hook process before. Remove
-# once that's settled.
-$diagEnvVars = Get-ChildItem Env: | Where-Object { $_.Name -match '^(PARADIGM_NETWORKS_|SNANTIZER_)' } | ForEach-Object { "$($_.Name)=$($_.Value)" }
-Write-DebugLog -Message "DIAG env dump: $($diagEnvVars -join ' ')" -LogPath $DebugLogPath
 
 try {
   $payload = Get-StdinText
@@ -83,22 +72,6 @@ try {
   }
 
   $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
-
-  # Temporary, extra-verbose diagnostic: mirrors the manual field-by-field
-  # check exactly, from inside this hook's own process, so a mismatch
-  # against a manual interactive check points straight at an environment
-  # difference (e.g. $HOME) rather than the credentials file's content.
-  if (Test-Path $Script:PnCredPath -PathType Leaf) {
-    try {
-      $diagRaw = Get-Utf8FileText -Path $Script:PnCredPath
-      $diagParsed = $diagRaw | ConvertFrom-Json -ErrorAction Stop
-      Write-DebugLog -Message "DIAG credentials file | has base_url=$([bool]$diagParsed.base_url) has access_token=$([bool]$diagParsed.access_token) has refresh_token=$([bool]$diagParsed.refresh_token) has expires_at=$([bool]$diagParsed.expires_at)" -LogPath $DebugLogPath
-    } catch {
-      Write-DebugLog -Message "DIAG credentials file exists but failed to parse | error=$($_.Exception.Message)" -LogPath $DebugLogPath
-    }
-  } else {
-    Write-DebugLog -Message "DIAG credentials file does not exist at $($Script:PnCredPath)" -LogPath $DebugLogPath
-  }
 
   Write-DebugLog -Message "Resolving config (may refresh an expiring token)..." -LogPath $DebugLogPath
   $config = Resolve-PnConfig

@@ -255,12 +255,12 @@ assert_output_contains "echo '$captured_body'" "refresh_token=abc%2Bdef%3Dghi%26
 assert_output_contains "echo '$captured_body'" "client_id=cursor-plugin" "client_id present and unaffected (no reserved characters to encode)"
 
 test_case "pn_resolve_config uses env vars first"
-export SNANTIZER_BASE_URL="https://env.example.com"
-export SNANTIZER_TOKEN="env-token"
+export PARADIGM_NETWORKS_URL="https://env.example.com"
+export PARADIGM_NETWORKS_TOKEN="env-token"
 result=$(pn_resolve_config)
 assert_output_contains "echo '$result'" "https://env.example.com" "Uses env base_url"
 assert_output_contains "echo '$result'" "env-token" "Uses env token"
-unset SNANTIZER_BASE_URL SNANTIZER_TOKEN
+unset PARADIGM_NETWORKS_URL PARADIGM_NETWORKS_TOKEN
 
 test_case "pn_resolve_config falls back to file"
 rm -f "$HOME/.pn/credentials.json"

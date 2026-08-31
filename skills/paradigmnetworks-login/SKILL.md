@@ -39,7 +39,7 @@ reliable:
 macOS/Linux:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; }; then
   echo CONFIGURED
 else
   echo NOT_CONFIGURED
@@ -49,7 +49,7 @@ fi
 Windows (PowerShell):
 
 ```powershell
-if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN) -or ($env:SNANTIZER_BASE_URL -and $env:SNANTIZER_TOKEN)) {
+if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN)) {
   Write-Output "CONFIGURED"
 } else {
   Write-Output "NOT_CONFIGURED"

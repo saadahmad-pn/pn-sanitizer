@@ -26,14 +26,13 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
-SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
-TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
-TRANSCRIPT_LINES="${SNANTIZER_TRANSCRIPT_LINES:-500}"
+SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-20}"
+TRANSCRIPT_LINES="${PARADIGM_NETWORKS_TRANSCRIPT_LINES:-500}"
 # PARADIGM_NETWORKS_FAILURE_MODE (manual env var override: block/allow —
-# no Cursor Settings UI for this, must be set directly in the environment)
-# takes precedence; SNANTIZER_FAILURE_MODE (legacy shared-host override:
-# closed/open) is the fallback.
-RAW_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_FAILURE_MODE:-${SNANTIZER_FAILURE_MODE:-block}}" | tr '[:upper:]' '[:lower:]')
+# no Cursor Settings UI for this, must be set directly in the
+# environment).
+RAW_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_FAILURE_MODE:-block}" | tr '[:upper:]' '[:lower:]')
 case "$RAW_FAILURE_MODE" in
   allow|open) FAILURE_MODE="open" ;;
   *)          FAILURE_MODE="closed" ;;

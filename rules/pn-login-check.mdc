@@ -31,7 +31,7 @@ where, so path-guessing is unreliable. The credentials file lives at a fixed,
 well-known path regardless of install location. macOS/Linux:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; } || { [ -n "$SNANTIZER_BASE_URL" ] && [ -n "$SNANTIZER_TOKEN" ]; }; then
+if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; }; then
   echo CONFIGURED
 elif [ -n "$PARADIGM_NETWORKS_URL" ]; then
   echo NOT_CONFIGURED_URL_KNOWN
@@ -43,7 +43,7 @@ fi
 Windows (PowerShell):
 
 ```powershell
-if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN) -or ($env:SNANTIZER_BASE_URL -and $env:SNANTIZER_TOKEN)) {
+if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN)) {
   Write-Output "CONFIGURED"
 } elseif ($env:PARADIGM_NETWORKS_URL) {
   Write-Output "NOT_CONFIGURED_URL_KNOWN"

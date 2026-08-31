@@ -91,17 +91,17 @@ rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Write", "agent_message": "test content", "tool_input": {"file_path": "test.txt"}}'
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
-# With SNANTIZER_FAILURE_MODE=closed (default), should deny
+# With PARADIGM_NETWORKS_FAILURE_MODE=closed (default), should deny
 assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured"
 
 test_case "check-write.sh with FAILURE_MODE=open"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Write", "agent_message": "test", "tool_input": {"file_path": "f.txt"}}'
-export SNANTIZER_FAILURE_MODE="open"
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Fails open when mode=open"
-unset SNANTIZER_FAILURE_MODE
+unset PARADIGM_NETWORKS_FAILURE_MODE
 
 test_case "check-write.sh audit log written"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"

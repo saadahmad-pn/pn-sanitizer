@@ -251,23 +251,14 @@ pn_get_valid_access_token() {
   return 0
 }
 
-# Resolve config: new PARADIGM_NETWORKS_* names take precedence, then SNANTIZER_* names, then file
+# Resolve config: PARADIGM_NETWORKS_URL/PARADIGM_NETWORKS_TOKEN env vars
+# take precedence, then the stored file (with refresh).
 pn_resolve_config() {
   local env_base
   local env_token
 
-  # Check new variable names first (PARADIGM_NETWORKS_URL, PARADIGM_NETWORKS_TOKEN)
   env_base="${PARADIGM_NETWORKS_URL:-}"
   env_token="${PARADIGM_NETWORKS_TOKEN:-}"
-
-  if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
-    echo "$env_base $env_token"
-    return 0
-  fi
-
-  # Fall back to legacy names (SNANTIZER_BASE_URL, SNANTIZER_TOKEN)
-  env_base="${SNANTIZER_BASE_URL:-}"
-  env_token="${SNANTIZER_TOKEN:-}"
 
   if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
     echo "$env_base $env_token"

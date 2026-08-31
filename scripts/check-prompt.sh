@@ -25,8 +25,8 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
-SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
-TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
+SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-20}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
@@ -49,15 +49,14 @@ MAX_TOKENS=150
 
 # PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (manual env var override:
 # block/allow — no Cursor Settings UI for this, must be set directly in
-# the environment) takes precedence; SNANTIZER_PROMPT_FAILURE_MODE (legacy
-# shared-host override: closed/open) is the fallback. Defaults to "open" (unlike
-# check-write.sh's PARADIGM_NETWORKS_FAILURE_MODE, which defaults to
-# "closed"). This only governs failures below that happen *after*
-# pn_resolve_config succeeds — i.e. the user is already logged in.
-# "Paradigm Networks not configured" and "jq missing" always allow
-# unconditionally, regardless of this setting, so a not-yet-logged-in user
-# (or a machine without jq) can never get stuck on their first message.
-RAW_PROMPT_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_PROMPT_FAILURE_MODE:-${SNANTIZER_PROMPT_FAILURE_MODE:-allow}}" | tr '[:upper:]' '[:lower:]')
+# the environment). Defaults to "open" (unlike check-write.sh's
+# PARADIGM_NETWORKS_FAILURE_MODE, which defaults to "closed"). This only
+# governs failures below that happen *after* pn_resolve_config succeeds
+# -- i.e. the user is already logged in. "Paradigm Networks not
+# configured" and "jq missing" always allow unconditionally, regardless
+# of this setting, so a not-yet-logged-in user (or a machine without jq)
+# can never get stuck on their first message.
+RAW_PROMPT_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_PROMPT_FAILURE_MODE:-allow}" | tr '[:upper:]' '[:lower:]')
 case "$RAW_PROMPT_FAILURE_MODE" in
   block|closed) PROMPT_FAILURE_MODE="closed" ;;
   *)            PROMPT_FAILURE_MODE="open" ;;

@@ -4,13 +4,49 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-31 — Dropped the legacy SNANTIZER_* env var names entirely
+
+`SNANTIZER_*` was a misspelling of "sanitizer" left over from before this
+project's `PARADIGM_NETWORKS_*` rename (2026-08-17, below). With no
+tagged release and no installed base to be compatible with, every day it
+stayed made it more likely to become permanent public API surface with a
+typo in it. Removed the fallback entirely everywhere it appeared:
+
+- `PARADIGM_NETWORKS_URL`/`PARADIGM_NETWORKS_TOKEN`,
+  `PARADIGM_NETWORKS_FAILURE_MODE`,
+  `PARADIGM_NETWORKS_PROMPT_FAILURE_MODE` no longer fall back to their
+  `SNANTIZER_*` equivalents (`pn_config.sh`/`.ps1`, `check-prompt.sh/.ps1`,
+  `check-write.sh/.ps1`).
+- Three advanced/test-only override knobs that never had a
+  `PARADIGM_NETWORKS_*` equivalent in the first place — `SNANTIZER_SCAN_URL`,
+  `SNANTIZER_TIMEOUT`, `SNANTIZER_TRANSCRIPT_LINES` — were renamed rather
+  than deleted, since the functionality itself (pointing at a different
+  scan URL, overriding the timeout, capping transcript read length) is
+  still real and used by this project's own test suite:
+  `PARADIGM_NETWORKS_SCAN_URL_OVERRIDE`, `PARADIGM_NETWORKS_TIMEOUT`,
+  `PARADIGM_NETWORKS_TRANSCRIPT_LINES`.
+- `rules/pn-login-check.mdc` and `skills/paradigmnetworks-login/SKILL.md`'s
+  onboarding checks no longer treat a `SNANTIZER_BASE_URL`/`SNANTIZER_TOKEN`
+  pair as evidence of being configured.
+
+Also removed two stale `TEMPORARY diagnostic`/`Remove once that's
+settled` blocks from `check-prompt.ps1` left over from investigating
+whether Cursor delivers plugin Settings variables to hook subprocesses —
+that question was already settled (it doesn't; see
+`skills/paradigmnetworks-models/SKILL.md`'s "What not to do") and the
+diagnostic code was never cleaned up afterward.
+
+Confirmed via the user directly that nothing depends on the old names
+before removing them, per this repo's own remediation-brief instruction
+not to assume that.
+
 ## 2026-08-31 — Recorded the per-scan latency/cost tradeoff as a known decision
 
 Not a code change. Every prompt and every file write triggers a real,
 billed `/v1/messages` completion whose actual reply is discarded on the
 allow path (only the verdict, reverse-engineered from the response
 shape, matters — see `pn_parse_messages_response`'s comment). Each call
-carries up to a 20s timeout by default (`SNANTIZER_TIMEOUT`), and the
+carries up to a 20s timeout by default (`PARADIGM_NETWORKS_TIMEOUT`), and the
 hook entries themselves allow more (25s/45s) — so a prompt can pay up to
 that long before it's even sent to the model, and every file write pays
 it again, independently.

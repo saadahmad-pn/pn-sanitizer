@@ -10,29 +10,28 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-$ScanUrlOverride = $env:SNANTIZER_SCAN_URL
+$ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
 # 40s (not 20s, matching the bash side): observed directly that
 # establishing the HTTPS connection to the scan API from a real Windows
 # target can itself take ~20-25s (likely a slow/blocked certificate
 # revocation check), before any actual server-side work even starts --
 # a stopgap while that root cause is investigated separately.
 $TimeoutSeconds = 40
-if ($env:SNANTIZER_TIMEOUT) {
+if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
-  if ([int]::TryParse($env:SNANTIZER_TIMEOUT, [ref]$parsedTimeout)) {
+  if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
     $TimeoutSeconds = $parsedTimeout
   }
 }
 $TranscriptLines = 500
-if ($env:SNANTIZER_TRANSCRIPT_LINES) {
+if ($env:PARADIGM_NETWORKS_TRANSCRIPT_LINES) {
   $parsedLines = 0
-  if ([int]::TryParse($env:SNANTIZER_TRANSCRIPT_LINES, [ref]$parsedLines)) {
+  if ([int]::TryParse($env:PARADIGM_NETWORKS_TRANSCRIPT_LINES, [ref]$parsedLines)) {
     $TranscriptLines = $parsedLines
   }
 }
 
 $rawMode = $env:PARADIGM_NETWORKS_FAILURE_MODE
-if (-not $rawMode) { $rawMode = $env:SNANTIZER_FAILURE_MODE }
 if (-not $rawMode) { $rawMode = "block" }
 $rawMode = $rawMode.ToLowerInvariant()
 $FailureMode = if ($rawMode -eq "allow" -or $rawMode -eq "open") { "open" } else { "closed" }

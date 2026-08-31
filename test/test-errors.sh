@@ -46,11 +46,11 @@ chmod 755 "$readonly_dir"
 
 test_case "Transcript file doesn't exist"
 payload='{"tool_name": "Write", "agent_message": "", "transcript_path": "/nonexistent/path", "tool_input": {"file_path": "f.txt"}}'
-export SNANTIZER_FAILURE_MODE="open"
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Allows when transcript missing"
-unset SNANTIZER_FAILURE_MODE
+unset PARADIGM_NETWORKS_FAILURE_MODE
 
 echo ""
 echo -e "${BLUE}--- Malformed Input Tests ---${NC}"
@@ -126,10 +126,10 @@ echo "line1
 line2
 line3" > "$test_file"
 payload=$("$JQ_BIN" -n --arg path "$test_file" '{tool_name: "Write", agent_message: "", transcript_path: $path, tool_input: {file_path: "f.txt"}}')
-export SNANTIZER_FAILURE_MODE="open"
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
 assert_json_field_equals "$result" "permission" "allow" "Reads transcript when message empty"
-unset SNANTIZER_FAILURE_MODE
+unset PARADIGM_NETWORKS_FAILURE_MODE
 
 echo ""
 test_summary
