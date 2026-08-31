@@ -4,6 +4,31 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-08-31 — Recorded the per-scan latency/cost tradeoff as a known decision
+
+Not a code change. Every prompt and every file write triggers a real,
+billed `/v1/messages` completion whose actual reply is discarded on the
+allow path (only the verdict, reverse-engineered from the response
+shape, matters — see `pn_parse_messages_response`'s comment). Each call
+carries up to a 20s timeout by default (`SNANTIZER_TIMEOUT`), and the
+hook entries themselves allow more (25s/45s) — so a prompt can pay up to
+that long before it's even sent to the model, and every file write pays
+it again, independently.
+
+This wasn't a decision made when this plugin moved to `/v1/messages` —
+it's inherited unchanged from the retired `codedefense/scan` endpoint's
+timeout defaults. Recording it here explicitly so it's a tradeoff this
+project has actually decided to accept for now, not just something that
+happened to carry over. Not fixing it in this pass.
+
+Worth raising with whoever owns the backend/control-server side: the
+existing code comments already state the platform's guard fires *before*
+the requested model actually runs on the block path — if that's also
+true on the allow path, a `max_tokens: 1` request or a dedicated
+scan-only mode might avoid paying for a full completion that's thrown
+away on every single call. That's a backend question, not something
+resolvable from this repo alone.
+
 ## 2026-08-23 — Windows support
 
 Every hook and the login flow now has a native PowerShell twin
