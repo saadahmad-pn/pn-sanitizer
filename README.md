@@ -74,3 +74,9 @@ does not fire.
   means someone who can block this machine's network access to the
   scanner can silently disable prompt scanning while write scanning
   stays in its normal (blocking) state.
+
+## More
+
+- [Security policy](SECURITY.md) — how to report a vulnerability
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE) — MIT
