@@ -2,10 +2,11 @@
 # Fetches and displays the AI models available to the logged-in user's
 # Paradigm Networks org, via GET {base_url}/v1/models -- shows the exact
 # model IDs that can be passed to set-model.sh to change which model is
-# used for scanning prompts and writes (a Cursor plugin Settings field
-# for this does exist, but does not actually reach hook scripts -- see
-# check-prompt.sh's comment on its own MODEL resolution for how that was
-# confirmed; set-model.sh/pn_save_preferred_model is the real mechanism).
+# used for scanning prompts and writes (an earlier version had a Cursor
+# plugin Settings field for this, but it was removed -- it never actually
+# reached hook scripts -- see check-prompt.sh's comment on its own MODEL
+# resolution for how that was confirmed; set-model.sh/pn_save_preferred_model
+# is the real mechanism).
 # Standalone CLI script (invoked by the paradigmnetworks-models skill),
 # not a hook -- so unlike the hook scripts, nothing runs it
 # unconditionally on every platform, meaning there's no

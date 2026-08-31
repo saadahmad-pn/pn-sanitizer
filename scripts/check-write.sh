@@ -29,8 +29,9 @@ source "$SCRIPT_DIR/pn_config.sh"
 SCAN_URL_OVERRIDE="${SNANTIZER_SCAN_URL:-}"
 TIMEOUT_SECONDS="${SNANTIZER_TIMEOUT:-20}"
 TRANSCRIPT_LINES="${SNANTIZER_TRANSCRIPT_LINES:-500}"
-# PARADIGM_NETWORKS_FAILURE_MODE (marketplace setting: block/allow) takes
-# precedence; SNANTIZER_FAILURE_MODE (legacy shared-host override:
+# PARADIGM_NETWORKS_FAILURE_MODE (manual env var override: block/allow —
+# no Cursor Settings UI for this, must be set directly in the environment)
+# takes precedence; SNANTIZER_FAILURE_MODE (legacy shared-host override:
 # closed/open) is the fallback.
 RAW_FAILURE_MODE=$(echo "${PARADIGM_NETWORKS_FAILURE_MODE:-${SNANTIZER_FAILURE_MODE:-block}}" | tr '[:upper:]' '[:lower:]')
 case "$RAW_FAILURE_MODE" in
@@ -44,20 +45,19 @@ DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-write.log"
 STOP_INSTRUCTION="A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model. No
-# per-user model preference exists yet (that's a separate, later addition
-# -- see PARADIGM_NETWORKS_MODEL below for the only override that exists
-# today), so this is a hardcoded default: cheap/fast tier, chosen because
-# testing showed the block/allow verdict is identical across models and
-# max_tokens values -- the platform's guard fires before the requested
-# model ever runs, so model choice only affects cost/latency on the
-# (always-discarded) allow-path reply, not detection accuracy.
+# /v1/messages endpoint on the same backend, which requires a model.
+# DEFAULT_MODEL is the last-resort fallback: cheap/fast tier, chosen
+# because testing showed the block/allow verdict is identical across
+# models and max_tokens values -- the platform's guard fires before the
+# requested model ever runs, so model choice only affects cost/latency on
+# the (always-discarded) allow-path reply, not detection accuracy.
 DEFAULT_MODEL="anthropic/claude-haiku-4-5-20251001"
-# Precedence: PARADIGM_NETWORKS_MODEL env var (works if it's ever actually
-# set -- e.g. a shared-host setup exporting it directly; Cursor's own
-# plugin Settings panel does NOT deliver this to hook scripts, confirmed
-# directly against a real installed plugin -- there is no live channel
-# from that settings field to here) > the model saved locally via the
+# Precedence: PARADIGM_NETWORKS_MODEL env var (a manual override -- only
+# takes effect if something exports it directly into the process
+# environment, e.g. a shared-host setup; there is no Cursor Settings UI
+# for this -- an earlier version had one, but it was removed after
+# confirming, against a real installed plugin, that Cursor's plugin
+# Settings panel never delivers configured values to hook scripts) > the model saved locally via the
 # paradigmnetworks-models skill / set-model.sh (pn_get_preferred_model,
 # in pn_config.sh) > hardcoded default.
 MODEL="${PARADIGM_NETWORKS_MODEL:-}"

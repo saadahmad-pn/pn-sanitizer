@@ -42,22 +42,22 @@ $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
 $StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model. No
-# per-user model preference exists yet (that's a separate, later addition
-# -- PARADIGM_NETWORKS_MODEL below is the only override that exists
-# today), so this is a hardcoded default: cheap/fast tier, chosen because
-# testing showed the block/allow verdict is identical across models and
-# max_tokens values -- the platform's guard fires before the requested
-# model ever runs, so model choice only affects cost/latency on the
-# (always-discarded) allow-path reply, not detection accuracy.
+# /v1/messages endpoint on the same backend, which requires a model.
+# $DefaultModel is the last-resort fallback: cheap/fast tier, chosen
+# because testing showed the block/allow verdict is identical across
+# models and max_tokens values -- the platform's guard fires before the
+# requested model ever runs, so model choice only affects cost/latency on
+# the (always-discarded) allow-path reply, not detection accuracy.
 $DefaultModel = "anthropic/claude-haiku-4-5-20251001"
-# Precedence: PARADIGM_NETWORKS_MODEL env var (works if it's ever actually
-# set -- e.g. a shared-host setup exporting it directly; Cursor's own
-# plugin Settings panel does NOT deliver this to hook scripts, confirmed
-# directly against a real installed plugin -- there is no live channel
-# from that settings field to here) > the model saved locally via the
-# paradigmnetworks-models skill / set-model.ps1 (Get-PnPreferredModel, in
-# pn_config.ps1) > hardcoded default.
+# Precedence: PARADIGM_NETWORKS_MODEL env var (a manual override -- only
+# takes effect if something exports it directly into the process
+# environment, e.g. a shared-host setup; there is no Cursor Settings UI
+# for this -- an earlier version had one, but it was removed after
+# confirming, against a real installed plugin, that Cursor's plugin
+# Settings panel never delivers configured values to hook scripts) > the
+# model saved locally via the paradigmnetworks-models skill /
+# set-model.ps1 (Get-PnPreferredModel, in pn_config.ps1) > hardcoded
+# default.
 $Model = $env:PARADIGM_NETWORKS_MODEL
 if (-not $Model) { $Model = Get-PnPreferredModel }
 if (-not $Model) { $Model = $DefaultModel }

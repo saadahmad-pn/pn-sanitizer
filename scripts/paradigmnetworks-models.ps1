@@ -1,12 +1,13 @@
 # Fetches and displays the AI models available to the logged-in user's
 # Paradigm Networks org, via GET {base_url}/v1/models -- shows the exact
 # model IDs that can be passed to set-model.ps1 to change which model is
-# used for scanning prompts and writes (a Cursor plugin Settings field
-# for this does exist, but does not actually reach hook scripts -- see
-# check-prompt.ps1's comment on its own $Model resolution for how that
-# was confirmed; set-model.ps1/Save-PnPreferredModel is the real
-# mechanism). Standalone CLI script (invoked by the paradigmnetworks-models
-# skill), not a hook. Mirrors scripts/paradigmnetworks-models.sh.
+# used for scanning prompts and writes (an earlier version had a Cursor
+# plugin Settings field for this, but it was removed -- it never actually
+# reached hook scripts -- see check-prompt.ps1's comment on its own $Model
+# resolution for how that was confirmed; set-model.ps1/Save-PnPreferredModel
+# is the real mechanism). Standalone CLI script (invoked by the
+# paradigmnetworks-models skill), not a hook. Mirrors
+# scripts/paradigmnetworks-models.sh.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

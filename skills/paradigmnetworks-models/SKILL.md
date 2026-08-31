@@ -27,13 +27,15 @@ description: Show which AI models are available to the user's Paradigm Networks 
   prints the real one first (`Currently scanning with: ...`); relay that
   line, don't guess from memory or from a stale answer given earlier in
   the conversation.
-- **A Cursor plugin Settings field named "AI model used for scanning" also
-  exists, but do not tell users to use it.** It looks like the obvious way
-  to do this, but it doesn't actually work — Cursor does not deliver
-  plugin Settings values to hook scripts (confirmed directly, see
-  `check-prompt.sh`'s comment on its own model-resolution logic for how).
-  If a user mentions that field, tell them plainly it doesn't do anything
-  right now and that this skill is the real way to change it.
+- **There is no Cursor Settings field for this — don't imply one exists or
+  tell a user to go looking for it.** An earlier version of this plugin had
+  one ("AI model used for scanning"), but it was removed: Cursor does not
+  deliver plugin Settings values to hook scripts (confirmed directly, see
+  `check-prompt.sh`'s comment on its own model-resolution logic for how), so
+  the field only ever looked functional. This skill is the only real way to
+  view or change the model. If a user asks about a Settings field for this
+  (e.g. from stale docs or a memory of an older version), tell them plainly
+  it no longer exists and that this skill replaced it.
 
 ## Workflow
 
@@ -108,10 +110,8 @@ Windows:
 
 Relay its output verbatim. It re-validates the id against the live list
 itself before saving (a second check is fine — cheap, and it's the last
-line of defense against a typo actually getting saved), and it's what
-Cursor Settings → Plugins → Paradigm Networks → "AI model used for
-scanning" *looks* like it should do but doesn't (see "What not to do"
-above). On success, the new model takes effect on the very next prompt or
-write — no restart or re-login needed. On failure, relay the actual error
+line of defense against a typo actually getting saved). On success, the
+new model takes effect on the very next prompt or write — no restart or
+re-login needed. On failure, relay the actual error
 (e.g. an unrecognized model id, or not configured) rather than assuming it
 worked.

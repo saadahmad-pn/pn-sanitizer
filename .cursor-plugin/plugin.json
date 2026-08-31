@@ -17,33 +17,5 @@
   "category": "security",
   "keywords": ["hooks", "security", "prompt-guard", "Paradigm Networks"],
   "tags": ["Code Defense", "policy", "compliance", "scanner", "Paradigm Networks"],
-  "hooks": "hooks/hooks.json",
-  "variables": {
-    "type": "object",
-    "properties": {
-      "PARADIGM_NETWORKS_URL": {
-        "type": "string",
-        "title": "Paradigm Networks base URL",
-        "description": "Your organization's Paradigm Networks URL, e.g. https://acme.paradigmnetworks.ai"
-      },
-      "PARADIGM_NETWORKS_FAILURE_MODE": {
-        "type": "string",
-        "title": "If the scanner is unreachable during a file write",
-        "description": "Block the write (recommended, default) or allow it through unscanned.",
-        "enum": ["block", "allow"]
-      },
-      "PARADIGM_NETWORKS_PROMPT_FAILURE_MODE": {
-        "type": "string",
-        "title": "If the scanner is unreachable while submitting a prompt",
-        "description": "Allow the prompt through unscanned (default — required so a not-yet-logged-in user is never blocked), or block it once your team is fully onboarded.",
-        "enum": ["allow", "block"]
-      },
-      "PARADIGM_NETWORKS_MODEL": {
-        "type": "string",
-        "title": "AI model used for scanning (advanced)",
-        "description": "Leave blank to use the default. Ask the agent \"what models are available\" to see the exact model IDs your organization can use, then paste one here."
-      }
-    },
-    "required": ["PARADIGM_NETWORKS_URL"]
-  }
+  "hooks": "hooks/hooks.json"
 }
