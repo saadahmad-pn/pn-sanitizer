@@ -54,6 +54,29 @@ resolve_jq() {
 
 JQ_BIN="$(resolve_jq)" || JQ_BIN=""
 
+# URL encoding helpers. Shared here (rather than living only in login.sh,
+# where this originated) because pn_config.sh's token refresh needs it too
+# -- a refresh token is just as capable of containing a URL-reserved
+# character as an authorization code is, and a raw, unencoded token in a
+# form body is corrupted by the receiving server exactly the same way.
+urlencode_strict() {
+  local string="$1"
+  echo -n "$string" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().rstrip()))" 2>/dev/null || \
+  echo -n "$string" | python3 -c "import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null || \
+  {
+    # Fallback: pure-bash percent-encoding (used when python3 is unavailable)
+    local result="" c hex i
+    for (( i = 0; i < ${#string}; i++ )); do
+      c="${string:i:1}"
+      case "$c" in
+        [a-zA-Z0-9.~_-]) result+="$c" ;;
+        *) printf -v hex '%%%02X' "'$c"; result+="$hex" ;;
+      esac
+    done
+    echo -n "$result"
+  }
+}
+
 # JSON helpers
 
 json_string() {

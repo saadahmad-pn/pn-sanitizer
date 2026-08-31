@@ -42,24 +42,8 @@ make_pkce_pair() {
   echo "$verifier" "$challenge"
 }
 
-# URL encode a string
-urlencode_strict() {
-  local string="$1"
-  echo -n "$string" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().rstrip()))" 2>/dev/null || \
-  echo -n "$string" | python3 -c "import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null || \
-  {
-    # Fallback: pure-bash percent-encoding (used when python3 is unavailable)
-    local result="" c hex i
-    for (( i = 0; i < ${#string}; i++ )); do
-      c="${string:i:1}"
-      case "$c" in
-        [a-zA-Z0-9.~_-]) result+="$c" ;;
-        *) printf -v hex '%%%02X' "'$c"; result+="$hex" ;;
-      esac
-    done
-    echo -n "$result"
-  }
-}
+# urlencode_strict now lives in lib/common.sh (already sourced above) --
+# pn_config.sh's token refresh needs it too, see that file's comment.
 
 # URL decode a string (the inverse of urlencode_strict): '+' -> space, then
 # %XX -> byte. Used on raw query-string values pulled straight off the

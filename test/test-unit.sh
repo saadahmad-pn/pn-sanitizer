@@ -213,6 +213,28 @@ mkdir -p "$HOME/.pn"
 echo '{"base_url": "https://test.com"}' > "$HOME/.pn/credentials.json"
 assert_failure "pn_load_credentials" "pn_load_credentials fails for missing required fields"
 
+test_case "pn_refresh_token URL-encodes the refresh token and client_id in its form body"
+# Regression test for P0-4: the body used to be built by raw
+# interpolation (grant_type=refresh_token&refresh_token=${refresh_token}&
+# client_id=${CLIENT_ID}), so a refresh token containing "+", "&", or "="
+# corrupted the request -- "+" decodes server-side as a space, and both
+# "&" and "=" are the form format's own delimiter characters. Stubs curl
+# to capture the actual --data-raw body instead of hitting the network.
+curl() {
+  local args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "--data-raw" ]]; then
+      echo "${args[$((i + 1))]}" > "$TEST_TEMP_DIR/captured_refresh_body.txt"
+    fi
+  done
+  echo '{"access_token":"a","refresh_token":"b","expires_in":3600}'
+}
+pn_refresh_token "https://test.example.com" "abc+def=ghi&jkl" >/dev/null
+unset -f curl
+captured_body=$(cat "$TEST_TEMP_DIR/captured_refresh_body.txt" 2>/dev/null)
+assert_output_contains "echo '$captured_body'" "refresh_token=abc%2Bdef%3Dghi%26jkl" "Refresh token is fully percent-encoded, not raw-interpolated"
+assert_output_contains "echo '$captured_body'" "client_id=cursor-plugin" "client_id present and unaffected (no reserved characters to encode)"
+
 test_case "pn_resolve_config uses env vars first"
 export SNANTIZER_BASE_URL="https://env.example.com"
 export SNANTIZER_TOKEN="env-token"

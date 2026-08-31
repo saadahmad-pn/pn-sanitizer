@@ -121,11 +121,15 @@ pn_refresh_token() {
 
   local token_url="${base_url%/}/api/v1/plugin/token"
 
+  # urlencode_strict (lib/common.sh): a refresh token is just as capable of
+  # containing a URL-reserved character as an authorization code is (see
+  # login.sh's exchange_code, which already encodes every field it sends).
+  # An unencoded "+" in particular is common in base64-ish tokens and
+  # decodes server-side as a space, so an affected refresh silently
+  # corrupts the token instead of erroring clearly -- the failure mode is
+  # "user is mysteriously logged out" on whichever refresh first hits one.
   local body
-  body=$(cat <<EOF
-grant_type=refresh_token&refresh_token=${refresh_token}&client_id=${CLIENT_ID}
-EOF
-)
+  body="grant_type=refresh_token&refresh_token=$(urlencode_strict "$refresh_token")&client_id=$(urlencode_strict "$CLIENT_ID")"
 
   local response
   response=$(curl -s -X POST "$token_url" \
