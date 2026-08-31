@@ -126,7 +126,7 @@ mkdir -p "$REPO_CTX_WORKSPACE/repo-a"
   git commit --allow-empty -qm init) >/dev/null 2>&1
 
 test_case "check-repo-context.sh writes a rule file with sanitized git context"
-payload=$(jq -n --arg root "$REPO_CTX_WORKSPACE" '{workspace_roots: [$root]}')
+payload=$("$JQ_BIN" -n --arg root "$REPO_CTX_WORKSPACE" '{workspace_roots: [$root]}')
 result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "continue" "true" "Always continues"

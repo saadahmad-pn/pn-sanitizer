@@ -73,7 +73,7 @@ result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
 
 test_case "Very large prompt (10KB)"
 large_prompt=$(python3 -c "print('x' * 10000)")
-payload=$(jq -n --arg p "$large_prompt" '{prompt: $p}')
+payload=$("$JQ_BIN" -n --arg p "$large_prompt" '{prompt: $p}')
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
 # Should not crash or timeout
 
@@ -83,7 +83,7 @@ echo -e "${BLUE}--- Edge Cases ---${NC}"
 test_case "Token expiring in exactly 60 seconds"
 future_expiry=$(($(date +%s) + 60))
 mkdir -p "$HOME/.pn"
-jq -n \
+"$JQ_BIN" -n \
   --arg base_url "https://test.com" \
   --arg access_token "old-token" \
   --arg refresh_token "refresh-token" \
@@ -96,7 +96,7 @@ pn_resolve_config 2>/dev/null || true
 test_case "Token already expired"
 past_expiry=$(($(date +%s) - 3600))
 mkdir -p "$HOME/.pn"
-jq -n \
+"$JQ_BIN" -n \
   --arg base_url "https://test.com" \
   --arg access_token "old-token" \
   --arg refresh_token "refresh-token" \
@@ -123,7 +123,7 @@ test_file="$TEST_TEMP_DIR/transcript.txt"
 echo "line1
 line2
 line3" > "$test_file"
-payload=$(jq -n --arg path "$test_file" '{tool_name: "Write", agent_message: "", transcript_path: $path, tool_input: {file_path: "f.txt"}}')
+payload=$("$JQ_BIN" -n --arg path "$test_file" '{tool_name: "Write", agent_message: "", transcript_path: $path, tool_input: {file_path: "f.txt"}}')
 export SNANTIZER_FAILURE_MODE="open"
 result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
 assert_json_field_equals "$result" "permission" "allow" "Reads transcript when message empty"

@@ -27,48 +27,61 @@ FAILED_SUITES=()
 # Test Suite 1: Unit Tests
 echo -e "${BLUE}[1/4]${NC} Running Unit Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-if "$TEST_DIR/test-unit.sh" > /tmp/unit-test.log 2>&1; then
-  unit_passed=$(grep "Passed:" /tmp/unit-test.log | awk '{print $2}')
-  unit_total=$(grep "Total:" /tmp/unit-test.log | awk '{print $2}')
+"$TEST_DIR/test-unit.sh" > /tmp/unit-test.log 2>&1
+unit_status=$?
+unit_passed=$(grep "Passed:" /tmp/unit-test.log | awk '{print $2}')
+unit_total=$(grep "Total:" /tmp/unit-test.log | awk '{print $2}')
+unit_failed=$(grep "Failed:" /tmp/unit-test.log | awk '{print $2}')
+# Always accumulate real assertion counts from the log, whether the suite
+# passed or not -- test_summary prints Total/Passed/Failed either way, so
+# a failing suite's actual counts are available and shouldn't be replaced
+# with a flat "1 suite failed" that hides how many assertions ran.
+TOTAL_TESTS=$((TOTAL_TESTS + ${unit_total:-0}))
+TOTAL_PASSED=$((TOTAL_PASSED + ${unit_passed:-0}))
+TOTAL_FAILED=$((TOTAL_FAILED + ${unit_failed:-0}))
+if [[ $unit_status -eq 0 ]]; then
   echo -e "${GREEN}✓ Unit Tests: $unit_passed/$unit_total passed${NC}"
-  TOTAL_TESTS=$((TOTAL_TESTS + unit_total))
-  TOTAL_PASSED=$((TOTAL_PASSED + unit_passed))
 else
-  echo -e "${RED}✗ Unit Tests failed${NC}"
+  echo -e "${RED}✗ Unit Tests failed ($unit_passed/$unit_total passed)${NC}"
   FAILED_SUITES+=("Unit Tests")
-  TOTAL_FAILED=$((TOTAL_FAILED + 1))
 fi
 echo ""
 
 # Test Suite 2: Integration Tests
 echo -e "${BLUE}[2/4]${NC} Running Integration Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-if "$TEST_DIR/test-hooks.sh" > /tmp/integration-test.log 2>&1; then
-  int_passed=$(grep "Passed:" /tmp/integration-test.log | awk '{print $2}')
-  int_total=$(grep "Total:" /tmp/integration-test.log | awk '{print $2}')
+"$TEST_DIR/test-hooks.sh" > /tmp/integration-test.log 2>&1
+int_status=$?
+int_passed=$(grep "Passed:" /tmp/integration-test.log | awk '{print $2}')
+int_total=$(grep "Total:" /tmp/integration-test.log | awk '{print $2}')
+int_failed=$(grep "Failed:" /tmp/integration-test.log | awk '{print $2}')
+TOTAL_TESTS=$((TOTAL_TESTS + ${int_total:-0}))
+TOTAL_PASSED=$((TOTAL_PASSED + ${int_passed:-0}))
+TOTAL_FAILED=$((TOTAL_FAILED + ${int_failed:-0}))
+if [[ $int_status -eq 0 ]]; then
   echo -e "${GREEN}✓ Integration Tests: $int_passed/$int_total passed${NC}"
-  TOTAL_TESTS=$((TOTAL_TESTS + int_total))
-  TOTAL_PASSED=$((TOTAL_PASSED + int_passed))
 else
-  echo -e "${RED}✗ Integration Tests failed${NC}"
+  echo -e "${RED}✗ Integration Tests failed ($int_passed/$int_total passed)${NC}"
   FAILED_SUITES+=("Integration Tests")
-  TOTAL_FAILED=$((TOTAL_FAILED + 1))
 fi
 echo ""
 
 # Test Suite 3: Error Scenario Tests
 echo -e "${BLUE}[3/4]${NC} Running Error Scenario Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-if "$TEST_DIR/test-errors.sh" > /tmp/error-test.log 2>&1; then
-  err_passed=$(grep "Passed:" /tmp/error-test.log | awk '{print $2}')
-  err_total=$(grep "Total:" /tmp/error-test.log | awk '{print $2}')
+"$TEST_DIR/test-errors.sh" > /tmp/error-test.log 2>&1
+err_status=$?
+err_passed=$(grep "Passed:" /tmp/error-test.log | awk '{print $2}')
+err_total=$(grep "Total:" /tmp/error-test.log | awk '{print $2}')
+err_failed=$(grep "Failed:" /tmp/error-test.log | awk '{print $2}')
+TOTAL_TESTS=$((TOTAL_TESTS + ${err_total:-0}))
+TOTAL_PASSED=$((TOTAL_PASSED + ${err_passed:-0}))
+TOTAL_FAILED=$((TOTAL_FAILED + ${err_failed:-0}))
+if [[ $err_status -eq 0 ]]; then
   echo -e "${GREEN}✓ Error Scenario Tests: $err_passed/$err_total passed${NC}"
-  TOTAL_TESTS=$((TOTAL_TESTS + err_total))
-  TOTAL_PASSED=$((TOTAL_PASSED + err_passed))
 else
-  echo -e "${RED}✗ Error Scenario Tests failed${NC}"
+  echo -e "${RED}✗ Error Scenario Tests failed ($err_passed/$err_total passed)${NC}"
   FAILED_SUITES+=("Error Scenario Tests")
-  TOTAL_FAILED=$((TOTAL_FAILED + 1))
 fi
 echo ""
 
