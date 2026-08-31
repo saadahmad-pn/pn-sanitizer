@@ -220,11 +220,9 @@ main() {
       ;;
     block)
       pn_reset_scan_anomaly
-      # EXPERIMENT (revert to the plain "[Paradigm Networks] $message"
-      # form if this doesn't render as intended): confirmed **bold**,
-      # blank-line breaks, and `inline code` all render correctly in
-      # Cursor's UI. `### heading` and `> blockquote` below are new,
-      # untested here -- worth checking specifically.
+      # Markdown formatting (**bold**, blank-line breaks, `inline code`,
+      # `### heading`, and `> blockquote`) confirmed rendering correctly
+      # in Cursor's UI.
       #
       # PN_MSG_MESSAGE is already the extracted reason (pn_parse_messages_
       # response applies the same "security concerns: X" pattern before

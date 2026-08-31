@@ -197,13 +197,13 @@ try {
     "block" {
       Reset-PnScanAnomaly
       # Mirrors scripts/check-prompt.sh's block-message formatting
-      # exactly -- see that file's comments for the full rationale. Note
-      # from testing on a real Windows target: one specific Cursor UI
-      # surface ("Submission blocked by hook") silently drops **bold**
-      # weight (the markdown gets stripped, but no bold is applied),
-      # while `inline code` highlighting does render correctly there.
-      # Porting the same design anyway to get a clean, direct read on how
-      # the new ### heading / > blockquote parts render in that surface.
+      # exactly -- see that file's comments for the full rationale.
+      # Markdown formatting confirmed rendering correctly in Cursor's UI,
+      # with one known exception from testing on a real Windows target:
+      # one specific Cursor UI surface ("Submission blocked by hook")
+      # silently drops **bold** weight (the markdown gets stripped, but
+      # no bold is applied), while `inline code`, `### heading`, and
+      # `> blockquote` all render correctly there.
       #
       # $parsedVerdict.Message is already the extracted reason
       # (ConvertFrom-PnMessagesResponse applies the same "security
