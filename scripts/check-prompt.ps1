@@ -79,7 +79,15 @@ try {
     $parsedPayload = $payload | ConvertFrom-Json -ErrorAction Stop
   } catch {
     Write-DebugLog -Message "Payload failed to parse as JSON | error=$($_.Exception.Message) | raw(first 300 chars)=$($payload.Substring(0, [Math]::Min(300, $payload.Length)))" -LogPath $DebugLogPath
-    Write-JsonDeny -Message "Received invalid input. Prompt blocked."
+    # Deliberately always allow here, unlike the $PromptFailureMode-driven
+    # branches below: a malformed payload usually signals a Cursor
+    # integration/encoding quirk, not an unreachable scanner. Routing it
+    # through $PromptFailureMode would mean an affected machine gets every
+    # single prompt blocked persistently, which is worse than a transient
+    # scanner outage -- and here the blast radius is the whole product, not
+    # just file writes (see check-write.ps1's identical handling of this
+    # same situation for the write side).
+    Write-JsonAllow -Message "Received invalid input. Allowing prompt -- it was not scanned."
     return
   }
 

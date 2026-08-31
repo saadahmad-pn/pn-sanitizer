@@ -58,7 +58,9 @@ echo -e "${BLUE}--- Malformed Input Tests ---${NC}"
 test_case "Invalid JSON in hook payload"
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "not json" 2>/dev/null)
 assert_json_valid "$result" "Returns valid JSON"
-assert_json_field_equals "$result" "continue" "false" "Denies malformed input"
+# See P0-1: malformed input must fail open (like check-write.sh already
+# does), not hard-block every prompt with no PROMPT_FAILURE_MODE escape.
+assert_json_field_equals "$result" "continue" "true" "Allows malformed input (fails open, not closed)"
 
 test_case "Missing required fields in JSON"
 payload='{"other_field": "value"}'

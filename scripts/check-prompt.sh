@@ -94,8 +94,17 @@ main() {
     return 0
   fi
 
+  # Deliberately always allow here, unlike the PROMPT_FAILURE_MODE-driven
+  # branches below: a malformed payload usually signals a Cursor
+  # integration/encoding quirk, not an unreachable scanner. Routing it
+  # through PROMPT_FAILURE_MODE would mean an affected machine gets every
+  # single prompt blocked persistently, which is worse than a transient
+  # scanner outage -- and here the blast radius is the whole product, not
+  # just file writes (see check-write.sh's identical handling of this
+  # same situation for the write side).
   if ! echo "$payload" | "$JQ_BIN" empty 2>/dev/null; then
-    json_deny "Received invalid input. Prompt blocked."
+    log_debug "Received invalid/unparseable stdin payload; allowing prompt unscanned." "$DEBUG_LOG_PATH"
+    json_allow "Received invalid input. Allowing prompt — it was not scanned."
     return 0
   fi
 

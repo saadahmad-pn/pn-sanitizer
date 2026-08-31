@@ -57,7 +57,13 @@ fi
 test_case "check-prompt.sh with invalid JSON input"
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "not valid json" 2>/dev/null)
 assert_json_valid "$result" "Valid JSON output even with bad input"
-assert_json_field_equals "$result" "continue" "false" "Denies on invalid input"
+# A malformed payload is a Cursor integration/encoding quirk, not an
+# unreachable scanner -- it must always allow, the same way check-write.sh
+# already does for the identical situation (see P0-1: this used to
+# hardcode a deny here regardless of PROMPT_FAILURE_MODE, which meant a
+# payload-shape change could block every prompt for an affected user with
+# no escape hatch).
+assert_json_field_equals "$result" "continue" "true" "Allows on invalid input (fails open, not closed)"
 
 test_case "check-prompt.sh with empty prompt"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
