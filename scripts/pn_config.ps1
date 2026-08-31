@@ -77,13 +77,6 @@ function Save-PnCredentials {
     [Parameter(Mandatory = $true)][long]$ExpiresAt
   )
 
-  $credsObject = [PSCustomObject]@{
-    base_url      = $BaseUrl
-    access_token  = $AccessToken
-    refresh_token = $RefreshToken
-    expires_at    = $ExpiresAt
-  }
-
   # Write to a temp file first, lock it down, then move into place --
   # mirrors the bash version's mktemp + chmod-before-move pattern so the
   # credentials file is never briefly world-readable.
@@ -99,6 +92,28 @@ function Save-PnCredentials {
       New-Item -ItemType Directory -Path $Script:PnCredDir -Force -ErrorAction Stop | Out-Null
     }
     Protect-PathForCurrentUserOnly -Path $Script:PnCredDir
+
+    # Merge into whatever's already on disk, not a from-scratch rebuild --
+    # this function runs automatically and silently on every token
+    # refresh (see Get-PnValidAccessToken below), so a naive rebuild
+    # would wipe any field this function doesn't itself know about (e.g.
+    # a saved PreferredModel, see Save-PnPreferredModel) the very next
+    # time a session runs long enough to trigger a refresh.
+    $credsObject = [PSCustomObject]@{}
+    if (Test-Path $Script:PnCredPath -PathType Leaf) {
+      try {
+        $existing = (Get-Utf8FileText -Path $Script:PnCredPath) | ConvertFrom-Json -ErrorAction Stop
+        if ($existing) { $credsObject = $existing }
+      } catch {
+        # Corrupt/unreadable existing file -- fall through with an empty
+        # object rather than fail the save outright.
+      }
+    }
+    $credsObject | Add-Member -NotePropertyName "base_url" -NotePropertyValue $BaseUrl -Force
+    $credsObject | Add-Member -NotePropertyName "access_token" -NotePropertyValue $AccessToken -Force
+    $credsObject | Add-Member -NotePropertyName "refresh_token" -NotePropertyValue $RefreshToken -Force
+    $credsObject | Add-Member -NotePropertyName "expires_at" -NotePropertyValue $ExpiresAt -Force
+
     Set-Utf8FileTextNoBom -Path $tempFile -Value ($credsObject | ConvertTo-Json -Compress)
     Protect-PathForCurrentUserOnly -Path $tempFile
     Move-Item -Path $tempFile -Destination $Script:PnCredPath -Force -ErrorAction Stop
@@ -108,6 +123,52 @@ function Save-PnCredentials {
     Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
     return $false
   }
+}
+
+# Save the user's preferred scanning model. Separate from
+# Save-PnCredentials -- a model change shouldn't require also supplying
+# BaseUrl/AccessToken/RefreshToken/ExpiresAt -- but uses the same
+# merge-then-atomic-write pattern. Requires an existing, valid
+# credentials file (there's nothing meaningful to merge a model
+# preference into otherwise).
+function Save-PnPreferredModel {
+  param(
+    [Parameter(Mandatory = $true)][string]$Model
+  )
+
+  if (-not (Test-Path $Script:PnCredPath -PathType Leaf)) {
+    return $false
+  }
+
+  $tempFile = "$($Script:PnCredPath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
+  try {
+    $existing = (Get-Utf8FileText -Path $Script:PnCredPath) | ConvertFrom-Json -ErrorAction Stop
+    $existing | Add-Member -NotePropertyName "preferred_model" -NotePropertyValue $Model -Force
+
+    Set-Utf8FileTextNoBom -Path $tempFile -Value ($existing | ConvertTo-Json -Compress)
+    Protect-PathForCurrentUserOnly -Path $tempFile
+    Move-Item -Path $tempFile -Destination $Script:PnCredPath -Force -ErrorAction Stop
+    Protect-PathForCurrentUserOnly -Path $Script:PnCredPath
+    return $true
+  } catch {
+    Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
+    return $false
+  }
+}
+
+# Returns the stored preferred_model, or an empty string if unset or not
+# configured. Deliberately independent of Resolve-PnConfig -- this is a
+# plain file read, no auth/refresh machinery needed.
+function Get-PnPreferredModel {
+  if (-not (Test-Path $Script:PnCredPath -PathType Leaf)) {
+    return ""
+  }
+  try {
+    $creds = (Get-Utf8FileText -Path $Script:PnCredPath) | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    return ""
+  }
+  return [string](Get-JsonProperty -InputObject $creds -Name "preferred_model" -Default "")
 }
 
 # Returns a PSCustomObject with AccessToken/RefreshToken/ExpiresIn, or
