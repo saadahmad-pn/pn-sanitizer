@@ -255,6 +255,66 @@ rm -f "$HOME/.pn/credentials.json"
 assert_failure "pn_save_preferred_model 'some-model'" "Returns failure with no credentials file to merge into"
 
 echo ""
+echo -e "${BLUE}=== Unit Tests: login.sh ===${NC}"
+
+# Safe to source directly (rather than sed-extracting functions): login.sh
+# guards its own `main "$@"` call behind a BASH_SOURCE-vs-$0 check
+# specifically so it can be sourced like this for testing.
+source "$SCRIPTS_DIR/login.sh"
+
+test_case "wait_for_callback: a denied-consent callback is reported as a denial, not a false CSRF alarm"
+# Regression test for P0-3: wait_for_callback used to return code/state/
+# error as a single space-joined string (`echo "$CODE $STATE $ERROR"`),
+# read back with `read -r code state_got error_msg`. A denied consent has
+# no code, so that leading empty field shifted STATE into error_msg's
+# slot and ERROR out of the string entirely -- error_msg silently landed
+# empty, the (now-misaligned) state comparison failed instead, and the
+# user saw "possible CSRF, aborting" for what was actually a normal
+# denial. Drives the real function end-to-end via a real local HTTP
+# request, the same mechanism a real browser redirect uses.
+callback_port=18765
+callback_deadline=$(($(date +%s) + 10))
+(
+  sleep 0.5
+  curl -s -o /dev/null "http://127.0.0.1:${callback_port}/callback?state=abc123&error=access_denied"
+) &
+curl_pid=$!
+wait_for_callback "$callback_port" "$callback_deadline"
+wait_for_callback_status=$?
+wait "$curl_pid" 2>/dev/null
+
+assert_output_equals "echo '$wait_for_callback_status'" "0" "wait_for_callback received the request (didn't time out)"
+assert_output_equals "echo '$CALLBACK_CODE'" "" "CALLBACK_CODE is empty (denied consent has no code)"
+assert_output_equals "echo '$CALLBACK_STATE'" "abc123" "CALLBACK_STATE is correctly the real state, not shifted"
+assert_output_equals "echo '$CALLBACK_ERROR'" "access_denied" "CALLBACK_ERROR is correctly the real error, not lost"
+
+# Replicate main()'s own decision sequence (error check, then state check,
+# then code check) to prove the fix end-to-end -- this used to fall
+# through to the state-mismatch branch instead.
+expected_state="abc123"
+login_outcome=""
+if [[ -n "$CALLBACK_ERROR" ]]; then
+  login_outcome="denied:$CALLBACK_ERROR"
+elif [[ "$CALLBACK_STATE" != "$expected_state" ]]; then
+  login_outcome="csrf_mismatch"
+elif [[ -z "$CALLBACK_CODE" ]]; then
+  login_outcome="no_code"
+else
+  login_outcome="proceed"
+fi
+assert_output_equals "echo '$login_outcome'" "denied:access_denied" "Reports as a denial, not a CSRF mismatch"
+
+test_case "urlencode_strict/urldecode_strict round-trip a code containing a reserved character"
+# Regression test for P0-2: the callback used to skip decoding entirely,
+# so a code re-encoded on the way to the token exchange (double-encoding
+# any character outside [a-zA-Z0-9.~_-]).
+wire_value=$(urlencode_strict "AB+CD")
+decoded_value=$(urldecode_strict "$wire_value")
+reencoded_value=$(urlencode_strict "$decoded_value")
+assert_output_equals "echo '$decoded_value'" "AB+CD" "Decodes back to the true value"
+assert_output_equals "echo '$reencoded_value'" "$wire_value" "Re-encoding the decoded value matches the original wire value (single encoding, not double)"
+
+echo ""
 test_summary
 FINAL_RESULT=$?
 

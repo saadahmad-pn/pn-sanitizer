@@ -76,14 +76,25 @@ urldecode_strict() {
   }
 }
 
-# Wait for HTTP callback on localhost
+# Wait for HTTP callback on localhost. Deliberately does NOT return
+# code/state/error via a space-joined `echo` string read back with `read -r`
+# -- when CODE is empty (e.g. the user denied consent, so there's no code,
+# only state+error), positional fields shift left and error_msg silently
+# lands empty, so the real error is lost and the (now-misaligned) state
+# comparison fails instead, misreporting a denied login as a CSRF attack.
+# Sets these three globals directly instead (same pattern as
+# http_post_split_status in lib/common.sh) -- call this as a plain
+# statement, not via $(...), or the globals won't escape a subshell.
+CALLBACK_CODE=""
+CALLBACK_STATE=""
+CALLBACK_ERROR=""
 wait_for_callback() {
   local port="$1"
   local deadline="$2"
 
-  local CODE=""
-  local STATE=""
-  local ERROR=""
+  CALLBACK_CODE=""
+  CALLBACK_STATE=""
+  CALLBACK_ERROR=""
 
   # Use netcat with explicit response handling
   # Accept ONE connection on the port, send response, capture request
@@ -128,9 +139,9 @@ wait_for_callback() {
           local key="${param%%=*}"
           local value="${param#*=}"
           case "$key" in
-            code) CODE="$(urldecode_strict "$value")" ;;
-            state) STATE="$(urldecode_strict "$value")" ;;
-            error) ERROR="$(urldecode_strict "$value")" ;;
+            code) CALLBACK_CODE="$(urldecode_strict "$value")" ;;
+            state) CALLBACK_STATE="$(urldecode_strict "$value")" ;;
+            error) CALLBACK_ERROR="$(urldecode_strict "$value")" ;;
           esac
         done
 
@@ -139,8 +150,7 @@ wait_for_callback() {
         wait $nc_pid 2>/dev/null || true
         rm -f "$request_file"
 
-        if [[ -n "$CODE" ]] || [[ -n "$ERROR" ]]; then
-          echo "$CODE $STATE $ERROR"
+        if [[ -n "$CALLBACK_CODE" ]] || [[ -n "$CALLBACK_ERROR" ]]; then
           return 0
         fi
       fi
@@ -320,33 +330,34 @@ main() {
   local deadline
   deadline=$(($(date +%s) + CALLBACK_TIMEOUT_SECONDS))
 
-  local callback_result
-  callback_result=$(wait_for_callback "$port" "$deadline") || {
+  # Called as a plain statement, not $(...) -- wait_for_callback sets
+  # CALLBACK_CODE/CALLBACK_STATE/CALLBACK_ERROR directly (see its own
+  # comment for why a space-joined echo/read was wrong: a denied login has
+  # no code, and that empty field used to shift the real error message out
+  # of place, misreporting a denial as a CSRF state mismatch instead).
+  wait_for_callback "$port" "$deadline" || {
     echo "error: timed out waiting for login after ${CALLBACK_TIMEOUT_SECONDS}s" >&2
     return 1
   }
 
-  local code state_got error_msg
-  read -r code state_got error_msg <<<"$callback_result"
-
-  if [[ -n "$error_msg" ]]; then
-    echo "error: login was denied or failed: $error_msg" >&2
+  if [[ -n "$CALLBACK_ERROR" ]]; then
+    echo "error: login was denied or failed: $CALLBACK_ERROR" >&2
     return 1
   fi
 
-  if [[ "$state_got" != "$state" ]]; then
+  if [[ "$CALLBACK_STATE" != "$state" ]]; then
     echo "error: state mismatch on login callback — possible CSRF, aborting" >&2
     return 1
   fi
 
-  if [[ -z "$code" ]]; then
+  if [[ -z "$CALLBACK_CODE" ]]; then
     echo "error: login callback did not include an authorization code" >&2
     return 1
   fi
 
   # Exchange code for tokens
   local token_response
-  token_response=$(exchange_code "$base_url" "$code" "$code_verifier" "$redirect_uri") || return 1
+  token_response=$(exchange_code "$base_url" "$CALLBACK_CODE" "$code_verifier" "$redirect_uri") || return 1
 
   local access_token
   local refresh_token
@@ -376,5 +387,12 @@ main() {
   return 0
 }
 
-main "$@"
-exit $?
+# Only run when executed directly, not when sourced (e.g. by a test that
+# wants to call wait_for_callback/urlencode_strict/urldecode_strict in
+# isolation without going through the full login flow). No behavior change
+# for normal use: bash login.sh / ./login.sh still runs main exactly as
+# before, since BASH_SOURCE[0] equals $0 in that case.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+  exit $?
+fi
