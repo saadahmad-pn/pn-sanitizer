@@ -72,6 +72,72 @@ urldecode_strict() {
 CALLBACK_CODE=""
 CALLBACK_STATE=""
 CALLBACK_ERROR=""
+# Builds the nc listen-mode argument array for a given style + port, into
+# the NC_LISTEN_ARGS global (arrays can't survive a plain return value,
+# same reasoning as CALLBACK_CODE/etc above). Used both to probe which
+# style actually works (detect_nc_listen_style) and to start the real
+# listener (wait_for_callback), so the two can never drift apart --
+# OpenBSD nc (macOS default, most Linux distros' netcat-openbsd) takes
+# the port positionally ("nc -l HOST PORT"); GNU netcat / netcat-
+# traditional require it after -p, with the bind address via -s instead
+# of positionally ("nc -l -p PORT -s HOST"). Verified directly against
+# GNU netcat 0.7.1 -- busybox nc was not available to test and may
+# differ again, but the failure mode if so (nc exits immediately on an
+# unrecognized flag) is a loud, immediate error, not another silent hang.
+NC_LISTEN_ARGS=()
+_nc_listen_args() {
+  local style="$1" port="$2"
+  case "$style" in
+    openbsd)     NC_LISTEN_ARGS=(-l 127.0.0.1 "$port") ;;
+    traditional) NC_LISTEN_ARGS=(-l -p "$port" -s 127.0.0.1) ;;
+    *)           NC_LISTEN_ARGS=() ;;
+  esac
+}
+
+# Detect which nc listen-mode flag syntax actually binds on this system.
+# Passing the wrong style to GNU netcat does not error or exit --
+# confirmed directly: it silently accepts the arguments and binds
+# nothing usable, which otherwise means the real listener spins for the
+# full login timeout with no hint why (this is not a hypothetical: it
+# reproduces on a stock Mac the moment something else on PATH shadows
+# the system `nc`, e.g. `brew install netcat`).
+#
+# Tests against a disposable, unrelated port picked fresh per attempt --
+# deliberately never the real callback port. A plain `nc -l` (without
+# -k) accepts exactly one connection and then exits; verifying via a
+# real connect would consume that one-shot accept, so if this probed the
+# real port, the actual browser redirect would arrive to find nc already
+# gone. Confirmed this failure mode directly before settling on this
+# design -- an earlier draft probed the real listener this way and broke
+# the real callback.
+detect_nc_listen_style() {
+  local style probe_port probe_pid connected
+
+  for style in openbsd traditional; do
+    probe_port=$((20000 + RANDOM % 20000))
+    _nc_listen_args "$style" "$probe_port"
+    nc "${NC_LISTEN_ARGS[@]}" >/dev/null 2>&1 &
+    probe_pid=$!
+    sleep 0.2
+
+    connected=1
+    if (exec 3<>"/dev/tcp/127.0.0.1/$probe_port") 2>/dev/null; then
+      connected=0
+      exec 3<&- 2>/dev/null
+      exec 3>&- 2>/dev/null
+    fi
+    kill "$probe_pid" 2>/dev/null
+    wait "$probe_pid" 2>/dev/null
+
+    if [[ $connected -eq 0 ]]; then
+      echo "$style"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 wait_for_callback() {
   local port="$1"
   local deadline="$2"
@@ -83,6 +149,20 @@ wait_for_callback() {
   # Use netcat with explicit response handling
   # Accept ONE connection on the port, send response, capture request
   local request_file="/tmp/callback_request_$$.txt"
+  # Separate from request_file -- previously nc's own stderr was merged
+  # straight into the file being parsed as an HTTP request (2>&1), so a
+  # startup error (e.g. address already in use) tripped the `-s
+  # request_file` non-empty check, failed the GET-line regex, and just
+  # spun silently until the full timeout with no hint that nc never
+  # bound at all.
+  local nc_stderr_file="/tmp/callback_nc_stderr_$$.txt"
+
+  local nc_listen_style
+  nc_listen_style=$(detect_nc_listen_style) || {
+    echo "error: could not start the local login callback listener -- nc on this system doesn't support either of the listen syntaxes this script tries (OpenBSD-style or GNU/traditional-style). Install a compatible netcat (e.g. OpenBSD netcat or GNU netcat) and try again." >&2
+    return 1
+  }
+  _nc_listen_args "$nc_listen_style" "$port"
 
   # Create response body
   local response_body="<!doctype html><html><head><title>Paradigm Networks login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2></body></html>"
@@ -96,10 +176,33 @@ wait_for_callback() {
     echo -ne "Connection: close\r\n"
     echo -ne "\r\n"
     echo -ne "$response_body"
-  } | nc -l 127.0.0.1 "$port" > "$request_file" 2>&1 &
+  } | nc "${NC_LISTEN_ARGS[@]}" > "$request_file" 2>"$nc_stderr_file" &
 
   local nc_pid=$!
   sleep 0.2
+
+  # Best-effort: catch an outright bind failure (e.g. the port got taken
+  # between selection and now -- the TOCTOU race in the port-selection
+  # loop above) immediately rather than waiting out the full deadline.
+  # Not exhaustive: some nc builds tolerate a duplicate bind silently
+  # rather than erroring (confirmed directly: macOS's bundled nc does
+  # this), so this can't catch every case -- but it catches the ones
+  # that do report cleanly, which previously were guaranteed to be
+  # swallowed into $request_file regardless.
+  #
+  # The $request_file check matters: a real client that connects and
+  # completes within this 0.2s window makes nc exit on its own, normally,
+  # having already done its job -- confirmed directly (a fast local test
+  # request beat this check often enough to be a real, not theoretical,
+  # race). Without it, that success would be misreported as the listener
+  # having failed to start.
+  if ! kill -0 "$nc_pid" 2>/dev/null && [[ ! -s "$request_file" ]]; then
+    local nc_error
+    nc_error=$(cat "$nc_stderr_file" 2>/dev/null)
+    rm -f "$request_file" "$nc_stderr_file"
+    echo "error: the local login callback listener exited immediately after starting.${nc_error:+ nc said: $nc_error}" >&2
+    return 1
+  fi
 
   # Wait for request to arrive
   while [[ $(date +%s) -lt $deadline ]]; do
@@ -132,7 +235,7 @@ wait_for_callback() {
         # Clean up
         kill $nc_pid 2>/dev/null || true
         wait $nc_pid 2>/dev/null || true
-        rm -f "$request_file"
+        rm -f "$request_file" "$nc_stderr_file"
 
         if [[ -n "$CALLBACK_CODE" ]] || [[ -n "$CALLBACK_ERROR" ]]; then
           return 0
@@ -145,7 +248,7 @@ wait_for_callback() {
   # Timeout
   kill $nc_pid 2>/dev/null || true
   wait $nc_pid 2>/dev/null || true
-  rm -f "$request_file"
+  rm -f "$request_file" "$nc_stderr_file"
   return 1
 }
 
