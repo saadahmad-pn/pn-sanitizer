@@ -26,7 +26,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
-TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-20}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-240}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible

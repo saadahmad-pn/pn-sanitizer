@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
-TIMEOUT_SECONDS=20
+TIMEOUT_SECONDS=60
 
 main() {
   if [[ -z "$JQ_BIN" ]]; then

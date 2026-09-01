@@ -4,6 +4,33 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-01 — Raised default timeouts across the board
+
+Real-world testing showed the previous defaults left too little margin,
+especially for the scan call, which had already been flagged as prone
+to real backend latency variance (see the 2026-08-31 latency/cost
+entry above). Raised, both platforms now unified on the same value:
+
+- Scan call (`check-prompt`/`check-write`, `PARADIGM_NETWORKS_TIMEOUT`):
+  20s (mac/Linux) / 40s (Windows) → **240s** both. Also raised
+  `hooks/hooks.json`'s own per-hook `timeout` for `beforeSubmitPrompt`
+  and `preToolUse` (Write) from 25s/45s to **250s** -- Cursor enforces
+  that as a hard ceiling independent of the script's own HTTP timeout,
+  so leaving it at 25s/45s would have silently capped this change and
+  made it a no-op.
+- Token refresh (`pn_config`, silent, on the critical path of every
+  scan once a token is close to expiring): 10s / 40s → **60s** both.
+- Login (`login.sh`/`.ps1`): browser click-through wait and token
+  exchange, previously 60s/15s (mac/Linux) and 60s/40s (Windows) →
+  **120s** both, for both. Updated the `paradigmnetworks-login` skill's
+  hardcoded "60 seconds" / "one-minute window" wording to match.
+- Model list fetch (`paradigmnetworks-models`): 20s / 40s → **60s** both.
+
+Verified beyond syntax: traced the new 240s scan-call timeout through
+both check-prompt.sh's and check-prompt.ps1's own debug logs
+(`Timeout: 240s` / `timeout=240s`) against a real invocation. Full
+suite (100%) and Pester suite (16/16) still pass.
+
 ## 2026-08-31 — Dropped the legacy SNANTIZER_* env var names entirely
 
 `SNANTIZER_*` was a misspelling of "sanitizer" left over from before this

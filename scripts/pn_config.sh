@@ -5,7 +5,7 @@
 CLIENT_ID="cursor-plugin"
 CRED_DIR="${HOME}/.pn"
 CRED_PATH="${CRED_DIR}/credentials.json"
-TOKEN_TIMEOUT_SECONDS=10
+TOKEN_TIMEOUT_SECONDS=60
 EXPIRY_MARGIN_SECONDS=60
 
 # Load credentials from disk

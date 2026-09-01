@@ -123,7 +123,7 @@ Windows:
 ("the base URL" is whatever the user gave you in step 2.)
 
 Run it in the background rather than blocking the turn on it — it can take
-up to a minute, and you need to relay its output as soon as it appears
+up to two minutes, and you need to relay its output as soon as it appears
 (the script flushes its output immediately, so read it after a couple of
 seconds rather than waiting for the process to exit).
 
@@ -143,12 +143,12 @@ the newest URL.
 **Poll for completion — do not sleep for a fixed duration and check once.**
 Check whether the background process has finished every few seconds,
 starting almost immediately, and stop the moment it has — most logins
-complete in well under 60 seconds once the user clicks through, and there's
-no reason to sit idle after it's already done. 60 seconds is only the
-outer bound for giving up, not a wait you should run out every time. Once
-it's finished, check the script's actual exit code — don't infer success
-just because the user says "done," since the local callback server has to
-actually receive the redirect.
+complete in well under two minutes once the user clicks through, and
+there's no reason to sit idle after it's already done. Two minutes is only
+the outer bound for giving up, not a wait you should run out every time.
+Once it's finished, check the script's actual exit code — don't infer
+success just because the user says "done," since the local callback
+server has to actually receive the redirect.
 
 ### 6. Relay the outcome
 
@@ -161,4 +161,4 @@ actually receive the redirect.
   skip it. Keep it to one line; don't explain the mechanism unless asked.
 - Non-zero → share the error the script printed (timeout, denied, network
   error, etc.) and offer to retry with a fresh run. If retrying, remind the
-  user they'll need to click through within the one-minute window.
+  user they'll need to click through within the two-minute window.

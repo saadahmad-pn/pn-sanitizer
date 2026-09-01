@@ -27,7 +27,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
-TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-20}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-240}"
 TRANSCRIPT_LINES="${PARADIGM_NETWORKS_TRANSCRIPT_LINES:-500}"
 # PARADIGM_NETWORKS_FAILURE_MODE (manual env var override: block/allow —
 # no Cursor Settings UI for this, must be set directly in the

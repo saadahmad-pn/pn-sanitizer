@@ -12,12 +12,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 40s (not 20s, matching the bash side): observed directly that
-# establishing the HTTPS connection to the scan API from a real Windows
-# target can itself take ~20-25s (likely a slow/blocked certificate
-# revocation check), before any actual server-side work even starts --
-# a stopgap while that root cause is investigated separately.
-$TimeoutSeconds = 40
+# 240s, matching the bash side (raised from 20s/40s -- establishing the
+# HTTPS connection to the scan API from a real Windows target can itself
+# take ~20-25s on its own, likely a slow/blocked certificate revocation
+# check, before any actual server-side work even starts, so the old
+# defaults left little margin for a real scan under any load).
+$TimeoutSeconds = 240
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {

@@ -16,11 +16,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-# 40s, not 20s: same reasoning as check-prompt.ps1/check-write.ps1 -- this
-# hits the same host, and establishing the HTTPS connection alone has been
-# observed to take ~20-25s on a real Windows target (likely a slow/blocked
-# certificate revocation check).
-$TimeoutSeconds = 40
+# 60s, matching the bash side: same reasoning as check-prompt.ps1/
+# check-write.ps1 -- this hits the same host, and establishing the HTTPS
+# connection alone has been observed to take ~20-25s on a real Windows
+# target (likely a slow/blocked certificate revocation check).
+$TimeoutSeconds = 60
 
 # Writes directly to the console's stdout stream rather than PowerShell's
 # own output pipeline -- same reasoning as login.ps1's identical helper:

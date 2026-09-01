@@ -26,8 +26,8 @@ source "$SCRIPT_DIR/pn_config.sh"
 # Ensure line-buffering for non-TTY stdout
 export PYTHONUNBUFFERED=1
 
-CALLBACK_TIMEOUT_SECONDS=60
-TOKEN_TIMEOUT_SECONDS=15
+CALLBACK_TIMEOUT_SECONDS=120
+TOKEN_TIMEOUT_SECONDS=120
 
 # Generate PKCE code challenge and verifier
 make_pkce_pair() {
