@@ -38,7 +38,17 @@ $FailureMode = if ($rawMode -eq "allow" -or $rawMode -eq "open") { "open" } else
 
 $AuditLogPath = Join-Path $HOME ".paradigm-scanner\audit.jsonl"
 $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
-$StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and report the violation to the user."
+# "relay ... in full, exactly as given" is deliberate, not just "report
+# the violation": confirmed directly that a vaguer instruction lets the
+# agent paraphrase the findings above into its own short summary,
+# dropping specific detail in the process -- observed losing an entire
+# second finding and every category/standard name (e.g. "OWASP", "ASVS")
+# it was quoting from. Deliberately generic here (not "relay the OWASP
+# findings," specifically) since the backend's categorization scheme
+# isn't guaranteed to always be OWASP-flavored -- see
+# ConvertTo-PnStrippedBlockBanner's own comment on why the content after
+# the banner header can't be assumed to have any particular shape.
+$StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and relay the findings above to the user in full, exactly as given -- every issue, category, code, and standard name mentioned. Do not summarize or paraphrase them into a general statement; the user needs the precise details to know what to fix."
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
 # /v1/messages endpoint on the same backend, which requires a model.
