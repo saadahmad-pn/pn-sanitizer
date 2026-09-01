@@ -21,11 +21,30 @@ Describe "ConvertFrom-PnMessagesResponse" {
     $result.Action | Should -Be "allow"
   }
 
-  It "classifies a REQUEST BLOCKED banner with zero usage as block, and extracts the reason" {
+  It "classifies a REQUEST BLOCKED banner with zero usage as block, and strips the banner scaffolding" {
     $body = '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: destructive operation.\n\n========================================================================\n```"}],"model":"bedrock/us.anthropic.claude-sonnet-4-6","usage":{"input_tokens":0,"output_tokens":0}}'
     $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
     $result.Action | Should -Be "block"
-    $result.Message | Should -Be "destructive operation"
+    $result.Message | Should -Be "  The submitted content was flagged because it triggered the following security concerns: destructive operation."
+  }
+
+  It "classifies a long, structured multi-finding report banner as block, keeping the full report (not a short extracted phrase, not the raw dividers/fence)" {
+    # Regression test for a real production bug: the block banner has at
+    # least two shapes -- a short phrase-in-a-sentence (above) and this
+    # longer structured report (an actual example from real hook logs,
+    # trimmed to one finding). The old implementation tried to regex-
+    # match "security concerns: X" and, failing to match this shape,
+    # fell back to dumping the ENTIRE raw banner -- dividers, code
+    # fence, and all -- as the "reason", which the caller then wrapped
+    # in its own sentence on top, producing a garbled double message.
+    $body = '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it contains OWASP Top 10 and OWASP ASVS compliance violations.\n\n  OWASP Top 10 Findings (1 issue)\n  ----------------------------------------------------------------------\n\n  [1] [HIGH] Debug Mode Enabled in Production\n      Category : A02:2025 - Security Misconfiguration\n      Snippet  : debug=True\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "block"
+    $result.Message | Should -Match "OWASP Top 10 and OWASP ASVS compliance violations"
+    $result.Message | Should -Match "Debug Mode Enabled in Production"
+    $result.Message | Should -Not -Match "===="
+    $result.Message | Should -Not -Match '```'
+    $result.Message | Should -Not -Match "REQUEST BLOCKED"
   }
 
   It "classifies zero usage WITHOUT a block banner as anomaly, not allow or block" {
@@ -59,7 +78,8 @@ Describe "ConvertFrom-PnMessagesResponse" {
     $body = '{"content":[{"type":"thinking","thinking":"internal reasoning, not the answer"},{"type":"text","text":"```\n===\n  REQUEST BLOCKED\n===\n  The submitted content was flagged because it triggered the following security concerns: policy violation.\n===\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
     $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
     $result.Action | Should -Be "block"
-    $result.Message | Should -Be "policy violation"
+    # Also confirms a 3-char "===" divider strips the same as a 72-char one.
+    $result.Message | Should -Be "  The submitted content was flagged because it triggered the following security concerns: policy violation."
   }
 
   It "does not treat a real, non-zero-usage reply that happens to mention REQUEST BLOCKED as a block" {

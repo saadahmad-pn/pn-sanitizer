@@ -393,17 +393,40 @@ function ConvertFrom-PnMessagesResponse {
   if ([int]$inputTokens -eq 0 -and [int]$outputTokens -eq 0) {
     if ($textBlock -like "*REQUEST BLOCKED*") {
       $result.Action = "block"
-      $reason = $textBlock
-      if ($textBlock -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
-        $reason = $Matches[1]
-      }
-      $result.Message = $reason
+      $result.Message = ConvertTo-PnStrippedBlockBanner -Text $textBlock
     } else {
       $result.Action = "anomaly"
     }
   }
 
   return $result
+}
+
+# ConvertTo-PnStrippedBlockBanner <raw_block_banner_text>
+# Mirrors pn_strip_block_banner in common.sh -- see that function's
+# comment for the full rationale: the block banner has one confirmed-
+# fixed part (the "====" divider lines, the "REQUEST BLOCKED" line, and
+# the wrapping ``` code fence) and one part that varies and cannot be
+# predicted (the actual explanation -- observed as both a short phrase
+# and a long, multi-finding structured report). Stripping only the
+# confirmed-fixed scaffolding and keeping whatever's left works
+# regardless of which shape the backend sends.
+function ConvertTo-PnStrippedBlockBanner {
+  param([Parameter(Mandatory = $true)][string]$Text)
+
+  $lines = @($Text -split '\r?\n' | Where-Object {
+    $_ -notmatch '^```' -and
+    $_ -notmatch '^[ \t]*=+[ \t]*$' -and
+    $_ -notmatch '^[ \t]*REQUEST BLOCKED[ \t]*$'
+  })
+
+  $startIndex = 0
+  while ($startIndex -lt $lines.Count -and $lines[$startIndex] -match '^[ \t]*$') { $startIndex++ }
+  $endIndex = $lines.Count - 1
+  while ($endIndex -ge $startIndex -and $lines[$endIndex] -match '^[ \t]*$') { $endIndex-- }
+
+  if ($startIndex -gt $endIndex) { return "" }
+  return ($lines[$startIndex..$endIndex] -join "`n")
 }
 
 # Write-DebugLog -Message ... -LogPath ...

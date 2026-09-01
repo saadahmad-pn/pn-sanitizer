@@ -260,12 +260,15 @@ try {
     }
     "block" {
       Reset-PnScanAnomaly
-      # $parsedVerdict.Message is only the short extracted reason (e.g.
-      # "destructive operation"), not a full sentence -- wrap it into the
-      # same phrasing the platform's own block banner uses, rather than
-      # showing the bare phrase or (worse) the raw ASCII-art banner text
-      # verbatim to the user.
-      $userMessage = "The submitted content was flagged because it triggered the following security concerns: $($parsedVerdict.Message)."
+      # $parsedVerdict.Message is the block banner's own explanation,
+      # with only the confirmed-fixed scaffolding stripped
+      # (ConvertTo-PnStrippedBlockBanner in lib/common.ps1) -- already a
+      # complete, self-explanatory message in the backend's own words,
+      # whether short or a long structured report, so it's used directly
+      # rather than wrapped in a sentence built around assuming a short
+      # noun-phrase (that assumption is exactly what broke when a second,
+      # longer banner shape showed up).
+      $userMessage = $parsedVerdict.Message
       Write-JsonPermissionDeny -UserMessage $userMessage -AgentMessage "$userMessage $StopInstruction"
     }
     default {

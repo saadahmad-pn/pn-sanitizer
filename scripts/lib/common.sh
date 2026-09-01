@@ -434,20 +434,42 @@ pn_parse_messages_response() {
   if [[ "$input_tokens" == "0" ]] && [[ "$output_tokens" == "0" ]]; then
     if [[ "$text_content" == *"REQUEST BLOCKED"* ]]; then
       PN_MSG_ACTION="block"
-      # Same reason-extraction pattern used in check-prompt.sh's block-
-      # message formatting -- kept in a variable, not inline in [[ =~ ]]:
-      # bash's own conditional-expression parser trips on unquoted
-      # parentheses when the pattern is written directly inside [[ ]].
-      local reason="$text_content"
-      local reason_pattern="security concerns:? \(?([^.)]+)[.)]"
-      if [[ "$text_content" =~ $reason_pattern ]]; then
-        reason="${BASH_REMATCH[1]}"
-      fi
-      PN_MSG_MESSAGE="$reason"
+      PN_MSG_MESSAGE="$(pn_strip_block_banner "$text_content")"
     else
       PN_MSG_ACTION="anomaly"
     fi
   fi
+}
+
+# pn_strip_block_banner <raw_block_banner_text>
+# The block banner has one confirmed-fixed part -- the "====" divider
+# lines and the "REQUEST BLOCKED" line between them (and the wrapping
+# ``` code fence) -- and one part that varies and cannot be predicted:
+# the actual explanation, which has been observed as both a short phrase
+# ("...security concerns: destructive operation.") and a long, multi-
+# finding structured report (an OWASP Top 10 / ASVS breakdown with
+# severity/category/issue/snippet/fix per finding). Trying to regex-match
+# the varying part's wording broke the moment the backend introduced a
+# second banner shape -- the old pattern only matched the first one, and
+# silently fell back to dumping the entire raw banner (dividers and all)
+# wrapped inside this script's own sentence, producing a doubled, mangled
+# message. Stripping only the confirmed-fixed scaffolding and keeping
+# whatever's left -- short or long -- works regardless of which shape
+# the backend sends, including any future shape not seen yet.
+pn_strip_block_banner() {
+  local text="$1"
+  printf '%s\n' "$text" | awk '
+    /^```/ { next }
+    /^[ \t]*=+[ \t]*$/ { next }
+    /^[ \t]*REQUEST BLOCKED[ \t]*$/ { next }
+    { lines[++n] = $0 }
+    END {
+      start = 1; end = n
+      while (start <= end && lines[start] ~ /^[ \t]*$/) start++
+      while (end >= start && lines[end] ~ /^[ \t]*$/) end--
+      for (i = start; i <= end; i++) print lines[i]
+    }
+  '
 }
 
 # Utility functions

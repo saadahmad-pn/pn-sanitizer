@@ -323,12 +323,17 @@ main() {
       ;;
     block)
       pn_reset_scan_anomaly
-      # PN_MSG_MESSAGE is only the short extracted reason (e.g.
-      # "destructive operation"), not a full sentence -- wrap it into the
-      # same phrasing the platform's own block banner uses, rather than
-      # showing the bare phrase or (worse) the raw ASCII-art banner text
-      # verbatim to the user.
-      local user_message="The submitted content was flagged because it triggered the following security concerns: ${PN_MSG_MESSAGE}."
+      # PN_MSG_MESSAGE is the block banner's own explanation, with only
+      # the confirmed-fixed scaffolding stripped (pn_strip_block_banner
+      # in lib/common.sh) -- already a complete, self-explanatory message
+      # in the backend's own words, whether it's a short phrase or a long
+      # structured report, so it's used directly rather than wrapped in a
+      # sentence built around assuming a short noun-phrase. That
+      # assumption is exactly what broke when a second, longer banner
+      # shape showed up (a multi-finding OWASP report) -- the old wrapper
+      # produced "...security concerns: <entire multi-line report>.",
+      # doubling up on the report's own already-complete explanation.
+      local user_message="$PN_MSG_MESSAGE"
       json_permission_deny "$user_message" "$user_message $STOP_INSTRUCTION"
       ;;
     *)

@@ -178,10 +178,13 @@ try {
       # no bold is applied), while `inline code`, `### heading`, and
       # `> blockquote` all render correctly there.
       #
-      # $parsedVerdict.Message is already the extracted reason
-      # (ConvertFrom-PnMessagesResponse applies the same "security
-      # concerns: X" pattern before returning it) -- no second extraction
-      # pass needed here.
+      # $parsedVerdict.Message is the block banner's own explanation,
+      # with only the confirmed-fixed scaffolding stripped
+      # (ConvertTo-PnStrippedBlockBanner in lib/common.ps1) -- no second
+      # extraction pass needed here. It's already a complete explanation
+      # in the backend's own words, and can be either a short phrase-in-
+      # a-sentence or a long multi-line structured report, so the
+      # "Concern" section below has to handle both shapes.
       $reason = $parsedVerdict.Message
 
       # Preview of the actual prompt that got flagged, capped at 60 words
@@ -207,7 +210,15 @@ try {
       # directly in a double-quoted string needs doubling it up, which is
       # easy to get wrong -- concatenating literal single-quoted pieces
       # sidesteps that entirely.
-      $concernLine = '**Concern** `' + $reason + '`'
+      # A single-line reason reads fine as an inline-code label; a
+      # multi-line one (e.g. a structured findings report) does not --
+      # markdown inline code spans aren't meant to carry embedded line
+      # breaks, so a long reason gets its own section instead.
+      if ($reason -match "`n") {
+        $concernLine = "**Concern**`n`n$reason"
+      } else {
+        $concernLine = '**Concern** `' + $reason + '`'
+      }
       $quotedContent = '> ' + $flaggedPreview
 
       # Built from its Unicode code points, not embedded as a literal

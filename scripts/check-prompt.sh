@@ -223,9 +223,13 @@ main() {
       # `### heading`, and `> blockquote`) confirmed rendering correctly
       # in Cursor's UI.
       #
-      # PN_MSG_MESSAGE is already the extracted reason (pn_parse_messages_
-      # response applies the same "security concerns: X" pattern before
-      # returning it) -- no second extraction pass needed here.
+      # PN_MSG_MESSAGE is the block banner's own explanation, with only
+      # the confirmed-fixed scaffolding stripped (pn_strip_block_banner
+      # in lib/common.sh) -- no second extraction pass needed here. It's
+      # already a complete explanation in the backend's own words, and
+      # can be either a short phrase-in-a-sentence or a long multi-line
+      # structured report, so the "Concern" section below has to handle
+      # both shapes rather than assuming a short one-liner.
       local reason="$PN_MSG_MESSAGE"
 
       # Preview of the actual prompt that got flagged, capped at 60 words
@@ -242,12 +246,25 @@ main() {
         flagged_preview="${flagged_preview}..."
       fi
 
+      # A single-line reason reads fine as an inline-code label; a
+      # multi-line one (e.g. a structured findings report) does not --
+      # markdown inline code spans aren't meant to carry embedded line
+      # breaks, so a long reason gets its own section instead.
+      local concern_section
+      if [[ "$reason" == *$'\n'* ]]; then
+        concern_section="**Concern**
+
+$reason"
+      else
+        concern_section="**Concern** \`$reason\`"
+      fi
+
       local branded_message="### 🛡️ Request blocked by Paradigm Networks
 
 This message wasn't sent to the model. Your organization's proxy inspects
 outbound requests and held this one for review.
 
-**Concern** \`$reason\`
+$concern_section
 
 **Flagged content**
 
