@@ -48,17 +48,7 @@ $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
 # isn't guaranteed to always be OWASP-flavored -- see
 # ConvertTo-PnStrippedBlockBanner's own comment on why the content after
 # the banner header can't be assumed to have any particular shape.
-#
-# Distinguishes disguising/bypassing THIS specific violation (still
-# forbidden -- that's the actual security property this plugin exists
-# for) from genuinely revising the content to address the findings and
-# resubmitting (now explicitly allowed): a corrected resubmission isn't
-# a bypass, since it goes through this exact same check again from
-# scratch and gets independently re-scanned, nothing is exempted or
-# trusted blindly. Previously banned both under one blanket "do not
-# retry," which left no way for the agent to act on the fix guidance in
-# the findings above even when it wanted to do the right thing.
-$StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not disguise this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable) -- any of those will be scanned and blocked the same way. If you want to address the findings above, make a genuinely corrected version that applies the suggested fixes and submit that as a new write -- it will be scanned independently, not skipped. Relay the findings above to the user in full, exactly as given -- every issue, category, code, and standard name mentioned. Do not summarize or paraphrase them into a general statement; the user needs the precise details to know what to fix."
+$StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and relay the findings above to the user in full, exactly as given -- every issue, category, code, and standard name mentioned. Do not summarize or paraphrase them into a general statement; the user needs the precise details to know what to fix."
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
 # /v1/messages endpoint on the same backend, which requires a model.
