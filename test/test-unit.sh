@@ -110,6 +110,19 @@ TESTS_RUN=$((TESTS_RUN + 1))
 test_case "pn_parse_messages_response: zero usage, no banner -> anomaly (not guessed either way)"
 pn_parse_messages_response '{"content":[{"type":"text","text":"just a normal-looking short reply"}],"usage":{"input_tokens":0,"output_tokens":0}}'
 assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "just a normal-looking short reply" "PN_MSG_MESSAGE carries a raw preview instead of staying empty"
+
+test_case "pn_parse_messages_response: anomaly preview collapses newlines/tabs to single spaces"
+pn_parse_messages_response '{"content":[{"type":"text","text":"line one\nline two\t\tpadded"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "line one line two padded" "newlines/tabs collapse to single spaces in the preview"
+
+test_case "pn_parse_messages_response: anomaly preview truncates long text to 200 chars + ellipsis"
+long_text=$(printf 'a%.0s' {1..250})
+pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_text}\"}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}"
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+expected_preview="$(printf 'a%.0s' {1..200})..."
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$expected_preview" "preview truncated to 200 chars with trailing ellipsis"
 
 test_case "pn_parse_messages_response: empty content array -> anomaly"
 pn_parse_messages_response '{"content":[],"usage":{"input_tokens":10,"output_tokens":5}}'

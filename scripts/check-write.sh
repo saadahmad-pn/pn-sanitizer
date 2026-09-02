@@ -325,10 +325,18 @@ main() {
       if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
         anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
       fi
+      # PN_MSG_MESSAGE is a raw, truncated preview of whatever the backend
+      # actually returned (see pn_preview_text) -- may be empty if there
+      # was no text content at all to preview. Surfacing it beats a canned
+      # sentence that reveals nothing about what actually happened.
+      local anomaly_detail=""
+      if [[ -n "$PN_MSG_MESSAGE" ]]; then
+        anomaly_detail=" Raw response: \"$PN_MSG_MESSAGE\""
+      fi
       if [[ "$FAILURE_MODE" == "open" ]]; then
-        json_permission_allow "${anomaly_prefix}The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+        json_permission_allow "${anomaly_prefix}The scanning service returned an unexpected response.${anomaly_detail} Write allowed WITHOUT a security scan."
       else
-        json_permission_deny "${anomaly_prefix}The scanning service returned an unexpected response. Write blocked." "The scanning service returned an unexpected response. Do not retry this write."
+        json_permission_deny "${anomaly_prefix}The scanning service returned an unexpected response.${anomaly_detail} Write blocked." "The scanning service returned an unexpected response.${anomaly_detail} Do not retry this write."
       fi
       ;;
     block)

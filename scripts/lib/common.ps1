@@ -387,6 +387,12 @@ function ConvertFrom-PnMessagesResponse {
 
   if ($null -eq $inputTokens -or $null -eq $outputTokens -or $null -eq $textBlock) {
     $result.Action = "anomaly"
+    # Best-effort: a missing text block means there's nothing to preview,
+    # but missing/malformed usage numbers can still come with real text
+    # content worth showing.
+    if ($textBlock) {
+      $result.Message = ConvertTo-PnPreviewText -Text $textBlock
+    }
     return $result
   }
 
@@ -396,10 +402,33 @@ function ConvertFrom-PnMessagesResponse {
       $result.Message = ConvertTo-PnStrippedBlockBanner -Text $textBlock
     } else {
       $result.Action = "anomaly"
+      # Unlike a block, there's no known scaffolding to strip here -- an
+      # anomaly is by definition a shape we don't recognize. A raw,
+      # truncated preview at least tells the caller what the backend
+      # actually said, instead of a canned "unexpected response" sentence
+      # that reveals nothing about what actually happened.
+      $result.Message = ConvertTo-PnPreviewText -Text $textBlock
     }
   }
 
   return $result
+}
+
+# ConvertTo-PnPreviewText <raw_text> [-MaxChars 200]
+# Collapses whitespace/newlines to single spaces and truncates, for
+# surfacing a raw, unrecognized response as a one-line diagnostic
+# snippet. Not validated or trusted content -- shown so a human can see
+# what the backend actually returned, nothing more structured than that.
+function ConvertTo-PnPreviewText {
+  param(
+    [Parameter(Mandatory = $true)][string]$Text,
+    [int]$MaxChars = 200
+  )
+  $collapsed = (($Text -replace '[\r\n\t]+', ' ') -replace ' {2,}', ' ').Trim()
+  if ($collapsed.Length -gt $MaxChars) {
+    return $collapsed.Substring(0, $MaxChars) + "..."
+  }
+  return $collapsed
 }
 
 # ConvertTo-PnStrippedBlockBanner <raw_block_banner_text>

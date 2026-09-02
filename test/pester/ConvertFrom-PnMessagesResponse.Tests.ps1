@@ -55,6 +55,22 @@ Describe "ConvertFrom-PnMessagesResponse" {
     $body = '{"content":[{"type":"text","text":"An unrecognized response shape, not a real block or a real reply."}],"usage":{"input_tokens":0,"output_tokens":0}}'
     $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
     $result.Action | Should -Be "anomaly"
+    $result.Message | Should -Be "An unrecognized response shape, not a real block or a real reply."
+  }
+
+  It "collapses newlines/tabs to single spaces in the anomaly preview" {
+    $body = '{"content":[{"type":"text","text":"line one\nline two\t\tpadded"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "anomaly"
+    $result.Message | Should -Be "line one line two padded"
+  }
+
+  It "truncates a long anomaly preview to 200 chars plus an ellipsis" {
+    $longText = "a" * 250
+    $body = "{`"content`":[{`"type`":`"text`",`"text`":`"$longText`"}],`"usage`":{`"input_tokens`":0,`"output_tokens`":0}}"
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "anomaly"
+    $result.Message | Should -Be (("a" * 200) + "...")
   }
 
   It "classifies a missing content array as anomaly" {

@@ -261,11 +261,15 @@ try {
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
         $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
+      $anomalyDetail = ""
+      if ($parsedVerdict.Message) {
+        $anomalyDetail = " Raw response: `"$($parsedVerdict.Message)`""
+      }
       if ($FailureMode -eq "open") {
-        Write-JsonPermissionAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+        Write-JsonPermissionAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response.${anomalyDetail} Write allowed WITHOUT a security scan."
       } else {
-        Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}The scanning service returned an unexpected response. Write blocked." `
-          -AgentMessage "The scanning service returned an unexpected response. Do not retry this write."
+        Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}The scanning service returned an unexpected response.${anomalyDetail} Write blocked." `
+          -AgentMessage "The scanning service returned an unexpected response.${anomalyDetail} Do not retry this write."
       }
     }
     "block" {

@@ -211,10 +211,18 @@ main() {
       if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
         anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
       fi
+      # PN_MSG_MESSAGE is a raw, truncated preview of whatever the backend
+      # actually returned (see pn_preview_text) -- may be empty if there
+      # was no text content at all to preview. Surfacing it beats a canned
+      # sentence that reveals nothing about what actually happened.
+      local anomaly_detail=""
+      if [[ -n "$PN_MSG_MESSAGE" ]]; then
+        anomaly_detail=" Raw response: \"$PN_MSG_MESSAGE\""
+      fi
       if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-        json_deny "${anomaly_prefix}The scanning service returned an unexpected response. Prompt blocked."
+        json_deny "${anomaly_prefix}The scanning service returned an unexpected response.${anomaly_detail} Prompt blocked."
       else
-        json_allow "${anomaly_prefix}The scanning service returned an unexpected response. Allowing prompt."
+        json_allow "${anomaly_prefix}The scanning service returned an unexpected response.${anomaly_detail} Allowing prompt."
       fi
       ;;
     block)

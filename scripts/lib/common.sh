@@ -428,6 +428,12 @@ pn_parse_messages_response() {
 
   if [[ "$input_tokens" == "missing" ]] || [[ "$output_tokens" == "missing" ]] || [[ "$has_text_block" != "true" ]]; then
     PN_MSG_ACTION="anomaly"
+    # Best-effort: a missing text block means there's nothing to preview
+    # (text_content is already "" in that case), but missing/malformed
+    # usage numbers can still come with real text content worth showing.
+    if [[ -n "$text_content" ]]; then
+      PN_MSG_MESSAGE="$(pn_preview_text "$text_content")"
+    fi
     return 0
   fi
 
@@ -437,7 +443,33 @@ pn_parse_messages_response() {
       PN_MSG_MESSAGE="$(pn_strip_block_banner "$text_content")"
     else
       PN_MSG_ACTION="anomaly"
+      # Unlike a block, there's no known scaffolding to strip here -- an
+      # anomaly is by definition a shape we don't recognize. A raw,
+      # truncated preview at least tells the caller what the backend
+      # actually said, instead of a canned "unexpected response" sentence
+      # that reveals nothing about what actually happened.
+      PN_MSG_MESSAGE="$(pn_preview_text "$text_content")"
     fi
+  fi
+}
+
+# pn_preview_text <raw_text> [max_chars]
+# Collapses whitespace/newlines to single spaces and truncates to
+# max_chars (default 200), for surfacing a raw, unrecognized response as
+# a one-line diagnostic snippet. Not validated or trusted content --
+# shown so a human can see what the backend actually returned, nothing
+# more structured than that.
+pn_preview_text() {
+  local text="$1"
+  local max_chars="${2:-200}"
+  local collapsed
+  collapsed=$(printf '%s' "$text" | tr '\n\r\t' '   ' | tr -s ' ')
+  collapsed="${collapsed#"${collapsed%%[![:space:]]*}"}"
+  collapsed="${collapsed%"${collapsed##*[![:space:]]}"}"
+  if [[ ${#collapsed} -gt $max_chars ]]; then
+    printf '%s...' "${collapsed:0:$max_chars}"
+  else
+    printf '%s' "$collapsed"
   fi
 }
 
