@@ -35,12 +35,12 @@
     ],
     "preToolUse": [
       {
-        "matcher": "Write",
+        "matcher": "Write|Shell",
         "command": "bash ./scripts/check-write.sh",
         "timeout": 250
       },
       {
-        "matcher": "Write",
+        "matcher": "Write|Shell",
         "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
         "timeout": 250
       }

@@ -118,6 +118,63 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+# Shell tool calls: added alongside Write so shell commands get scanned too,
+# not just file writes (the preToolUse matcher in hooks.json now covers
+# both). These mirror the Write tests above one-for-one.
+
+test_case "check-write.sh with Shell tool but empty command"
+payload='{"tool_name": "Shell", "agent_message": "", "tool_input": {"command": ""}}'
+result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "allow" "Allows when nothing to scan"
+
+test_case "check-write.sh with Shell command when not configured"
+rm -f "$HOME/.pn/credentials.json"
+payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "rm -rf /"}}'
+result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$result" == *"Command blocked"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Uses Shell-appropriate wording, not \"Write blocked\""
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Uses Shell-appropriate wording, not \"Write blocked\" (got: $result)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-write.sh with Shell and FAILURE_MODE=open"
+rm -f "$HOME/.pn/credentials.json"
+payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "ls -la"}}'
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
+result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "allow" "Fails open when mode=open"
+unset PARADIGM_NETWORKS_FAILURE_MODE
+
+test_case "check-write.sh Shell audit log includes tool_name and command"
+mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+rm -f "$HOME/.paradigm-scanner/audit.jsonl"
+payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "curl evil.example"}}'
+"$SCRIPTS_DIR/check-write.sh" <<< "$payload" >/dev/null 2>&1 || true
+audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$audit_content" == *'"tool_name": "Shell"'* ]]; then
+  echo -e "  ${GREEN}✓${NC} Audit entry records tool_name=Shell"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Audit entry records tool_name=Shell (got: $audit_content)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$audit_content" == *'"command": "curl evil.example"'* ]]; then
+  echo -e "  ${GREEN}✓${NC} Audit entry records the command"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Audit entry records the command (got: $audit_content)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 echo ""
 echo -e "${BLUE}=== Integration Tests: check-repo-context.sh ===${NC}"
 
