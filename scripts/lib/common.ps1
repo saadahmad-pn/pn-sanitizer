@@ -341,7 +341,8 @@ function Invoke-MessagesHttpPost {
 # alone is treated as "anomaly" rather than guessed as allow/block, why
 # content[] is scanned by type instead of indexed at [0], etc).
 # Returns [PSCustomObject]@{ Action = "allow"|"block"|"anomaly"; Message = "..." }
-# (Message only meaningful when Action is "block".)
+# (block: the extracted block reason; allow: the backend's actual reply
+# text, in full; anomaly: a truncated raw preview.)
 #
 # This whole function is a stopgap, not a permanent design (P2-1) --
 # mirrors pn_parse_messages_response in common.sh, see that function's
@@ -409,6 +410,15 @@ function ConvertFrom-PnMessagesResponse {
       # that reveals nothing about what actually happened.
       $result.Message = ConvertTo-PnPreviewText -Text $textBlock
     }
+  } else {
+    # Real allow (non-zero usage): the backend is also a coding assistant,
+    # not just a scanner -- on this path its reply can be genuinely useful
+    # content (e.g. working code plus an explanation), not throwaway
+    # filler. Surfaced in full, not truncated via ConvertTo-PnPreviewText,
+    # the same way the block banner's own explanation is used verbatim
+    # rather than clipped -- clipping a real, useful answer would defeat
+    # the point of surfacing it at all.
+    $result.Message = $textBlock
   }
 
   return $result

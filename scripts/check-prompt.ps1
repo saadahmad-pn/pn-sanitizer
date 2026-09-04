@@ -34,14 +34,18 @@ $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
 # tier, chosen because testing showed the block/allow verdict is
 # identical across models and max_tokens values -- the platform's guard
 # fires before the requested model ever runs, so model choice only
-# affects cost/latency on the (always-discarded) allow-path reply, not
-# detection accuracy.
+# affects cost/latency on the allow-path reply, not detection accuracy.
 $Model = (Resolve-PnModel).Model
-# 150 comfortably covers the block banner + reason sentence; confirmed via
-# live testing that the banner is injected by the guard without ever being
-# subject to max_tokens (output_tokens is 0 even for the full banner), so
-# this only trades off cost/latency on the allow path, not truncation risk.
-$MaxTokens = 150
+# The block banner itself is never subject to max_tokens (confirmed via
+# live testing: output_tokens is 0 even for the full banner, since the
+# platform's guard injects it before the requested model runs at all), so
+# this budget only governs the allow-path reply's length. Raised from an
+# earlier 150 (which comfortably covered the banner but wasn't meant to
+# cover anything else, back when that reply was discarded) now that the
+# reply is surfaced to the user as user_message -- 150 would truncate most
+# real answers (a plain "write me hello.py" reply alone ran ~224 output
+# tokens in testing).
+$MaxTokens = 1024
 
 $rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
 if (-not $rawMode) { $rawMode = "allow" }
@@ -246,10 +250,19 @@ try {
     default {
       # "allow" is the only other action ConvertFrom-PnMessagesResponse
       # produces -- there is no "warn" state on this endpoint (see that
-      # function's comment); the model's actual reply is discarded either
-      # way, only the verdict matters.
+      # function's comment). The backend is also a coding assistant, not
+      # just a scanner, so its reply ($parsedVerdict.Message, full text on
+      # this path) is surfaced as user_message rather than discarded --
+      # may be empty if there was no text content to show. Cursor's own
+      # hooks docs describe user_message as shown "when blocked"; whether
+      # it's actually rendered on an allow too is unconfirmed and being
+      # tested live rather than assumed either way.
       Reset-PnScanAnomaly
-      Write-JsonAllow
+      if ($parsedVerdict.Message) {
+        Write-JsonAllow -Message $parsedVerdict.Message
+      } else {
+        Write-JsonAllow
+      }
     }
   }
 } catch {

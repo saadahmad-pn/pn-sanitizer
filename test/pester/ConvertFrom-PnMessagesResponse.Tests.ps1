@@ -15,10 +15,19 @@ BeforeAll {
 }
 
 Describe "ConvertFrom-PnMessagesResponse" {
-  It "classifies a normal reply (non-zero usage) as allow" {
+  It "classifies a normal reply (non-zero usage) as allow, surfacing the full reply text" {
     $body = '{"content":[{"type":"text","text":"Hello! How can I help?"}],"model":"anthropic/claude-sonnet-4-6","usage":{"input_tokens":870,"output_tokens":46}}'
     $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
     $result.Action | Should -Be "allow"
+    $result.Message | Should -Be "Hello! How can I help?"
+  }
+
+  It "does not truncate a long allow-path reply, unlike the anomaly preview" {
+    $longReply = (1..80 | ForEach-Object { "word" }) -join " "
+    $body = "{`"content`":[{`"type`":`"text`",`"text`":`"$longReply`"}],`"usage`":{`"input_tokens`":117,`"output_tokens`":224}}"
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "allow"
+    $result.Message | Should -Be $longReply
   }
 
   It "classifies a REQUEST BLOCKED banner with zero usage as block, and strips the banner scaffolding" {

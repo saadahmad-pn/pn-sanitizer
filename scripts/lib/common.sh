@@ -393,10 +393,11 @@ json_session_context() {
 # FAILURE_MODE/PROMPT_FAILURE_MODE branching. Missing usage numbers or no
 # text content block at all are anomalies for the same reason.
 #
-# Sets globals PN_MSG_ACTION ("allow"|"block"|"anomaly") and
-# PN_MSG_MESSAGE (the extracted block reason -- only meaningful when
-# PN_MSG_ACTION is "block"). Must be called as a plain function call
-# (never via $(...)), same requirement as http_post_split_status above.
+# Sets globals PN_MSG_ACTION ("allow"|"block"|"anomaly") and PN_MSG_MESSAGE
+# (block: the extracted block reason; allow: the backend's actual reply
+# text, in full -- see the "allow" branch below for why; anomaly: a
+# truncated raw preview). Must be called as a plain function call (never
+# via $(...)), same requirement as http_post_split_status above.
 #
 # This whole function is a stopgap, not a permanent design (P2-1): any
 # upstream change to usage accounting or the block banner's wording turns
@@ -450,6 +451,15 @@ pn_parse_messages_response() {
       # that reveals nothing about what actually happened.
       PN_MSG_MESSAGE="$(pn_preview_text "$text_content")"
     fi
+  else
+    # Real allow (non-zero usage): the backend is also a coding assistant,
+    # not just a scanner -- on this path its reply can be genuinely useful
+    # content (e.g. working code plus an explanation), not throwaway
+    # filler. Surfaced in full, not truncated via pn_preview_text, the
+    # same way the block banner's own explanation is used verbatim rather
+    # than clipped -- clipping a real, useful answer would defeat the
+    # point of surfacing it at all.
+    PN_MSG_MESSAGE="$text_content"
   fi
 }
 

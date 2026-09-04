@@ -37,15 +37,19 @@ DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 # tier, chosen because testing showed the block/allow verdict is
 # identical across models and max_tokens values -- the platform's guard
 # fires before the requested model ever runs, so model choice only
-# affects cost/latency on the (always-discarded) allow-path reply, not
-# detection accuracy.
+# affects cost/latency on the allow-path reply, not detection accuracy.
 pn_resolve_model
 MODEL="$PN_RESOLVED_MODEL"
-# 150 comfortably covers the block banner + reason sentence; confirmed via
-# live testing that the banner is injected by the guard without ever being
-# subject to max_tokens (output_tokens is 0 even for the full banner), so
-# this only trades off cost/latency on the allow path, not truncation risk.
-MAX_TOKENS=150
+# The block banner itself is never subject to max_tokens (confirmed via
+# live testing: output_tokens is 0 even for the full banner, since the
+# platform's guard injects it before the requested model runs at all), so
+# this budget only governs the allow-path reply's length. Raised from an
+# earlier 150 (which comfortably covered the banner but wasn't meant to
+# cover anything else, back when that reply was discarded) now that the
+# reply is surfaced to the user as user_message -- 150 would truncate most
+# real answers (a plain "write me hello.py" reply alone ran ~224 output
+# tokens in testing).
+MAX_TOKENS=1024
 
 # PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (manual env var override:
 # block/allow — no Cursor Settings UI for this, must be set directly in
@@ -282,10 +286,19 @@ $concern_section
     *)
       # "allow" is the only other action pn_parse_messages_response
       # produces -- there is no "warn" state on this endpoint (see that
-      # function's comment); the model's actual reply is discarded either
-      # way, only the verdict matters.
+      # function's comment). The backend is also a coding assistant, not
+      # just a scanner, so its reply (PN_MSG_MESSAGE, full text on this
+      # path) is surfaced as user_message rather than discarded -- may be
+      # empty if there was no text content to show. Cursor's own hooks
+      # docs describe user_message as shown "when blocked"; whether it's
+      # actually rendered on an allow too is unconfirmed and being tested
+      # live rather than assumed either way.
       pn_reset_scan_anomaly
-      json_allow
+      if [[ -n "$PN_MSG_MESSAGE" ]]; then
+        json_allow "$PN_MSG_MESSAGE"
+      else
+        json_allow
+      fi
       ;;
   esac
 

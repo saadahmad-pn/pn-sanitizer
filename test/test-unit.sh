@@ -128,6 +128,12 @@ test_case "pn_parse_messages_response: empty content array -> anomaly"
 pn_parse_messages_response '{"content":[],"usage":{"input_tokens":10,"output_tokens":5}}'
 assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
 
+test_case "pn_parse_messages_response: real allow (non-zero usage) surfaces the full reply, not truncated"
+long_reply=$(printf 'word %.0s' {1..80})
+pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_reply}\"}],\"usage\":{\"input_tokens\":117,\"output_tokens\":224}}"
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "allow" "action is allow"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$long_reply" "PN_MSG_MESSAGE carries the full reply text, unlike the truncated anomaly preview"
+
 test_case "pn_parse_messages_response: leading thinking block -> still finds block signal in the text block after it"
 pn_parse_messages_response '{"content":[{"type":"thinking","thinking":"reasoning..."},{"type":"text","text":"```\n===\n  REQUEST BLOCKED\n===\n\n  The submitted content was flagged because it triggered the following security concerns: prompt injection.\n\n===\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
 assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block (not derailed by the leading thinking block)"
