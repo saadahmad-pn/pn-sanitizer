@@ -369,18 +369,26 @@ main() {
       if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
         anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
       fi
-      # PN_MSG_MESSAGE is a raw, truncated preview of whatever the backend
-      # actually returned (see pn_preview_text) -- may be empty if there
-      # was no text content at all to preview. Surfacing it beats a canned
-      # sentence that reveals nothing about what actually happened.
-      local anomaly_detail=""
+      # PN_MSG_MESSAGE is whatever the backend actually returned, in full
+      # (may be empty if there was truly no text content at all). Shown
+      # directly, the same way a real block's reason is shown directly --
+      # not wrapped in a canned "unexpected response" sentence, which
+      # would bury real content (e.g. a not-yet-recognized block-banner
+      # variant, confirmed to happen in practice) behind boilerplate. The
+      # generic sentence is only a last resort when there's genuinely
+      # nothing to show.
       if [[ -n "$PN_MSG_MESSAGE" ]]; then
-        anomaly_detail=" Raw response: \"$PN_MSG_MESSAGE\""
-      fi
-      if [[ "$FAILURE_MODE" == "open" ]]; then
-        json_permission_allow "${anomaly_prefix}The scanning service returned an unexpected response.${anomaly_detail} ${action_noun} allowed WITHOUT a security scan."
+        if [[ "$FAILURE_MODE" == "open" ]]; then
+          json_permission_allow "${anomaly_prefix}${PN_MSG_MESSAGE}"
+        else
+          json_permission_deny "${anomaly_prefix}${PN_MSG_MESSAGE}" "$PN_MSG_MESSAGE Do not retry ${action_desc}."
+        fi
       else
-        json_permission_deny "${anomaly_prefix}The scanning service returned an unexpected response.${anomaly_detail} ${action_noun} blocked." "The scanning service returned an unexpected response.${anomaly_detail} Do not retry ${action_desc}."
+        if [[ "$FAILURE_MODE" == "open" ]]; then
+          json_permission_allow "${anomaly_prefix}The scanning service returned an unexpected response. ${action_noun} allowed WITHOUT a security scan."
+        else
+          json_permission_deny "${anomaly_prefix}The scanning service returned an unexpected response. ${action_noun} blocked." "The scanning service returned an unexpected response. Do not retry ${action_desc}."
+        fi
       fi
       ;;
     block)

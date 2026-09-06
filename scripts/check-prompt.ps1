@@ -165,14 +165,26 @@ try {
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
         $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
-      $anomalyDetail = ""
+      # $parsedVerdict.Message is whatever the backend actually returned,
+      # in full (may be empty if there was truly no text content at all).
+      # Shown directly, the same way a real block's reason is shown
+      # directly -- not wrapped in a canned "unexpected response"
+      # sentence, which would bury real content (e.g. a not-yet-
+      # recognized block-banner variant, confirmed to happen in
+      # practice) behind boilerplate. The generic sentence is only a
+      # last resort when there's genuinely nothing to show.
       if ($parsedVerdict.Message) {
-        $anomalyDetail = " Raw response: `"$($parsedVerdict.Message)`""
+        if ($PromptFailureMode -eq "closed") {
+          Write-JsonDeny -Message "${anomalyPrefix}$($parsedVerdict.Message)"
+        } else {
+          Write-JsonAllow -Message "${anomalyPrefix}$($parsedVerdict.Message)"
+        }
+        return
       }
       if ($PromptFailureMode -eq "closed") {
-        Write-JsonDeny -Message "${anomalyPrefix}The scanning service returned an unexpected response.${anomalyDetail} Prompt blocked."
+        Write-JsonDeny -Message "${anomalyPrefix}The scanning service returned an unexpected response. Prompt blocked."
       } else {
-        Write-JsonAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response.${anomalyDetail} Allowing prompt."
+        Write-JsonAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Allowing prompt."
       }
     }
     "block" {

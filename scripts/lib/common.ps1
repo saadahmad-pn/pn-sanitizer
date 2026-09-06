@@ -342,7 +342,10 @@ function Invoke-MessagesHttpPost {
 # content[] is scanned by type instead of indexed at [0], etc).
 # Returns [PSCustomObject]@{ Action = "allow"|"block"|"anomaly"; Message = "..." }
 # (block: the extracted block reason; allow: the backend's actual reply
-# text, in full; anomaly: a truncated raw preview.)
+# text; anomaly: the raw text content, if any -- all three in full, never
+# truncated: max_tokens already bounds how large this can get, and
+# clipping a real block/anomaly finding to hide it behind a canned
+# sentence defeats the point of showing it at all.)
 #
 # This whole function is a stopgap, not a permanent design (P2-1) --
 # mirrors pn_parse_messages_response in common.sh, see that function's
@@ -388,11 +391,13 @@ function ConvertFrom-PnMessagesResponse {
 
   if ($null -eq $inputTokens -or $null -eq $outputTokens -or $null -eq $textBlock) {
     $result.Action = "anomaly"
-    # Best-effort: a missing text block means there's nothing to preview,
-    # but missing/malformed usage numbers can still come with real text
-    # content worth showing.
+    # Best-effort: a missing text block means there's nothing to show
+    # (textBlock is already empty in that case), but missing/malformed
+    # usage numbers can still come with real text content worth showing,
+    # in full -- not guessed or trimmed, same reasoning as the zero-usage
+    # anomaly branch below.
     if ($textBlock) {
-      $result.Message = ConvertTo-PnPreviewText -Text $textBlock
+      $result.Message = $textBlock
     }
     return $result
   }
@@ -404,41 +409,27 @@ function ConvertFrom-PnMessagesResponse {
     } else {
       $result.Action = "anomaly"
       # Unlike a block, there's no known scaffolding to strip here -- an
-      # anomaly is by definition a shape we don't recognize. A raw,
-      # truncated preview at least tells the caller what the backend
-      # actually said, instead of a canned "unexpected response" sentence
-      # that reveals nothing about what actually happened.
-      $result.Message = ConvertTo-PnPreviewText -Text $textBlock
+      # anomaly is by definition a shape we don't recognize (e.g. a real,
+      # legitimate block banner variant this heuristic doesn't know about
+      # yet -- confirmed to happen in practice: a "RESPONSE BLOCKED"
+      # post-generation banner, not just "REQUEST BLOCKED"). The raw text
+      # is shown in full rather than guessed at, hidden, or clipped --
+      # the caller decides how to present it, this function just refuses
+      # to throw away real content behind a canned "unexpected response"
+      # sentence.
+      $result.Message = $textBlock
     }
   } else {
     # Real allow (non-zero usage): the backend is also a coding assistant,
     # not just a scanner -- on this path its reply can be genuinely useful
     # content (e.g. working code plus an explanation), not throwaway
-    # filler. Surfaced in full, not truncated via ConvertTo-PnPreviewText,
-    # the same way the block banner's own explanation is used verbatim
-    # rather than clipped -- clipping a real, useful answer would defeat
-    # the point of surfacing it at all.
+    # filler. Surfaced in full, the same way the block banner's own
+    # explanation is used verbatim rather than clipped -- clipping a
+    # real, useful answer would defeat the point of surfacing it at all.
     $result.Message = $textBlock
   }
 
   return $result
-}
-
-# ConvertTo-PnPreviewText <raw_text> [-MaxChars 200]
-# Collapses whitespace/newlines to single spaces and truncates, for
-# surfacing a raw, unrecognized response as a one-line diagnostic
-# snippet. Not validated or trusted content -- shown so a human can see
-# what the backend actually returned, nothing more structured than that.
-function ConvertTo-PnPreviewText {
-  param(
-    [Parameter(Mandatory = $true)][string]$Text,
-    [int]$MaxChars = 200
-  )
-  $collapsed = (($Text -replace '[\r\n\t]+', ' ') -replace ' {2,}', ' ').Trim()
-  if ($collapsed.Length -gt $MaxChars) {
-    return $collapsed.Substring(0, $MaxChars) + "..."
-  }
-  return $collapsed
 }
 
 # ConvertTo-PnStrippedBlockBanner <raw_block_banner_text>

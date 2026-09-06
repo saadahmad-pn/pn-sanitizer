@@ -395,9 +395,12 @@ json_session_context() {
 #
 # Sets globals PN_MSG_ACTION ("allow"|"block"|"anomaly") and PN_MSG_MESSAGE
 # (block: the extracted block reason; allow: the backend's actual reply
-# text, in full -- see the "allow" branch below for why; anomaly: a
-# truncated raw preview). Must be called as a plain function call (never
-# via $(...)), same requirement as http_post_split_status above.
+# text; anomaly: the raw text content, if any -- all three in full, never
+# truncated: max_tokens already bounds how large this can get, and
+# clipping a real block/anomaly finding to hide it behind a canned
+# sentence defeats the point of showing it at all). Must be called as a
+# plain function call (never via $(...)), same requirement as
+# http_post_split_status above.
 #
 # This whole function is a stopgap, not a permanent design (P2-1): any
 # upstream change to usage accounting or the block banner's wording turns
@@ -429,12 +432,12 @@ pn_parse_messages_response() {
 
   if [[ "$input_tokens" == "missing" ]] || [[ "$output_tokens" == "missing" ]] || [[ "$has_text_block" != "true" ]]; then
     PN_MSG_ACTION="anomaly"
-    # Best-effort: a missing text block means there's nothing to preview
+    # Best-effort: a missing text block means there's nothing to show
     # (text_content is already "" in that case), but missing/malformed
-    # usage numbers can still come with real text content worth showing.
-    if [[ -n "$text_content" ]]; then
-      PN_MSG_MESSAGE="$(pn_preview_text "$text_content")"
-    fi
+    # usage numbers can still come with real text content worth showing,
+    # in full -- not guessed or trimmed, same reasoning as the zero-usage
+    # anomaly branch below.
+    PN_MSG_MESSAGE="$text_content"
     return 0
   fi
 
@@ -445,41 +448,24 @@ pn_parse_messages_response() {
     else
       PN_MSG_ACTION="anomaly"
       # Unlike a block, there's no known scaffolding to strip here -- an
-      # anomaly is by definition a shape we don't recognize. A raw,
-      # truncated preview at least tells the caller what the backend
-      # actually said, instead of a canned "unexpected response" sentence
-      # that reveals nothing about what actually happened.
-      PN_MSG_MESSAGE="$(pn_preview_text "$text_content")"
+      # anomaly is by definition a shape we don't recognize (e.g. a real,
+      # legitimate block banner variant this heuristic doesn't know about
+      # yet -- confirmed to happen in practice: a "RESPONSE BLOCKED"
+      # post-generation banner, not just "REQUEST BLOCKED"). The raw text
+      # is shown in full rather than guessed at, hidden, or clipped --
+      # the caller decides how to present it, this function just refuses
+      # to throw away real content behind a canned "unexpected response"
+      # sentence.
+      PN_MSG_MESSAGE="$text_content"
     fi
   else
     # Real allow (non-zero usage): the backend is also a coding assistant,
     # not just a scanner -- on this path its reply can be genuinely useful
     # content (e.g. working code plus an explanation), not throwaway
-    # filler. Surfaced in full, not truncated via pn_preview_text, the
-    # same way the block banner's own explanation is used verbatim rather
-    # than clipped -- clipping a real, useful answer would defeat the
-    # point of surfacing it at all.
+    # filler. Surfaced in full, the same way the block banner's own
+    # explanation is used verbatim rather than clipped -- clipping a
+    # real, useful answer would defeat the point of surfacing it at all.
     PN_MSG_MESSAGE="$text_content"
-  fi
-}
-
-# pn_preview_text <raw_text> [max_chars]
-# Collapses whitespace/newlines to single spaces and truncates to
-# max_chars (default 200), for surfacing a raw, unrecognized response as
-# a one-line diagnostic snippet. Not validated or trusted content --
-# shown so a human can see what the backend actually returned, nothing
-# more structured than that.
-pn_preview_text() {
-  local text="$1"
-  local max_chars="${2:-200}"
-  local collapsed
-  collapsed=$(printf '%s' "$text" | tr '\n\r\t' '   ' | tr -s ' ')
-  collapsed="${collapsed#"${collapsed%%[![:space:]]*}"}"
-  collapsed="${collapsed%"${collapsed##*[![:space:]]}"}"
-  if [[ ${#collapsed} -gt $max_chars ]]; then
-    printf '%s...' "${collapsed:0:$max_chars}"
-  else
-    printf '%s' "$collapsed"
   fi
 }
 
