@@ -45,13 +45,24 @@ Same reasoning as the login skill: there's no environment variable that
 tells you where the plugin is installed, so don't guess the path. Locate
 both now — you'll need `paradigmnetworks-models` for step 2 regardless of
 what the user asked for, and `set-model` only if they end up wanting to
-change it (step 4), but there's no harm finding both up front.
+change it (step 4), but there's no harm finding both up front. Use
+whichever command matches the shell you're actually running in — a
+Windows machine without WSL/Git Bash can't run the bash `find` command,
+and vice versa:
+
+macOS/Linux:
 
 ```bash
 find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/paradigmnetworks-models.sh" 2>/dev/null
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/paradigmnetworks-models.ps1" 2>/dev/null
 find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/set-model.sh" 2>/dev/null
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/set-model.ps1" 2>/dev/null
+```
+
+Windows (PowerShell):
+
+```powershell
+Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\paradigmnetworks-models.ps1" -or $_.FullName -like "*\paradigm-scanner\scripts\set-model.ps1" } |
+  Select-Object -ExpandProperty FullName
 ```
 
 This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local

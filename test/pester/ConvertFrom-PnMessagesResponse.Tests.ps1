@@ -15,10 +15,19 @@ BeforeAll {
 }
 
 Describe "ConvertFrom-PnMessagesResponse" {
-  It "classifies a normal reply (non-zero usage) as allow" {
+  It "classifies a normal reply (non-zero usage) as allow, surfacing the full reply text" {
     $body = '{"content":[{"type":"text","text":"Hello! How can I help?"}],"model":"anthropic/claude-sonnet-4-6","usage":{"input_tokens":870,"output_tokens":46}}'
     $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
     $result.Action | Should -Be "allow"
+    $result.Message | Should -Be "Hello! How can I help?"
+  }
+
+  It "does not truncate a long allow-path reply, unlike the anomaly preview" {
+    $longReply = (1..80 | ForEach-Object { "word" }) -join " "
+    $body = "{`"content`":[{`"type`":`"text`",`"text`":`"$longReply`"}],`"usage`":{`"input_tokens`":117,`"output_tokens`":224}}"
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "allow"
+    $result.Message | Should -Be $longReply
   }
 
   It "classifies a REQUEST BLOCKED banner with zero usage as block, and strips the banner scaffolding" {
@@ -55,6 +64,39 @@ Describe "ConvertFrom-PnMessagesResponse" {
     $body = '{"content":[{"type":"text","text":"An unrecognized response shape, not a real block or a real reply."}],"usage":{"input_tokens":0,"output_tokens":0}}'
     $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
     $result.Action | Should -Be "anomaly"
+    $result.Message | Should -Be "An unrecognized response shape, not a real block or a real reply."
+  }
+
+  It "shows anomaly text raw, not collapsed/reformatted" {
+    $body = '{"content":[{"type":"text","text":"line one\nline two\t\tpadded"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "anomaly"
+    $result.Message | Should -Be "line one`nline two`t`tpadded"
+  }
+
+  It "never truncates anomaly text, however long" {
+    $longText = "a" * 250
+    $body = "{`"content`":[{`"type`":`"text`",`"text`":`"$longText`"}],`"usage`":{`"input_tokens`":0,`"output_tokens`":0}}"
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "anomaly"
+    $result.Message | Should -Be $longText
+  }
+
+  It "shows a second, unrecognized block-banner variant (zero usage, no REQUEST BLOCKED) in full as an anomaly" {
+    # Regression test: the backend has a real, confirmed second guard
+    # banner ("RESPONSE BLOCKED", a post-generation check on the model's
+    # own generated code) that this heuristic doesn't recognize as a
+    # block, only as an anomaly -- but the full findings must still reach
+    # the user/agent, not get swallowed behind a generic "unexpected
+    # response" sentence.
+    $responseBlockedText = "``````\n========================================================================`n  RESPONSE BLOCKED`n========================================================================`n`n  The generated code was blocked because post-generation security analysis identified OWASP compliance violations.`n``````"
+    $body = ([PSCustomObject]@{
+      content = @([PSCustomObject]@{ type = "text"; text = $responseBlockedText })
+      usage   = [PSCustomObject]@{ input_tokens = 0; output_tokens = 0 }
+    } | ConvertTo-Json -Depth 5 -Compress)
+    $result = ConvertFrom-PnMessagesResponse -ResponseBody $body
+    $result.Action | Should -Be "anomaly"
+    $result.Message | Should -Be $responseBlockedText
   }
 
   It "classifies a missing content array as anomaly" {

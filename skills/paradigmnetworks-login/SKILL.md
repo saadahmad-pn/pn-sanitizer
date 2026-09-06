@@ -95,11 +95,24 @@ that point.
 
 Running the script (unlike the check in step 1) needs its real path, since
 it needs `pn_config.sh`/`pn_config.ps1` next to it. On macOS/Linux you need
-`login.sh`; on Windows you need `login.ps1` alongside `run-powershell.cmd`:
+`login.sh`; on Windows you need `login.ps1` alongside `run-powershell.cmd`.
+Use whichever command matches the shell you're actually running in — a
+Windows machine without WSL/Git Bash can't run the bash `find` command,
+and vice versa:
+
+macOS/Linux:
 
 ```bash
 find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
 find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.ps1" 2>/dev/null
+```
+
+Windows (PowerShell):
+
+```powershell
+Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\login.ps1" } |
+  Select-Object -ExpandProperty FullName
 ```
 
 This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
@@ -123,9 +136,15 @@ Windows:
 ("the base URL" is whatever the user gave you in step 2.)
 
 Run it in the background rather than blocking the turn on it — it can take
-up to two minutes, and you need to relay its output as soon as it appears
-(the script flushes its output immediately, so read it after a couple of
-seconds rather than waiting for the process to exit).
+up to two minutes. **Poll its output every second or two, specifically
+looking for the URL/browser-opened line, rather than checking once and
+moving on.** The script starts its local callback server before it prints
+that line, so a single early check can land in the narrow window after
+the server is already up but before the line has actually been written —
+confirmed directly as the cause of the URL inconsistently failing to
+reach the user even though the script itself always prints it. Keep
+checking (this is normally a matter of seconds, not the full two-minute
+budget) until you actually see it before relaying anything.
 
 The script already knows whether it's running in a sandboxed agent shell and
 adjusts itself accordingly — it will either open a browser for the user or

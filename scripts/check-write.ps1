@@ -1,4 +1,4 @@
-# preToolUse hook (Windows): scan agent response before Write tool calls.
+# preToolUse hook (Windows): scan agent response before Write and Shell tool calls.
 # (Cursor has no separate "Edit" tool_name; all file modifications use
 # "Write".) Returns {permission: "allow"/"deny", user_message: "...",
 # agent_message: "..."}. Mirrors scripts/check-write.sh.
@@ -48,7 +48,12 @@ $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
 # isn't guaranteed to always be OWASP-flavored -- see
 # ConvertTo-PnStrippedBlockBanner's own comment on why the content after
 # the banner header can't be assumed to have any particular shape.
-$StopInstruction = "A security scan blocked this write due to a detected policy violation. Do not retry this write or attempt a workaround (e.g. base64-encoding it, splitting the string, writing it to a different file, or renaming the variable). Stop this task and relay the findings above to the user in full, exactly as given -- every issue, category, code, and standard name mentioned. Do not summarize or paraphrase them into a general statement; the user needs the precise details to know what to fix."
+# Takes "this write" or "this command" (see $actionDesc, set once $toolName
+# is known) since the same instruction now covers both Write and Shell.
+function Build-StopInstruction {
+  param([string]$ActionDesc)
+  return "A security scan blocked $ActionDesc due to a detected policy violation. Do not retry $ActionDesc or attempt a workaround (e.g. re-encoding it, splitting it up, or otherwise disguising it to bypass detection). Stop this task and relay the findings above to the user in full, exactly as given -- every issue, category, code, and standard name mentioned. Do not summarize or paraphrase them into a general statement; the user needs the precise details to know what to fix."
+}
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
 # /v1/messages endpoint on the same backend, which requires a model.
@@ -58,25 +63,31 @@ $StopInstruction = "A security scan blocked this write due to a detected policy 
 # tier, chosen because testing showed the block/allow verdict is
 # identical across models and max_tokens values -- the platform's guard
 # fires before the requested model ever runs, so model choice only
-# affects cost/latency on the (always-discarded) allow-path reply, not
-# detection accuracy.
+# affects cost/latency on the allow-path reply, not detection accuracy.
 $Model = (Resolve-PnModel).Model
-# 150 comfortably covers the block banner + reason sentence; confirmed via
-# live testing that the banner is injected by the guard without ever being
-# subject to max_tokens (output_tokens is 0 even for the full banner), so
-# this only trades off cost/latency on the allow path, not truncation risk.
-$MaxTokens = 150
+# The block banner itself is never subject to max_tokens (confirmed via
+# live testing: output_tokens is 0 even for the full banner, since the
+# platform's guard injects it before the requested model runs at all), so
+# this budget only governs the allow-path reply's length. Raised from an
+# earlier 150 (which comfortably covered the banner but wasn't meant to
+# cover anything else, back when that reply was discarded) now that the
+# reply is surfaced to the user as user_message -- 150 would truncate most
+# real answers (a plain "write me hello.py" reply alone ran ~224 output
+# tokens in testing).
+$MaxTokens = 1024
 
 function Write-CheckWriteAuditLog {
   param(
+    [string]$ToolName = "",
     [string]$FilePath,
+    [string]$Command = "",
     [string]$Decision,
     [string]$Reason = "",
     [string]$Detail = "",
     [string]$ScanUrl = "",
     [string]$MessageId = ""
   )
-  $entry = [PSCustomObject]@{ file_path = $FilePath; decision = $Decision }
+  $entry = [PSCustomObject]@{ tool_name = $ToolName; file_path = $FilePath; command = $Command; decision = $Decision }
   # -PassThru not used, and piped through Out-Null regardless: Add-Member's
   # pipeline-input behavior around emitting the modified object isn't
   # worth relying on either way here -- this must never leak into stdout.
@@ -110,9 +121,19 @@ try {
   }
 
   $toolName = Get-JsonProperty -InputObject $parsedPayload -Name "tool_name" -Default ""
-  if ($toolName -ne "Write") {
+  if ($toolName -ne "Write" -and $toolName -ne "Shell") {
     Write-JsonPermissionAllow
     return
+  }
+
+  # Tool-appropriate wording for user_message/agent_message below -- a
+  # message that says "Write blocked" for a blocked shell command would be
+  # actively misleading about what actually happened.
+  $actionNoun = "Write"
+  $actionDesc = "this write"
+  if ($toolName -eq "Shell") {
+    $actionNoun = "Command"
+    $actionDesc = "this command"
   }
 
   $agentMessage = ([string](Get-JsonProperty -InputObject $parsedPayload -Name "agent_message" -Default "")).Trim()
@@ -120,33 +141,40 @@ try {
   $toolInput = Get-JsonProperty -InputObject $parsedPayload -Name "tool_input" -Default $null
   $filePath = Get-JsonProperty -InputObject $toolInput -Name "file_path" -Default ""
   $fileContent = [string](Get-JsonProperty -InputObject $toolInput -Name "content" -Default "")
+  $shellCommand = [string](Get-JsonProperty -InputObject $toolInput -Name "command" -Default "")
+
+  # $subject is what's actually about to happen -- the file content being
+  # written for a Write call, or the command about to run for a Shell call.
+  # Same role $fileContent played before Shell existed, just named for what
+  # it now covers.
+  $subject = if ($toolName -eq "Write") { $fileContent } else { $shellCommand }
 
   $turnText = ""
   if ($transcriptPath) {
     $turnText = Get-CurrentTurnText -TranscriptPath $transcriptPath -MaxLines $TranscriptLines
   }
 
-  Write-DebugLog -Message "tool_input | file_path=$filePath | content_len=$($fileContent.Length) | turn_text_len=$($turnText.Length) | agent_message_len=$($agentMessage.Length)" -LogPath $DebugLogPath
+  Write-DebugLog -Message "tool_input | tool_name=$toolName | file_path=$filePath | command_len=$($shellCommand.Length) | content_len=$($fileContent.Length) | turn_text_len=$($turnText.Length) | agent_message_len=$($agentMessage.Length)" -LogPath $DebugLogPath
 
-  # Scan the current turn's conversation together with the file content --
-  # neither alone is enough. File-content-only can miss malicious *intent*
-  # that doesn't show up in code that looks ordinary on its own (e.g. the
-  # user's actual ask was the problem, not the resulting file). A raw
-  # transcript tail on its own can drag in stale context from an earlier,
-  # unrelated turn (confirmed directly: a trivial follow-up write was
-  # blocked purely because recent transcript text mentioned a security
-  # topic from a previous, unrelated prompt). Get-CurrentTurnText above
-  # scopes to the most recent user message onward, so it can't repeat that
-  # -- combining it with the actual file content covers both what was
-  # asked for and what's actually about to be written.
+  # Scan the current turn's conversation together with the write/command
+  # subject -- neither alone is enough. The subject alone can miss malicious
+  # *intent* that doesn't show up in code/commands that look ordinary on
+  # their own (e.g. the user's actual ask was the problem, not the resulting
+  # file or command). A raw transcript tail on its own can drag in stale
+  # context from an earlier, unrelated turn (confirmed directly: a trivial
+  # follow-up write was blocked purely because recent transcript text
+  # mentioned a security topic from a previous, unrelated prompt).
+  # Get-CurrentTurnText above scopes to the most recent user message onward,
+  # so it can't repeat that -- combining it with the actual subject covers
+  # both what was asked for and what's actually about to happen.
   $scanText = ""
   $scanSource = ""
-  if ($turnText -and $fileContent) {
-    $scanText = "$turnText`n`n---`n`n$fileContent"
-    $scanSource = "turn+content"
-  } elseif ($fileContent) {
-    $scanText = $fileContent
-    $scanSource = "content"
+  if ($turnText -and $subject) {
+    $scanText = "$turnText`n`n---`n`n$subject"
+    $scanSource = "turn+subject"
+  } elseif ($subject) {
+    $scanText = $subject
+    $scanSource = "subject"
   } elseif ($turnText) {
     $scanText = $turnText
     $scanSource = "turn"
@@ -166,15 +194,15 @@ try {
   Write-DebugLog -Message "Config resolved | configured=$($null -ne $config)" -LogPath $DebugLogPath
   if ($null -eq $config) {
     $reason = "Paradigm Networks not configured -- run the paradigmnetworks-login skill"
-    Write-CheckWriteAuditLog -FilePath $filePath -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
       -Reason "not_configured" -Detail $reason
 
     $signupNote = "Don't have one yet? Sign up at https://signup.claude-demo.paradigmnetworks.ai/signup."
     if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service is unavailable ($reason). Write allowed WITHOUT a security scan. $signupNote"
+      Write-JsonPermissionAllow -Message "The scanning service is unavailable ($reason). ${actionNoun} allowed WITHOUT a security scan. $signupNote"
     } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable ($reason). Write blocked. $signupNote" `
-        -AgentMessage "The scanning service is unavailable ($reason). Do not retry this write."
+      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable ($reason). ${actionNoun} blocked. $signupNote" `
+        -AgentMessage "The scanning service is unavailable ($reason). Do not retry ${actionDesc}."
     }
     return
   }
@@ -191,36 +219,36 @@ try {
   Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode)" -LogPath $DebugLogPath
 
   if ($result.TimedOut) {
-    Write-CheckWriteAuditLog -FilePath $filePath -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
       -Reason "api_timeout" -Detail "${TimeoutSeconds}s timeout" -ScanUrl $scanUrl
     if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). Write allowed WITHOUT a security scan."
+      Write-JsonPermissionAllow -Message "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). ${actionNoun} allowed WITHOUT a security scan."
     } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). Write blocked." `
-        -AgentMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). Do not retry this write."
+      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). ${actionNoun} blocked." `
+        -AgentMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). Do not retry ${actionDesc}."
     }
     return
   }
   if ($result.ConnectionFailed) {
-    Write-CheckWriteAuditLog -FilePath $filePath -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
       -Reason "api_unreachable" -Detail "connection failed" -ScanUrl $scanUrl
     if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service is unavailable (connection failed). Write allowed WITHOUT a security scan."
+      Write-JsonPermissionAllow -Message "The scanning service is unavailable (connection failed). ${actionNoun} allowed WITHOUT a security scan."
     } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (connection failed). Write blocked." `
-        -AgentMessage "The scanning service is unavailable (connection failed). Do not retry this write."
+      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (connection failed). ${actionNoun} blocked." `
+        -AgentMessage "The scanning service is unavailable (connection failed). Do not retry ${actionDesc}."
     }
     return
   }
 
   if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
-    Write-CheckWriteAuditLog -FilePath $filePath -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
       -Reason "api_http_error" -Detail "HTTP $($result.StatusCode)" -ScanUrl $scanUrl
     if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service returned an error (HTTP $($result.StatusCode)). Write allowed WITHOUT a security scan."
+      Write-JsonPermissionAllow -Message "The scanning service returned an error (HTTP $($result.StatusCode)). ${actionNoun} allowed WITHOUT a security scan."
     } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service returned an error (HTTP $($result.StatusCode)). Write blocked." `
-        -AgentMessage "The scanning service returned an error (HTTP $($result.StatusCode)). Do not retry this write."
+      Write-JsonPermissionDeny -UserMessage "The scanning service returned an error (HTTP $($result.StatusCode)). ${actionNoun} blocked." `
+        -AgentMessage "The scanning service returned an error (HTTP $($result.StatusCode)). Do not retry ${actionDesc}."
     }
     return
   }
@@ -229,13 +257,13 @@ try {
   try {
     $responseObject = $result.Body | ConvertFrom-Json -ErrorAction Stop
   } catch {
-    Write-CheckWriteAuditLog -FilePath $filePath -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
       -Reason "api_invalid_json" -Detail "scanner returned invalid JSON" -ScanUrl $scanUrl
     if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service returned an invalid response. Write allowed WITHOUT a security scan."
+      Write-JsonPermissionAllow -Message "The scanning service returned an invalid response. ${actionNoun} allowed WITHOUT a security scan."
     } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service returned an invalid response. Write blocked." `
-        -AgentMessage "The scanning service returned an invalid response. Do not retry this write."
+      Write-JsonPermissionDeny -UserMessage "The scanning service returned an invalid response. ${actionNoun} blocked." `
+        -AgentMessage "The scanning service returned an invalid response. Do not retry ${actionDesc}."
     }
     return
   }
@@ -248,7 +276,7 @@ try {
   $action = $parsedVerdict.Action
   $messageId = Get-JsonProperty -InputObject $responseObject -Name "id" -Default ""
 
-  Write-CheckWriteAuditLog -FilePath $filePath -Decision $action -MessageId $messageId
+  Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $action -MessageId $messageId
 
   switch ($action) {
     "anomaly" {
@@ -261,11 +289,28 @@ try {
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
         $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
-      if ($FailureMode -eq "open") {
-        Write-JsonPermissionAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Write allowed WITHOUT a security scan."
+      # $parsedVerdict.Message is whatever the backend actually returned,
+      # in full (may be empty if there was truly no text content at all).
+      # Shown directly, the same way a real block's reason is shown
+      # directly -- not wrapped in a canned "unexpected response"
+      # sentence, which would bury real content (e.g. a not-yet-
+      # recognized block-banner variant, confirmed to happen in
+      # practice) behind boilerplate. The generic sentence is only a
+      # last resort when there's genuinely nothing to show.
+      if ($parsedVerdict.Message) {
+        if ($FailureMode -eq "open") {
+          Write-JsonPermissionAllow -Message "${anomalyPrefix}$($parsedVerdict.Message)"
+        } else {
+          Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}$($parsedVerdict.Message)" `
+            -AgentMessage "$($parsedVerdict.Message) Do not retry ${actionDesc}."
+        }
       } else {
-        Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}The scanning service returned an unexpected response. Write blocked." `
-          -AgentMessage "The scanning service returned an unexpected response. Do not retry this write."
+        if ($FailureMode -eq "open") {
+          Write-JsonPermissionAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. ${actionNoun} allowed WITHOUT a security scan."
+        } else {
+          Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}The scanning service returned an unexpected response. ${actionNoun} blocked." `
+            -AgentMessage "The scanning service returned an unexpected response. Do not retry ${actionDesc}."
+        }
       }
     }
     "block" {
@@ -279,25 +324,40 @@ try {
       # noun-phrase (that assumption is exactly what broke when a second,
       # longer banner shape showed up).
       $userMessage = $parsedVerdict.Message
-      Write-JsonPermissionDeny -UserMessage $userMessage -AgentMessage "$userMessage $StopInstruction"
+      Write-JsonPermissionDeny -UserMessage $userMessage -AgentMessage "$userMessage $(Build-StopInstruction $actionDesc)"
     }
     default {
       # "allow" is the only other action ConvertFrom-PnMessagesResponse
       # produces -- there is no "warn" state on this endpoint (see that
-      # function's comment); the model's actual reply is discarded either
-      # way, only the verdict matters.
+      # function's comment). The backend is also a coding assistant, not
+      # just a scanner, so its reply ($parsedVerdict.Message, full text on
+      # this path) is surfaced as user_message rather than discarded --
+      # may be empty if there was no text content to show. Cursor's own
+      # hooks docs describe user_message as shown "when denied"; whether
+      # it's actually rendered on an allow too is unconfirmed and being
+      # tested live rather than assumed either way.
       Reset-PnScanAnomaly
-      Write-JsonPermissionAllow
+      if ($parsedVerdict.Message) {
+        Write-JsonPermissionAllow -Message $parsedVerdict.Message
+      } else {
+        Write-JsonPermissionAllow
+      }
     }
   }
 } catch {
   # Anything unexpected -- match the FailureMode posture for an
-  # unreachable scanner rather than crash without a response.
+  # unreachable scanner rather than crash without a response. Deliberately
+  # tool-agnostic wording ("Allowed"/"Blocked", not "Write"/"Command"): an
+  # exception this early can happen before $actionNoun/$actionDesc are set
+  # (e.g. Get-StdinText itself throwing), and Set-StrictMode would turn a
+  # reference to either undefined variable into a second, uncaught
+  # exception here -- crashing with no JSON response at all instead of
+  # failing open/closed as intended.
   Write-DebugLog -Message "UNEXPECTED ERROR | $($_.Exception.GetType().FullName): $($_.Exception.Message)" -LogPath $DebugLogPath
   if ($FailureMode -eq "open") {
-    Write-JsonPermissionAllow -Message "The scanning service is unavailable. Write allowed WITHOUT a security scan."
+    Write-JsonPermissionAllow -Message "The scanning service is unavailable. Allowed WITHOUT a security scan."
   } else {
-    Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable. Write blocked." `
-      -AgentMessage "The scanning service is unavailable. Do not retry this write."
+    Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable. Blocked." `
+      -AgentMessage "The scanning service is unavailable. Do not retry this action."
   }
 }

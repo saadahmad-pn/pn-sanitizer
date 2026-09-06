@@ -110,10 +110,46 @@ TESTS_RUN=$((TESTS_RUN + 1))
 test_case "pn_parse_messages_response: zero usage, no banner -> anomaly (not guessed either way)"
 pn_parse_messages_response '{"content":[{"type":"text","text":"just a normal-looking short reply"}],"usage":{"input_tokens":0,"output_tokens":0}}'
 assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "just a normal-looking short reply" "PN_MSG_MESSAGE carries a raw preview instead of staying empty"
+
+test_case "pn_parse_messages_response: anomaly text is shown raw, not collapsed/reformatted"
+pn_parse_messages_response '{"content":[{"type":"text","text":"line one\nline two\t\tpadded"}],"usage":{"input_tokens":0,"output_tokens":0}}'
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "line one
+line two		padded" "PN_MSG_MESSAGE is the raw text verbatim -- newlines/tabs are not collapsed"
+
+test_case "pn_parse_messages_response: anomaly text is never truncated, however long"
+long_text=$(printf 'a%.0s' {1..250})
+pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_text}\"}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}"
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$long_text" "full 250-char text is kept, not clipped to 200 + ellipsis"
+
+test_case "pn_parse_messages_response: a second, unrecognized block-banner variant (zero usage, no REQUEST BLOCKED) is still shown in full as an anomaly"
+# Regression test: the backend has a real, confirmed second guard banner
+# ("RESPONSE BLOCKED", a post-generation check on the model's own
+# generated code) that this heuristic doesn't recognize as a block, only
+# as an anomaly -- but the full findings must still reach the user/agent,
+# not get swallowed behind a generic "unexpected response" sentence.
+response_blocked_text='```
+========================================================================
+  RESPONSE BLOCKED
+========================================================================
+
+  The generated code was blocked because post-generation security analysis identified OWASP compliance violations.
+```'
+pn_parse_messages_response "$("$JQ_BIN" -n --arg text "$response_blocked_text" '{content:[{type:"text",text:$text}],usage:{input_tokens:0,output_tokens:0}}')"
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly (banner variant not recognized as a block)"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$response_blocked_text" "the full RESPONSE BLOCKED banner and findings are preserved, not clipped or discarded"
 
 test_case "pn_parse_messages_response: empty content array -> anomaly"
 pn_parse_messages_response '{"content":[],"usage":{"input_tokens":10,"output_tokens":5}}'
 assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
+
+test_case "pn_parse_messages_response: real allow (non-zero usage) surfaces the full reply, not truncated"
+long_reply=$(printf 'word %.0s' {1..80})
+pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_reply}\"}],\"usage\":{\"input_tokens\":117,\"output_tokens\":224}}"
+assert_output_equals "echo \"\$PN_MSG_ACTION\"" "allow" "action is allow"
+assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$long_reply" "PN_MSG_MESSAGE carries the full reply text"
 
 test_case "pn_parse_messages_response: leading thinking block -> still finds block signal in the text block after it"
 pn_parse_messages_response '{"content":[{"type":"thinking","thinking":"reasoning..."},{"type":"text","text":"```\n===\n  REQUEST BLOCKED\n===\n\n  The submitted content was flagged because it triggered the following security concerns: prompt injection.\n\n===\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'

@@ -7,8 +7,9 @@
 #
 # Written against Windows PowerShell 5.1 (the version that ships on every
 # Windows machine by default) -- not PowerShell 7+-only syntax or cmdlet
-# parameters (e.g. Invoke-WebRequest's -Form, added in 6.1+, is deliberately
-# not used below; see Invoke-ScanHttpPost).
+# parameters. HTTP calls shell out to curl.exe (ships inbox on Windows 10
+# build 17063+/Windows 11) rather than Invoke-WebRequest/HttpClient -- see
+# Invoke-CurlRequest below for why.
 
 Set-StrictMode -Version Latest
 
@@ -119,20 +120,77 @@ function Get-JsonProperty {
   return $Default
 }
 
-Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+# Invoke-CurlRequest -CurlArgs <string[]>
+# Shared machinery for Invoke-HttpPostRaw/Invoke-HttpGetRaw below: runs
+# curl.exe with the given arguments (which must already include -s, the
+# URL/method/headers, and a trailing "-w `n%{http_code}"), splits the
+# status-code line curl appends off of the response body, and maps
+# curl's own exit code onto the same {Body, StatusCode, TimedOut,
+# ConnectionFailed} contract this plugin has always used -- so every
+# existing caller keeps working unchanged regardless of what HTTP
+# transport sits underneath.
+#
+# Replaces an HttpClient + CancellationToken implementation that had its
+# own real, confirmed bug: -TimeoutSec/CancelAfter did not reliably abort
+# a hung request on a real Windows PowerShell 5.1 target (a 10s timeout
+# ran ~22s anyway), forcing a manual Task.Wait(timeout) workaround just to
+# get a hard deadline. curl's own --max-time is mature and already proven
+# reliable here -- it's exactly what the bash side has used from day one
+# (see http_post/http_get in common.sh) with no equivalent problem. This
+# also collapses two parallel HTTP implementations (bash's curl calls,
+# PowerShell's HttpClient calls) that had to be kept behaviorally
+# identical by hand into one real implementation, mirrored.
+#
+# curl.exe ships inbox on Windows 10 (build 17063+) and Windows 11 by
+# default. A heavily locked-down machine that blocks/removes it is a real
+# but separate risk, deliberately not handled here yet (no fallback) --
+# revisit if it turns out to matter in practice.
+function Invoke-CurlRequest {
+  param(
+    [Parameter(Mandatory = $true)][string[]]$CurlArgs
+  )
+
+  $rawOutput = & curl.exe @CurlArgs 2>$null
+  $exitCode = $LASTEXITCODE
+
+  # curl exit codes (https://curl.se/libcurl/c/libcurl-errors.html): 28 is
+  # specifically operation-timeout (--max-time exceeded); every other
+  # non-zero code (couldn't resolve host, couldn't connect, SSL failure,
+  # etc.) is treated as one generic connection failure -- the same
+  # coarse-grained split check-write.sh/check-prompt.sh already make on
+  # the bash side (curl_exit -eq 28 vs curl_exit -ne 0), nothing finer.
+  if ($exitCode -eq 28) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+  }
+  if ($exitCode -ne 0) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+  }
+
+  # curl's "-w `n%{http_code}" always appends the status code as one more
+  # line after the response body. PowerShell splits a native command's
+  # multi-line stdout into an array of strings (one per line, newlines
+  # already stripped) when capturing it into a variable -- @(...) just
+  # guards the pathological case where curl printed only a single line.
+  $lines = @($rawOutput)
+  if ($lines.Count -lt 1) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+  }
+  $statusText = ([string]$lines[$lines.Count - 1]).Trim()
+  $statusCode = 0
+  if (-not [int]::TryParse($statusText, [ref]$statusCode)) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+  }
+  $body = if ($lines.Count -gt 1) { ($lines[0..($lines.Count - 2)]) -join "`n" } else { "" }
+
+  return [PSCustomObject]@{
+    Body             = $body
+    StatusCode       = $statusCode
+    TimedOut         = $false
+    ConnectionFailed = $false
+  }
+}
 
 # Invoke-HttpPostRaw -Url ... -BodyBytes ... -ContentType ... -AuthToken ... -TimeoutSec ...
-# A hard-timeout HTTP POST built directly on HttpClient + a
-# CancellationToken, instead of Invoke-WebRequest/-RestMethod's -TimeoutSec.
-# Observed directly against a real Windows test environment for this
-# plugin: -TimeoutSec did not reliably abort a hung request -- the process
-# outlived it and had to be killed from outside by Cursor's own, longer,
-# hook-level timeout instead, with the actual HTTP call never returning at
-# all. CancellationToken.CancelAfter forces the issue: cancelling it aborts
-# the underlying socket operation directly, it does not depend on the HTTP
-# stack choosing to honor a timeout value the way -TimeoutSec apparently
-# doesn't in that environment.
-#
 # Returns a PSCustomObject with:
 #   Body              - response body string, or $null if unreachable/timed out
 #   StatusCode        - HTTP status code (int), or $null if unreachable/timed out
@@ -147,78 +205,39 @@ function Invoke-HttpPostRaw {
     [int]$TimeoutSec = 5
   )
 
-  $cts = New-Object System.Threading.CancellationTokenSource
-  $client = New-Object System.Net.Http.HttpClient
+  # The request body is written to a temp file and sent via
+  # --data-binary @file, never inlined on the command line. PowerShell
+  # does not reliably preserve embedded double quotes (which JSON is full
+  # of) when marshaling a string argument into the one flat command-line
+  # string a native process actually receives on Windows -- confirmed
+  # directly: an inline JSON body produced a real "Unable to parse
+  # request data" from the backend even though the PowerShell string
+  # itself looked completely correct. A uniquely-named temp file (Cursor
+  # can fire multiple hook invocations in parallel -- confirmed directly
+  # in real logs) avoids that whole class of problem.
+  $tempFile = Join-Path $env:TEMP "pn-http-body-$([System.Guid]::NewGuid().ToString('N')).tmp"
   try {
-    # CancelAfter is kept as a best-effort signal, but it is NOT what
-    # actually enforces the timeout below -- observed directly against a
-    # real Windows PowerShell 5.1 target: a request configured with a 10s
-    # timeout ran for ~22s anyway. Windows PowerShell 5.1's HttpClient
-    # sits on older machinery than PowerShell 7's and does not reliably
-    # honor cancellation the way it does on modern .NET (verified working
-    # correctly there in this plugin's own testing). The actual guarantee
-    # here comes from Task.Wait(timeout) below: it returns false on timeout
-    # without throwing, and without waiting any longer, regardless of
-    # whether the underlying request ever actually stops -- an abandoned
-    # task left running in the background is fine, since this process
-    # prints its result and exits shortly after either way.
-    $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
+    [System.IO.File]::WriteAllBytes($tempFile, $BodyBytes)
 
-    # The leading comma matters: without it, PowerShell unrolls the byte
-    # array into one constructor argument per byte instead of passing the
-    # array itself as the single argument ByteArrayContent(byte[]) expects
-    # -- observed directly: "Cannot find an overload ... argument count: 127".
-    $content = New-Object System.Net.Http.ByteArrayContent(, $BodyBytes)
-    $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($ContentType)
+    $curlArgs = @(
+      "-s", "-X", "POST", $Url,
+      "-H", "Content-Type: $ContentType",
+      "--data-binary", "@$tempFile",
+      "--max-time", "$TimeoutSec",
+      "-w", "`n%{http_code}"
+    )
     if ($AuthToken) {
-      $client.DefaultRequestHeaders.Authorization =
-        New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $AuthToken)
+      $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
     }
 
-    $postTask = $client.PostAsync($Url, $content, $cts.Token)
-    # Task.Wait(timeout) returns false on a pure timeout (our own wait
-    # gave up, the task may still be running) -- but if the task itself
-    # transitions to Faulted/Canceled *within* that same window, Wait()
-    # throws instead of returning normally. Both outcomes are handled here.
-    try {
-      $completedInTime = $postTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
-    } catch {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-    if (-not $completedInTime) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-    }
-    if ($postTask.IsFaulted) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-
-    $response = $postTask.Result
-    $readTask = $response.Content.ReadAsStringAsync()
-    try {
-      $readCompletedInTime = $readTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
-    } catch {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-    if (-not $readCompletedInTime) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-    }
-
-    return [PSCustomObject]@{
-      Body             = $readTask.Result
-      StatusCode       = [int]$response.StatusCode
-      TimedOut         = $false
-      ConnectionFailed = $false
-    }
+    return Invoke-CurlRequest -CurlArgs $curlArgs
   } finally {
-    $client.Dispose()
-    $cts.Dispose()
+    Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
   }
 }
 
 # Invoke-HttpGetRaw -Url ... -AuthToken ... -TimeoutSec ...
-# Same hard-timeout design as Invoke-HttpPostRaw above (Task.Wait-based, not
-# CancelAfter alone -- see that function's comment for why), for GET
-# requests -- used for GET /v1/models.
+# Same contract as Invoke-HttpPostRaw above -- used for GET /v1/models.
 function Invoke-HttpGetRaw {
   param(
     [Parameter(Mandatory = $true)][string]$Url,
@@ -226,85 +245,23 @@ function Invoke-HttpGetRaw {
     [int]$TimeoutSec = 5
   )
 
-  $cts = New-Object System.Threading.CancellationTokenSource
-  $client = New-Object System.Net.Http.HttpClient
-  try {
-    $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
-    if ($AuthToken) {
-      $client.DefaultRequestHeaders.Authorization =
-        New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $AuthToken)
-    }
-
-    $getTask = $client.GetAsync($Url, $cts.Token)
-    try {
-      $completedInTime = $getTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
-    } catch {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-    if (-not $completedInTime) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-    }
-    if ($getTask.IsFaulted) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-
-    $response = $getTask.Result
-    $readTask = $response.Content.ReadAsStringAsync()
-    try {
-      $readCompletedInTime = $readTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
-    } catch {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-    if (-not $readCompletedInTime) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-    }
-
-    return [PSCustomObject]@{
-      Body             = $readTask.Result
-      StatusCode       = [int]$response.StatusCode
-      TimedOut         = $false
-      ConnectionFailed = $false
-    }
-  } finally {
-    $client.Dispose()
-    $cts.Dispose()
+  $curlArgs = @(
+    "-s", "-X", "GET", $Url,
+    "--max-time", "$TimeoutSec",
+    "-w", "`n%{http_code}"
+  )
+  if ($AuthToken) {
+    $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
   }
-}
 
-# Invoke-ScanHttpPost -Url ... -TextData ... -AuthToken ... -TimeoutSec ...
-# Mirrors http_post_form + http_post_split_status combined into one call:
-# sends TextData as a literal multipart/form-data field named "text" (never
-# interpreted as a file path, matching curl --form-string's behavior).
-function Invoke-ScanHttpPost {
-  param(
-    [Parameter(Mandatory = $true)][string]$Url,
-    [Parameter(Mandatory = $true)][string]$TextData,
-    [string]$AuthToken = "",
-    [int]$TimeoutSec = 5
-  )
-
-  $boundary = [System.Guid]::NewGuid().ToString()
-  $bodyLines = @(
-    "--$boundary",
-    'Content-Disposition: form-data; name="text"',
-    "",
-    $TextData,
-    "--$boundary--",
-    ""
-  )
-  $bodyString = $bodyLines -join "`r`n"
-  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyString)
-
-  return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
-    -ContentType "multipart/form-data; boundary=$boundary" `
-    -AuthToken $AuthToken -TimeoutSec $TimeoutSec
+  return Invoke-CurlRequest -CurlArgs $curlArgs
 }
 
 # Invoke-MessagesHttpPost -Url ... -TextData ... -Model ... -MaxTokens ... -AuthToken ... -TimeoutSec ...
-# Same pairing pattern as Invoke-ScanHttpPost above, but for the Anthropic-
-# compatible /v1/messages endpoint: builds a proper JSON request body via
-# ConvertTo-Json (not hand-built string interpolation -- TextData can
-# contain quotes/backslashes/newlines that must be escaped correctly) and
+# Builds a request body for the Anthropic-compatible /v1/messages
+# endpoint via ConvertTo-Json (not hand-built string interpolation --
+# TextData can contain quotes/backslashes/newlines that must be escaped
+# correctly) and
 # posts it through the same generic Invoke-HttpPostRaw.
 function Invoke-MessagesHttpPost {
   param(
@@ -341,7 +298,11 @@ function Invoke-MessagesHttpPost {
 # alone is treated as "anomaly" rather than guessed as allow/block, why
 # content[] is scanned by type instead of indexed at [0], etc).
 # Returns [PSCustomObject]@{ Action = "allow"|"block"|"anomaly"; Message = "..." }
-# (Message only meaningful when Action is "block".)
+# (block: the extracted block reason; allow: the backend's actual reply
+# text; anomaly: the raw text content, if any -- all three in full, never
+# truncated: max_tokens already bounds how large this can get, and
+# clipping a real block/anomaly finding to hide it behind a canned
+# sentence defeats the point of showing it at all.)
 #
 # This whole function is a stopgap, not a permanent design (P2-1) --
 # mirrors pn_parse_messages_response in common.sh, see that function's
@@ -387,6 +348,14 @@ function ConvertFrom-PnMessagesResponse {
 
   if ($null -eq $inputTokens -or $null -eq $outputTokens -or $null -eq $textBlock) {
     $result.Action = "anomaly"
+    # Best-effort: a missing text block means there's nothing to show
+    # (textBlock is already empty in that case), but missing/malformed
+    # usage numbers can still come with real text content worth showing,
+    # in full -- not guessed or trimmed, same reasoning as the zero-usage
+    # anomaly branch below.
+    if ($textBlock) {
+      $result.Message = $textBlock
+    }
     return $result
   }
 
@@ -396,7 +365,25 @@ function ConvertFrom-PnMessagesResponse {
       $result.Message = ConvertTo-PnStrippedBlockBanner -Text $textBlock
     } else {
       $result.Action = "anomaly"
+      # Unlike a block, there's no known scaffolding to strip here -- an
+      # anomaly is by definition a shape we don't recognize (e.g. a real,
+      # legitimate block banner variant this heuristic doesn't know about
+      # yet -- confirmed to happen in practice: a "RESPONSE BLOCKED"
+      # post-generation banner, not just "REQUEST BLOCKED"). The raw text
+      # is shown in full rather than guessed at, hidden, or clipped --
+      # the caller decides how to present it, this function just refuses
+      # to throw away real content behind a canned "unexpected response"
+      # sentence.
+      $result.Message = $textBlock
     }
+  } else {
+    # Real allow (non-zero usage): the backend is also a coding assistant,
+    # not just a scanner -- on this path its reply can be genuinely useful
+    # content (e.g. working code plus an explanation), not throwaway
+    # filler. Surfaced in full, the same way the block banner's own
+    # explanation is used verbatim rather than clipped -- clipping a
+    # real, useful answer would defeat the point of surfacing it at all.
+    $result.Message = $textBlock
   }
 
   return $result

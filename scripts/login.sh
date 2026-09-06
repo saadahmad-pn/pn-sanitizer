@@ -395,12 +395,20 @@ main() {
   authorize_url+="&redirect_uri=$(urlencode_strict "$redirect_uri")"
   authorize_url+="&state=$(urlencode_strict "$state")"
 
-  # Print instructions and try to open browser
+  # Print instructions and try to open browser. The URL is printed in
+  # every branch below, including the "opened a browser" one -- a
+  # successful `open`/`xdg-open` only means the OS accepted the request,
+  # not that a browser window actually became visible to the user
+  # (observed in practice on real machines: a remote session, a service
+  # account, or no default browser association can all "succeed" here
+  # with nothing actually appearing on screen). Relaying the URL must
+  # never depend on silently trusting that it worked.
   if running_in_cursor_sandbox; then
     echo "Open this URL to log in:"
     echo "  $authorize_url"
   elif open_browser "$authorize_url"; then
-    echo "Opened your browser to log in."
+    echo "Opened your browser to log in. If it didn't appear, open this URL manually:"
+    echo "  $authorize_url"
   else
     echo "Couldn't open a browser automatically. Open this URL to log in:"
     echo "  $authorize_url"
