@@ -226,11 +226,19 @@ function Invoke-Main {
     "&redirect_uri=$([System.Uri]::EscapeDataString($redirectUri))" +
     "&state=$([System.Uri]::EscapeDataString($state))"
 
+  # The URL is printed in every branch below, including the "opened a
+  # browser" one -- Start-Process succeeding only means the OS accepted
+  # the request, not that a browser window actually became visible to the
+  # user (observed in practice on Windows: RDP sessions, jump boxes,
+  # service accounts, or no default browser association all "succeed"
+  # here with nothing actually appearing on screen). Relaying the URL
+  # must never depend on silently trusting that it worked.
   if (Test-RunningInCursorSandbox) {
     Write-ConsoleLine "Open this URL to log in:"
     Write-ConsoleLine "  $authorizeUrl"
   } elseif (Open-LoginBrowser -Url $authorizeUrl) {
-    Write-ConsoleLine "Opened your browser to log in."
+    Write-ConsoleLine "Opened your browser to log in. If it didn't appear, open this URL manually:"
+    Write-ConsoleLine "  $authorizeUrl"
   } else {
     Write-ConsoleLine "Couldn't open a browser automatically. Open this URL to log in:"
     Write-ConsoleLine "  $authorizeUrl"
