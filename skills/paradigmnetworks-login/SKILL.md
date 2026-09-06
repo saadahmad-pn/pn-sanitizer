@@ -95,11 +95,24 @@ that point.
 
 Running the script (unlike the check in step 1) needs its real path, since
 it needs `pn_config.sh`/`pn_config.ps1` next to it. On macOS/Linux you need
-`login.sh`; on Windows you need `login.ps1` alongside `run-powershell.cmd`:
+`login.sh`; on Windows you need `login.ps1` alongside `run-powershell.cmd`.
+Use whichever command matches the shell you're actually running in — a
+Windows machine without WSL/Git Bash can't run the bash `find` command,
+and vice versa:
+
+macOS/Linux:
 
 ```bash
 find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
 find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.ps1" 2>/dev/null
+```
+
+Windows (PowerShell):
+
+```powershell
+Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\login.ps1" } |
+  Select-Object -ExpandProperty FullName
 ```
 
 This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
