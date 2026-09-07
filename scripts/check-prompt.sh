@@ -167,10 +167,33 @@ main() {
     return 0
   fi
 
-  # Reject non-2xx responses (expired/invalid token, server error, etc.)
-  # before treating the body as a real verdict — a valid-JSON error body
-  # (e.g. {"error": "unauthorized"}) would otherwise default to "allow" via
-  # the // fallback below and silently mask the actual failure.
+  # HTTP 403 from this endpoint means the org is logged in but has no
+  # models configured on the backend -- a known, deterministic state, not
+  # a transient/ambiguous failure. Always block here regardless of
+  # PROMPT_FAILURE_MODE (same posture as the unconditional-allow branches
+  # above for "not configured"/"jq missing": a known state gets a fixed,
+  # correct outcome rather than being left to the generic failure-mode
+  # setting). This intentionally does not distinguish sub-causes of 403
+  # (e.g. an expired token would also land here) -- if that turns out to
+  # matter, the fix is to inspect the response body for a specific error
+  # code rather than relax this branch.
+  if [[ "$HTTP_POST_STATUS" == "403" ]]; then
+    log_debug "API HTTP 403 | url=$scan_url" "$DEBUG_LOG_PATH"
+    json_deny "### 🛡️ Complete Your Paradigm Networks Setup
+
+You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
+
+Please visit the following link to finish your configuration, and then try again:
+[${base_url%/}](${base_url%/})
+
+If you run into any issues during setup, feel free to reach out to customer.support@paradigmnetworks.ai for assistance."
+    return 0
+  fi
+
+  # Reject other non-2xx responses (expired/invalid token, server error,
+  # etc.) before treating the body as a real verdict — a valid-JSON error
+  # body (e.g. {"error": "unauthorized"}) would otherwise default to
+  # "allow" via the // fallback below and silently mask the actual failure.
   if [[ "$HTTP_POST_STATUS" != 2* ]]; then
     log_debug "API HTTP error | status=$HTTP_POST_STATUS | url=$scan_url" "$DEBUG_LOG_PATH"
     if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
