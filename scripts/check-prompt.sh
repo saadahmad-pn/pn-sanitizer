@@ -179,9 +179,14 @@ main() {
   # code rather than relax this branch.
   if [[ "$HTTP_POST_STATUS" == "403" ]]; then
     log_debug "API HTTP 403 | url=$scan_url" "$DEBUG_LOG_PATH"
-    json_deny "### 🛡️ Paradigm Networks setup isn't finished yet
+    json_deny "### 🛡️ Complete Your Paradigm Networks Setup
 
-You're successfully logged in, but your account's setup still needs a couple of things configured before you can send prompts. Head over to ${base_url%/} to finish setting things up, then try again."
+You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
+
+Please visit the following link to finish your configuration, and then try again:
+[${base_url%/}](${base_url%/})
+
+If you run into any issues during setup, feel free to reach out to customer.support@paradigmnetworks.ai for assistance."
     return 0
   fi
 

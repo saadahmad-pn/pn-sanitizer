@@ -133,9 +133,14 @@ try {
   # to distinguish sub-causes of 403 (e.g. an expired token).
   if ($result.StatusCode -eq 403) {
     Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
-    Write-JsonDeny -Message "### 🛡️ Paradigm Networks setup isn't finished yet
+    Write-JsonDeny -Message "### 🛡️ Complete Your Paradigm Networks Setup
 
-You're successfully logged in, but your account's setup still needs a couple of things configured before you can send prompts. Head over to $($config.BaseUrl.TrimEnd('/')) to finish setting things up, then try again."
+You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
+
+Please visit the following link to finish your configuration, and then try again:
+[$($config.BaseUrl.TrimEnd('/'))]($($config.BaseUrl.TrimEnd('/')))
+
+If you run into any issues during setup, feel free to reach out to customer.support@paradigmnetworks.ai for assistance."
     return
   }
 
