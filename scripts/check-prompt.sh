@@ -179,7 +179,9 @@ main() {
   # code rather than relax this branch.
   if [[ "$HTTP_POST_STATUS" == "403" ]]; then
     log_debug "API HTTP 403 | url=$scan_url" "$DEBUG_LOG_PATH"
-    json_deny "**Paradigm Networks models are not configured.** Your organization is logged in, but no AI models are set up on the backend yet. Contact your Paradigm Networks administrator to configure a model, then try again."
+    json_deny "### 🛡️ Paradigm Networks setup isn't finished yet
+
+You're successfully logged in, but your account's setup still needs a couple of things configured before you can send prompts. Please double check that everything is set up correctly, then try again. If the issue continues, reach out to your Paradigm Networks administrator for help."
     return 0
   fi
 

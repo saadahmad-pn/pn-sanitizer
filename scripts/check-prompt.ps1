@@ -133,7 +133,9 @@ try {
   # to distinguish sub-causes of 403 (e.g. an expired token).
   if ($result.StatusCode -eq 403) {
     Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
-    Write-JsonDeny -Message "**Paradigm Networks models are not configured.** Your organization is logged in, but no AI models are set up on the backend yet. Contact your Paradigm Networks administrator to configure a model, then try again."
+    Write-JsonDeny -Message "### 🛡️ Paradigm Networks setup isn't finished yet
+
+You're successfully logged in, but your account's setup still needs a couple of things configured before you can send prompts. Please double check that everything is set up correctly, then try again. If the issue continues, reach out to your Paradigm Networks administrator for help."
     return
   }
 
