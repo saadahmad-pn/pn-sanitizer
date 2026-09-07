@@ -135,7 +135,7 @@ try {
     Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
     Write-JsonDeny -Message "### 🛡️ Paradigm Networks setup isn't finished yet
 
-You're successfully logged in, but your account's setup still needs a couple of things configured before you can send prompts. Please double check that everything is set up correctly, then try again. If the issue continues, reach out to your Paradigm Networks administrator for help."
+You're successfully logged in, but your account's setup still needs a couple of things configured before you can send prompts. Head over to $($config.BaseUrl.TrimEnd('/')) to finish setting things up, then try again."
     return
   }
 
