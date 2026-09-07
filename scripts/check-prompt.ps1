@@ -122,6 +122,21 @@ try {
     return
   }
 
+  # HTTP 403 from this endpoint means the org is logged in but has no
+  # models configured on the backend -- a known, deterministic state, not
+  # a transient/ambiguous failure. Always block here regardless of
+  # $PromptFailureMode (same posture as the unconditional-allow branch
+  # above for "not configured": a known state gets a fixed, correct
+  # outcome rather than being left to the generic failure-mode setting).
+  # Mirrors scripts/check-prompt.sh's identical 403 branch -- see that
+  # file's comment for the full rationale, including why this doesn't try
+  # to distinguish sub-causes of 403 (e.g. an expired token).
+  if ($result.StatusCode -eq 403) {
+    Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
+    Write-JsonDeny -Message "**Paradigm Networks models are not configured.** Your organization is logged in, but no AI models are set up on the backend yet. Contact your Paradigm Networks administrator to configure a model, then try again."
+    return
+  }
+
   if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
     Write-DebugLog -Message "API HTTP error | status=$($result.StatusCode) | url=$scanUrl" -LogPath $DebugLogPath
     if ($PromptFailureMode -eq "closed") {
