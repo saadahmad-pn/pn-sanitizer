@@ -43,6 +43,20 @@
         "matcher": "Write",
         "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
         "timeout": 250
+      },
+      {
+        "matcher": "",
+        "command": "bash ./scripts/spike-skill-detection.sh",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "matcher": "",
+        "command": "bash ./scripts/spike-skill-detection.sh",
+        "failClosed": false,
+        "timeout": 10
       }
     ]
   }
