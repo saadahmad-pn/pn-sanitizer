@@ -5,13 +5,11 @@
 
 set -o pipefail
 
-# On Windows, this same hook event also has a PowerShell entry (run via
-# scripts/run-powershell.cmd) that does the real work -- Cursor has no way
-# to run only one entry per platform per event (confirmed against Cursor's
-# own hooks documentation), so both are always present in hooks.json. If
-# bash happens to be available anyway (Git Bash, MSYS2, Cygwin), this would
-# otherwise run a second time for the same event. Defer to the PowerShell
-# entry instead.
+# Dead code on the hook path: hooks.json now registers exactly one entry
+# per event, dispatched by scripts/run-hook.cmd (bash here, PowerShell on
+# Windows), so Cursor never spawns this script under Git Bash/MSYS2/Cygwin
+# in the first place. Left in place only so this .sh still behaves
+# correctly if someone invokes it directly under one of those.
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
     echo '{}'
@@ -55,8 +53,16 @@ EOF
 
   # Check if Paradigm Networks is configured
   if pn_is_configured; then
-    # Configured, return no-op
-    echo '{}'
+    pn_check_scan_staleness
+    if [[ "$PN_SCAN_STALE" == "true" ]]; then
+      local stale_message
+      read -r -d '' stale_message <<'EOF' || true
+⚠️ Paradigm Networks security scanning hasn't completed a successful scan in over an hour (or hasn't completed one yet this session). Prompts and file writes may currently be going through unscanned. Check your network connection and Paradigm Networks login status; if this continues, contact your administrator.
+EOF
+      json_session_context "$stale_message"
+    else
+      echo '{}'
+    fi
   else
     # Not configured, ask user to login
     local message

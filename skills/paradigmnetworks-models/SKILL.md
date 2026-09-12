@@ -80,7 +80,7 @@ bash <path-to-paradigmnetworks-models.sh>
 Windows:
 
 ```
-<scripts-dir>\run-powershell.cmd <scripts-dir>\paradigmnetworks-models.ps1
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\paradigmnetworks-models.ps1"
 ```
 
 This hits the live API, so it reflects exactly what this org actually has
@@ -116,7 +116,7 @@ bash <path-to-set-model.sh> "<model-id>"
 Windows:
 
 ```
-<scripts-dir>\run-powershell.cmd <scripts-dir>\set-model.ps1 -Model "<model-id>"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\set-model.ps1" -Model "<model-id>"
 ```
 
 Relay its output verbatim. It re-validates the id against the live list

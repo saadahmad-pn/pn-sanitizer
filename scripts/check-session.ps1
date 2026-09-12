@@ -18,7 +18,12 @@ Get-StdinText | Out-Null
 
 try {
   if (Test-PnConfigured) {
-    Write-Output "{}"
+    if (Test-PnScanStale) {
+      $staleMessage = "⚠️ Paradigm Networks security scanning hasn't completed a successful scan in over an hour (or hasn't completed one yet this session). Prompts and file writes may currently be going through unscanned. Check your network connection and Paradigm Networks login status; if this continues, contact your administrator."
+      Write-JsonSessionContext -Context $staleMessage
+    } else {
+      Write-Output "{}"
+    }
   } else {
     $message = "Paradigm Networks is not configured for this workspace. Ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run the paradigmnetworks-login skill to authenticate before relying on Paradigm Networks-gated prompts or tool calls."
     Write-JsonSessionContext -Context $message

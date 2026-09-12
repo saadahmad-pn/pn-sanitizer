@@ -208,10 +208,20 @@ assert_output_equals "pn_record_scan_anomaly" "2" "Second call returns 2"
 assert_output_equals "pn_record_scan_anomaly" "3" "Third call returns 3, meeting PN_ANOMALY_WARNING_THRESHOLD"
 assert_file_exists "$PN_ANOMALY_STATE_PATH" "State file persisted to disk"
 
-test_case "pn_reset_scan_anomaly clears the streak"
-pn_reset_scan_anomaly
-assert_file_not_exists "$PN_ANOMALY_STATE_PATH" "State file removed"
-assert_output_equals "pn_record_scan_anomaly" "1" "Next call after a reset starts back at 1, not 4"
+test_case "pn_record_successful_scan clears the streak and records a timestamp"
+pn_record_successful_scan
+assert_file_exists "$PN_ANOMALY_STATE_PATH" "State file written (not removed -- it now also carries last_successful_scan)"
+assert_output_equals "\"\$JQ_BIN\" -r '.consecutive_anomaly_count' \"\$PN_ANOMALY_STATE_PATH\"" "0" "Streak reset to 0"
+last_scan=$("$JQ_BIN" -r '.last_successful_scan // empty' "$PN_ANOMALY_STATE_PATH")
+assert_output_equals "echo \"$last_scan\" | grep -Eq '^[0-9]+$' && echo yes || echo no" "yes" "last_successful_scan is a numeric epoch"
+assert_output_equals "pn_record_scan_anomaly" "1" "Next call after a success record starts back at 1, not 4"
+
+test_case "pn_record_scan_anomaly preserves an existing last_successful_scan"
+rm -f "$PN_ANOMALY_STATE_PATH"
+pn_record_successful_scan
+preserved_scan=$("$JQ_BIN" -r '.last_successful_scan' "$PN_ANOMALY_STATE_PATH")
+pn_record_scan_anomaly > /dev/null
+assert_output_equals "\"\$JQ_BIN\" -r '.last_successful_scan' \"\$PN_ANOMALY_STATE_PATH\"" "$preserved_scan" "last_successful_scan survives an anomaly call"
 
 echo ""
 echo -e "${BLUE}=== Unit Tests: lib/git-utils.sh ===${NC}"

@@ -4,13 +4,11 @@
 
 set -o pipefail
 
-# On Windows, this same hook event also has a PowerShell entry (run via
-# scripts/run-powershell.cmd) that does the real work -- Cursor has no way
-# to run only one entry per platform per event (confirmed against Cursor's
-# own hooks documentation), so both are always present in hooks.json. If
-# bash happens to be available anyway (Git Bash, MSYS2, Cygwin), this would
-# otherwise run a second time for the same event. Defer to the PowerShell
-# entry instead.
+# Dead code on the hook path: hooks.json now registers exactly one entry
+# per event, dispatched by scripts/run-hook.cmd (bash here, PowerShell on
+# Windows), so Cursor never spawns this script under Git Bash/MSYS2/Cygwin
+# in the first place. Left in place only so this .sh still behaves
+# correctly if someone invokes it directly under one of those.
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
     echo '{"continue": true}'
@@ -26,7 +24,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
-TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-240}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-25}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
@@ -261,7 +259,7 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       fi
       ;;
     block)
-      pn_reset_scan_anomaly
+      pn_record_successful_scan
       # Markdown formatting (**bold**, blank-line breaks, `inline code`,
       # `### heading`, and `> blockquote`) confirmed rendering correctly
       # in Cursor's UI.
@@ -324,7 +322,7 @@ $concern_section
       # docs describe user_message as shown "when blocked"; whether it's
       # actually rendered on an allow too is unconfirmed and being tested
       # live rather than assumed either way.
-      pn_reset_scan_anomaly
+      pn_record_successful_scan
       if [[ -n "$PN_MSG_MESSAGE" ]]; then
         json_allow "$PN_MSG_MESSAGE"
       else

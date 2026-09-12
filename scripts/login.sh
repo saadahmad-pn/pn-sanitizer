@@ -12,7 +12,7 @@ set -o pipefail
 # attempting a login that depends on openssl/nc, which may not be present.
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
-    echo "error: this is the Unix login script. On Windows, run login.ps1 instead (via scripts/run-powershell.cmd login.ps1 -BaseUrl <url>)." >&2
+    echo "error: this is the Unix login script. On Windows, run login.ps1 instead (via powershell -File login.ps1 -BaseUrl <url>)." >&2
     exit 1
     ;;
 esac

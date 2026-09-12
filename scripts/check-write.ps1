@@ -11,12 +11,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 240s, matching the bash side (raised from 20s/40s -- establishing the
-# HTTPS connection to the scan API from a real Windows target can itself
-# take ~20-25s on its own, likely a slow/blocked certificate revocation
-# check, before any actual server-side work even starts, so the old
-# defaults left little margin for a real scan under any load).
-$TimeoutSeconds = 240
+# 25s, matching the bash side. Lowered back down from 240s now that
+# preToolUse (Write) runs with failClosed: true -- a long timeout there
+# means a slow backend freezes the IDE for minutes before denying, which
+# is worse than failing fast. See CHANGELOG.md for the full history.
+$TimeoutSeconds = 25
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
@@ -314,7 +313,7 @@ try {
       }
     }
     "block" {
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       # $parsedVerdict.Message is the block banner's own explanation,
       # with only the confirmed-fixed scaffolding stripped
       # (ConvertTo-PnStrippedBlockBanner in lib/common.ps1) -- already a
@@ -336,7 +335,7 @@ try {
       # hooks docs describe user_message as shown "when denied"; whether
       # it's actually rendered on an allow too is unconfirmed and being
       # tested live rather than assumed either way.
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       if ($parsedVerdict.Message) {
         Write-JsonPermissionAllow -Message $parsedVerdict.Message
       } else {

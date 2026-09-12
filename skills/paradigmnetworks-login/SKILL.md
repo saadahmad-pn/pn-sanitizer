@@ -95,7 +95,7 @@ that point.
 
 Running the script (unlike the check in step 1) needs its real path, since
 it needs `pn_config.sh`/`pn_config.ps1` next to it. On macOS/Linux you need
-`login.sh`; on Windows you need `login.ps1` alongside `run-powershell.cmd`.
+`login.sh`; on Windows you need `login.ps1`.
 Use whichever command matches the shell you're actually running in — a
 Windows machine without WSL/Git Bash can't run the bash `find` command,
 and vice versa:
@@ -130,7 +130,7 @@ bash <path-to-login.sh> --base-url <the-base-url>
 Windows:
 
 ```
-<scripts-dir>\run-powershell.cmd <scripts-dir>\login.ps1 -BaseUrl <the-base-url>
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\login.ps1" -BaseUrl <the-base-url>
 ```
 
 ("the base URL" is whatever the user gave you in step 2.)

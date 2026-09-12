@@ -4,6 +4,64 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-12 — Windows non-admin fixes: TcpListener login, single hook dispatcher, fail-closed gate, lowered timeouts again
+
+Four fixes needed to make the plugin usable on a Windows account without
+admin rights:
+
+- **Login (`login.ps1`)**: `Start-CallbackListener` now binds a raw
+  `System.Net.Sockets.TcpListener` on `127.0.0.1` instead of
+  `System.Net.HttpListener`. `HttpListener` registers through HTTP.SYS and
+  needs a `netsh http add urlacl` reservation a standard user can't grant
+  themselves, so login was completely broken on any non-admin account. A
+  plain socket bind needs no such reservation. `Wait-ForCallback` now
+  hand-rolls the minimal HTTP parsing this requires (previously provided by
+  `HttpListener`), decoding `code`/`state`/`error` with
+  `System.Net.WebUtility.UrlDecode` to match `login.sh`'s `+`-as-space
+  `urldecode_strict` semantics.
+- **Port-scan retry**: the old loop caught every exception from
+  `.Start()` and just moved on, scanning 8000-64999 -- on an account
+  where the bind fails for every port, that meant ~57,000 useless
+  iterations before a misleading "no free port" message. Now only retries
+  on `SocketException` with `SocketErrorCode -eq AddressAlreadyInUse`;
+  anything else rethrows immediately. Range capped at 8000-8099.
+- **Hooks (`hooks/hooks.json`)**: replaced the bash+PowerShell entry pair
+  on every event with a single entry per event pointing at a new polyglot
+  dispatcher, `scripts/run-hook.cmd` (deletes `scripts/run-powershell.cmd`).
+  The old setup had two confirmed defects on Windows: `run-powershell.cmd`'s
+  `-File %*` was unquoted, breaking any install path with a space (hits the
+  login skill directly); and on a Windows box with no Git Bash, the bash
+  entries failed to spawn on every single event. `run-hook.cmd` is a
+  polyglot file -- its first line is a no-op label to `cmd.exe` and a real
+  `exec bash ".../$1.sh"` to `/bin/sh` -- so one command now works
+  correctly on both platforms.
+- **Fail-closed gate**: `beforeSubmitPrompt` (`check-prompt`) and
+  `preToolUse` (`check-write`) now set `failClosed: true`. This wasn't
+  safe before today's hooks.json change -- with two entries per event, the
+  entry that failed to spawn on the wrong platform would have blocked
+  everything. With exactly one entry per event that genuinely runs, a
+  broken dispatcher now correctly blocks instead of Cursor silently
+  failing open.
+- **Timeouts lowered again**: the 2026-09-01 entry below raised
+  `PARADIGM_NETWORKS_TIMEOUT` to 240s and the `hooks.json` per-hook
+  timeout to 250s, deliberately, for latency headroom. That's no longer
+  safe now that `check-prompt`/`check-write` fail closed: a 250s ceiling
+  means a slow or unreachable backend now freezes the IDE for over four
+  minutes before denying, instead of failing fast. Both come back down:
+  `PARADIGM_NETWORKS_TIMEOUT` 240s → **25s**, `hooks.json` timeout for
+  `beforeSubmitPrompt`/`preToolUse` 250s → **30s**. `check-session` and
+  `check-repo-context` are untouched (10s, `failClosed: false`, neither
+  gates anything).
+- **Scan-staleness warning**: `~/.paradigm-scanner/anomaly_state.json`
+  gained a `last_successful_scan` epoch field, written on every
+  allow/block verdict (repurposing the existing
+  `pn_reset_scan_anomaly`/`Reset-PnScanAnomaly` call sites, renamed to
+  `pn_record_successful_scan`/`Set-PnLastSuccessfulScan`). `check-session`
+  now warns via `additional_context` when that timestamp is absent or
+  over an hour old while credentials exist -- covering the case
+  `failClosed` can't: the hook runs fine, but the backend has been
+  degraded for a while.
+
 ## 2026-09-01 — Raised default timeouts across the board
 
 Real-world testing showed the previous defaults left too little margin,

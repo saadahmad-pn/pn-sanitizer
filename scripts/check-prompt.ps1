@@ -12,12 +12,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 240s, matching the bash side (raised from 20s/40s -- establishing the
-# HTTPS connection to the scan API from a real Windows target can itself
-# take ~20-25s on its own, likely a slow/blocked certificate revocation
-# check, before any actual server-side work even starts, so the old
-# defaults left little margin for a real scan under any load).
-$TimeoutSeconds = 240
+# 25s, matching the bash side. Lowered back down from 240s now that
+# beforeSubmitPrompt runs with failClosed: true -- a long timeout there
+# means a slow backend freezes the IDE for minutes before denying, which
+# is worse than failing fast. See CHANGELOG.md for the full history.
+$TimeoutSeconds = 25
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
@@ -210,7 +209,7 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       }
     }
     "block" {
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       # Mirrors scripts/check-prompt.sh's block-message formatting
       # exactly -- see that file's comments for the full rationale.
       # Markdown formatting confirmed rendering correctly in Cursor's UI,
@@ -291,7 +290,7 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       # hooks docs describe user_message as shown "when blocked"; whether
       # it's actually rendered on an allow too is unconfirmed and being
       # tested live rather than assumed either way.
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       if ($parsedVerdict.Message) {
         Write-JsonAllow -Message $parsedVerdict.Message
       } else {
