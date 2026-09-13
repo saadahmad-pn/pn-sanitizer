@@ -12,11 +12,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 25s, matching the bash side. Lowered back down from 240s now that
-# beforeSubmitPrompt runs with failClosed: true -- a long timeout there
-# means a slow backend freezes the IDE for minutes before denying, which
-# is worse than failing fast. See CHANGELOG.md for the full history.
-$TimeoutSeconds = 25
+# 240s, matching the bash side. Deliberately kept long even though
+# beforeSubmitPrompt runs with failClosed: true -- a slow/dead backend will
+# now freeze the IDE for up to 240s before denying (worse than the 25s a
+# fail-fast timeout would give), but this restores headroom for real scan
+# latency. See CHANGELOG.md for the full history/tradeoff.
+$TimeoutSeconds = 240
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {

@@ -4,6 +4,25 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-13 — Scan-call timeout and hooks.json ceiling raised back to 240s/250s
+
+The 2026-09-12 entry below lowered `PARADIGM_NETWORKS_TIMEOUT` to 25s and
+the `hooks.json` timeout for `beforeSubmitPrompt`/`preToolUse` to 30s,
+specifically because `failClosed: true` had just been turned on for those
+two hooks -- a long timeout there means a slow/dead backend freezes the
+IDE before denying, so failing fast seemed like the safer default.
+
+Reverted back to 240s/250s, deliberately keeping `failClosed: true` as-is.
+This explicitly accepts the tradeoff the previous entry was trying to
+avoid: a genuinely slow or unreachable backend can now freeze prompt
+submission or a Write for up to ~4 minutes before it finally denies,
+in exchange for enough headroom that real (slow-but-legitimate) scan
+latency doesn't get mistaken for a dead backend and start denying
+prompts/writes that would have succeeded. `PARADIGM_NETWORKS_TIMEOUT` is
+still env-overridable per-machine if a shorter fail-fast window is wanted
+on a specific box; `hooks.json`'s own ceiling is a static value and would
+need a direct edit to shorten again.
+
 ## 2026-09-12 — Windows non-admin fixes: TcpListener login, single hook dispatcher, fail-closed gate, lowered timeouts again
 
 Four fixes needed to make the plugin usable on a Windows account without

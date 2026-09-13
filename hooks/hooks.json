@@ -12,7 +12,7 @@
     "beforeSubmitPrompt": [
       {
         "command": "scripts/run-hook.cmd check-prompt",
-        "timeout": 30,
+        "timeout": 250,
         "failClosed": true
       },
       {
@@ -25,7 +25,7 @@
       {
         "matcher": "Write",
         "command": "scripts/run-hook.cmd check-write",
-        "timeout": 30,
+        "timeout": 250,
         "failClosed": true
       }
     ]
