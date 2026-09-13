@@ -136,14 +136,14 @@ Windows:
 ("the base URL" is whatever the user gave you in step 2.)
 
 Run it in the background rather than blocking the turn on it — it can take
-up to two minutes. **Poll its output every second or two, specifically
+up to five minutes. **Poll its output every second or two, specifically
 looking for the URL/browser-opened line, rather than checking once and
 moving on.** The script starts its local callback server before it prints
 that line, so a single early check can land in the narrow window after
 the server is already up but before the line has actually been written —
 confirmed directly as the cause of the URL inconsistently failing to
 reach the user even though the script itself always prints it. Keep
-checking (this is normally a matter of seconds, not the full two-minute
+checking (this is normally a matter of seconds, not the full five-minute
 budget) until you actually see it before relaying anything.
 
 The script already knows whether it's running in a sandboxed agent shell and
@@ -162,8 +162,8 @@ the newest URL.
 **Poll for completion — do not sleep for a fixed duration and check once.**
 Check whether the background process has finished every few seconds,
 starting almost immediately, and stop the moment it has — most logins
-complete in well under two minutes once the user clicks through, and
-there's no reason to sit idle after it's already done. Two minutes is only
+complete in well under five minutes once the user clicks through, and
+there's no reason to sit idle after it's already done. Five minutes is only
 the outer bound for giving up, not a wait you should run out every time.
 Once it's finished, check the script's actual exit code — don't infer
 success just because the user says "done," since the local callback
@@ -180,4 +180,4 @@ server has to actually receive the redirect.
   skip it. Keep it to one line; don't explain the mechanism unless asked.
 - Non-zero → share the error the script printed (timeout, denied, network
   error, etc.) and offer to retry with a fresh run. If retrying, remind the
-  user they'll need to click through within the two-minute window.
+  user they'll need to click through within the five-minute window.

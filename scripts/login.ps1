@@ -24,7 +24,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ClientId = "cursor-plugin"
-$CallbackTimeoutSeconds = 120
+# 300s: how long the user has to actually complete the browser login flow
+# (click through, possibly sign up first) before this CLI process gives up
+# waiting for the callback. Matches the bash side.
+$CallbackTimeoutSeconds = 300
 # 120s, matching the bash side and pn_config.ps1's refresh timeout -- this
 # hits the same host for the token exchange, and establishing the HTTPS
 # connection alone has been observed to take ~20-25s on a real Windows
