@@ -12,7 +12,7 @@ set -o pipefail
 # attempting a login that depends on openssl/nc, which may not be present.
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
-    echo "error: this is the Unix login script. On Windows, run login.ps1 instead (via scripts/run-powershell.cmd login.ps1 -BaseUrl <url>)." >&2
+    echo "error: this is the Unix login script. On Windows, run login.ps1 instead (via powershell -File login.ps1 -BaseUrl <url>)." >&2
     exit 1
     ;;
 esac
@@ -26,7 +26,10 @@ source "$SCRIPT_DIR/pn_config.sh"
 # Ensure line-buffering for non-TTY stdout
 export PYTHONUNBUFFERED=1
 
-CALLBACK_TIMEOUT_SECONDS=120
+# 300s: how long the user has to actually complete the browser login flow
+# (click through, possibly sign up first) before this CLI process gives up
+# waiting for the callback. Matches the PowerShell side.
+CALLBACK_TIMEOUT_SECONDS=300
 TOKEN_TIMEOUT_SECONDS=120
 
 # Generate PKCE code challenge and verifier

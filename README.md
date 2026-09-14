@@ -41,7 +41,8 @@ Confirm, and your browser opens to sign you in — nothing to copy or paste.
 Once you're signed in, Cursor remembers it on this machine.
 
 To switch organizations later, just ask to log in again — it replaces the
-old login.
+old login. To remove your login from this machine entirely, ask to log
+out — the **paradigmnetworks-logout** skill handles it.
 
 ### Changing the scanning model
 

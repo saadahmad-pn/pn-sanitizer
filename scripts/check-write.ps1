@@ -11,11 +11,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 240s, matching the bash side (raised from 20s/40s -- establishing the
-# HTTPS connection to the scan API from a real Windows target can itself
-# take ~20-25s on its own, likely a slow/blocked certificate revocation
-# check, before any actual server-side work even starts, so the old
-# defaults left little margin for a real scan under any load).
+# 240s, matching the bash side. Deliberately kept long even though
+# preToolUse (Write) runs with failClosed: true -- a slow/dead backend will
+# now freeze the IDE for up to 240s before denying (worse than the 25s a
+# fail-fast timeout would give), but this restores headroom for real scan
+# latency. See CHANGELOG.md for the full history/tradeoff.
 $TimeoutSeconds = 240
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
@@ -287,7 +287,15 @@ try {
       $anomalyStreak = Add-PnScanAnomaly
       $anomalyPrefix = ""
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
-        $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+        # Built via [char] escapes, not a literal character, so this file
+        # stays pure ASCII -- Windows PowerShell 5.1 doesn't reliably
+        # assume UTF-8 for a .ps1 with no byte-order mark, and a real
+        # multi-byte UTF-8 character here corrupts the parser's token
+        # stream for the rest of the file (confirmed directly elsewhere in
+        # this codebase). See scripts/check-prompt.ps1 for the fuller
+        # comment.
+        $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
+        $anomalyPrefix = "$warningSign Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
       # $parsedVerdict.Message is whatever the backend actually returned,
       # in full (may be empty if there was truly no text content at all).
@@ -314,7 +322,7 @@ try {
       }
     }
     "block" {
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       # $parsedVerdict.Message is the block banner's own explanation,
       # with only the confirmed-fixed scaffolding stripped
       # (ConvertTo-PnStrippedBlockBanner in lib/common.ps1) -- already a
@@ -336,7 +344,7 @@ try {
       # hooks docs describe user_message as shown "when denied"; whether
       # it's actually rendered on an allow too is unconfirmed and being
       # tested live rather than assumed either way.
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       if ($parsedVerdict.Message) {
         Write-JsonPermissionAllow -Message $parsedVerdict.Message
       } else {

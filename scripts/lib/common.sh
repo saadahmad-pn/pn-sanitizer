@@ -268,20 +268,25 @@ audit_log() {
 # functions track how many scans *in a row* have landed on "anomaly" so a
 # caller can escalate to a loud, visible warning past a threshold instead
 # of staying silent indefinitely. Call pn_record_scan_anomaly on every
-# anomaly verdict, pn_reset_scan_anomaly on every allow/block verdict --
+# anomaly verdict, pn_record_successful_scan on every allow/block verdict --
 # scoped narrowly to that classification, not to transport-level failures
 # (timeouts, non-2xx, invalid JSON) which already have their own,
 # well-understood handling and aren't part of what this tracks.
 PN_ANOMALY_STATE_PATH="${HOME}/.paradigm-scanner/anomaly_state.json"
 PN_ANOMALY_WARNING_THRESHOLD=3
+PN_SCAN_STALENESS_THRESHOLD_SECONDS=3600
 
 pn_record_scan_anomaly() {
   mkdir -p "$(dirname "$PN_ANOMALY_STATE_PATH")" 2>/dev/null
 
   local count=0
+  local last_successful_scan=""
   if [[ -f "$PN_ANOMALY_STATE_PATH" ]]; then
     count=$("$JQ_BIN" -r '.consecutive_anomaly_count // 0' "$PN_ANOMALY_STATE_PATH" 2>/dev/null)
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
+    # Preserve whatever was there -- an anomaly verdict must not erase the
+    # last confirmed-good scan's timestamp, only bump the streak counter.
+    last_successful_scan=$("$JQ_BIN" -r '.last_successful_scan // empty' "$PN_ANOMALY_STATE_PATH" 2>/dev/null)
   fi
   count=$((count + 1))
 
@@ -292,16 +297,62 @@ pn_record_scan_anomaly() {
   # worth surfacing to the user over.
   local temp_file
   temp_file=$(mktemp "${PN_ANOMALY_STATE_PATH}.XXXXXX" 2>/dev/null) && {
-    echo "{\"consecutive_anomaly_count\": $count}" > "$temp_file"
+    if [[ -n "$last_successful_scan" ]]; then
+      echo "{\"consecutive_anomaly_count\": $count, \"last_successful_scan\": $last_successful_scan}" > "$temp_file"
+    else
+      echo "{\"consecutive_anomaly_count\": $count}" > "$temp_file"
+    fi
     mv "$temp_file" "$PN_ANOMALY_STATE_PATH" 2>/dev/null || rm -f "$temp_file"
   }
 
   echo "$count"
 }
 
-pn_reset_scan_anomaly() {
-  rm -f "$PN_ANOMALY_STATE_PATH" 2>/dev/null
+# Called on every allow/block verdict -- i.e. every scan whose response was
+# a real, recognized shape -- never on anomaly/timeout/connection-error/
+# HTTP-error/invalid-JSON, since those are exactly the failure modes
+# staleness tracking exists to catch. Replaces the old pn_reset_scan_anomaly
+# (which just did rm -f): the anomaly streak still needs clearing, but that
+# now happens alongside writing a fresh timestamp, so a bare file delete no
+# longer fits. This is a blind write (no read-modify-write) -- the count is
+# always reset to 0 regardless of its previous value, the same net effect
+# the old rm -f had -- so there's nothing to lose in a race against a
+# concurrent pn_record_scan_anomaly call.
+pn_record_successful_scan() {
+  mkdir -p "$(dirname "$PN_ANOMALY_STATE_PATH")" 2>/dev/null
+
+  local temp_file
+  temp_file=$(mktemp "${PN_ANOMALY_STATE_PATH}.XXXXXX" 2>/dev/null) && {
+    echo "{\"consecutive_anomaly_count\": 0, \"last_successful_scan\": $(current_epoch)}" > "$temp_file"
+    mv "$temp_file" "$PN_ANOMALY_STATE_PATH" 2>/dev/null || rm -f "$temp_file"
+  }
   return 0
+}
+
+# Sets PN_SCAN_STALE to "true" or "false". Absent state file, absent field,
+# or age past PN_SCAN_STALENESS_THRESHOLD_SECONDS are all "true" -- not
+# distinguished from each other, since to a user they all mean the same
+# thing: no confirmed-recent successful scan. Must be called as a plain
+# statement, not via $(...), same convention as pn_parse_messages_response.
+pn_check_scan_staleness() {
+  PN_SCAN_STALE="true"
+
+  local last_successful_scan=""
+  if [[ -f "$PN_ANOMALY_STATE_PATH" ]]; then
+    last_successful_scan=$("$JQ_BIN" -r '.last_successful_scan // empty' "$PN_ANOMALY_STATE_PATH" 2>/dev/null)
+  fi
+
+  if [[ -n "$last_successful_scan" ]] && [[ "$last_successful_scan" =~ ^[0-9]+$ ]]; then
+    local age=$(( $(current_epoch) - last_successful_scan ))
+    # A negative age (timestamp in the future) means clock skew, not
+    # genuine freshness -- treated as not-stale rather than a bogus huge
+    # staleness value, since a skewed local clock is far more likely than
+    # a corrupted timestamp, and erring toward not-stale avoids a false
+    # warning firing on every session start on an affected machine.
+    if [[ "$age" -le "$PN_SCAN_STALENESS_THRESHOLD_SECONDS" ]]; then
+      PN_SCAN_STALE="false"
+    fi
+  fi
 }
 
 # Timestamp helpers

@@ -12,11 +12,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 240s, matching the bash side (raised from 20s/40s -- establishing the
-# HTTPS connection to the scan API from a real Windows target can itself
-# take ~20-25s on its own, likely a slow/blocked certificate revocation
-# check, before any actual server-side work even starts, so the old
-# defaults left little margin for a real scan under any load).
+# 240s, matching the bash side. Deliberately kept long even though
+# beforeSubmitPrompt runs with failClosed: true -- a slow/dead backend will
+# now freeze the IDE for up to 240s before denying (worse than the 25s a
+# fail-fast timeout would give), but this restores headroom for real scan
+# latency. See CHANGELOG.md for the full history/tradeoff.
 $TimeoutSeconds = 240
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
@@ -133,7 +133,17 @@ try {
   # to distinguish sub-causes of 403 (e.g. an expired token).
   if ($result.StatusCode -eq 403) {
     Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
-    Write-JsonDeny -Message "### 🛡️ Complete Your Paradigm Networks Setup
+    # Emoji built via ConvertFromUtf32/[char] escapes, not a literal
+    # character, so this file stays pure ASCII -- Windows PowerShell 5.1
+    # (unlike PS7+/bash) doesn't reliably assume UTF-8 for a .ps1 with no
+    # byte-order mark, and a real UTF-8 multi-byte character here corrupts
+    # the parser's token stream for the rest of the file (confirmed
+    # directly: an em dash elsewhere in this codebase caused "missing
+    # string terminator"/"missing closing brace" errors dozens of lines
+    # away). Pure-ASCII source sidesteps the whole class of bug regardless
+    # of what encoding any future edit saves the file with.
+    $shield = "$([System.Char]::ConvertFromUtf32(0x1F6E1))$([char]0xFE0F)"
+    Write-JsonDeny -Message "### $shield Complete Your Paradigm Networks Setup
 
 You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
 
@@ -185,7 +195,10 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       $anomalyStreak = Add-PnScanAnomaly
       $anomalyPrefix = ""
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
-        $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+        # See the shield-emoji comment above for why this is built via
+        # [char] escapes rather than a literal character.
+        $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
+        $anomalyPrefix = "$warningSign Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
       # $parsedVerdict.Message is whatever the backend actually returned,
       # in full (may be empty if there was truly no text content at all).
@@ -210,7 +223,7 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       }
     }
     "block" {
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       # Mirrors scripts/check-prompt.sh's block-message formatting
       # exactly -- see that file's comments for the full rationale.
       # Markdown formatting confirmed rendering correctly in Cursor's UI,
@@ -291,7 +304,7 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       # hooks docs describe user_message as shown "when blocked"; whether
       # it's actually rendered on an allow too is unconfirmed and being
       # tested live rather than assumed either way.
-      Reset-PnScanAnomaly
+      Set-PnLastSuccessfulScan
       if ($parsedVerdict.Message) {
         Write-JsonAllow -Message $parsedVerdict.Message
       } else {

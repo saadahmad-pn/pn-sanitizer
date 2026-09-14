@@ -10,7 +10,7 @@
 # guard).
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
-    echo "error: this is the Unix script. On Windows, run set-model.ps1 instead (via scripts/run-powershell.cmd set-model.ps1)." >&2
+    echo "error: this is the Unix script. On Windows, run set-model.ps1 instead (via powershell -File set-model.ps1)." >&2
     exit 1
     ;;
 esac

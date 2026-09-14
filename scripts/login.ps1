@@ -1,14 +1,16 @@
 # OAuth PKCE login flow for Paradigm Networks authentication (Windows).
 # Usage: login.ps1 -BaseUrl https://acme.paradigmnetworks.ai
 #
-# Mirrors scripts/login.sh. The one deliberate behavioral difference: the
-# callback listener binds to 127.0.0.1 specifically (never a wildcard
-# address) using System.Net.HttpListener -- binding to a specific loopback
-# address does not require administrator rights on Windows, whereas
-# binding to a wildcard (+/*) does. Every request the listener ever needs
-# to receive comes from the browser on this same machine, so there is
-# never a reason to bind wider than that -- see the plugin's Windows
-# support notes for why this specific line must never change.
+# Mirrors scripts/login.sh. The callback listener binds a raw
+# System.Net.Sockets.TcpListener to 127.0.0.1 (never a wildcard address).
+# A plain socket bind needs no HTTP.SYS URL ACL reservation, so it works
+# under a standard, non-admin account -- unlike System.Net.HttpListener,
+# which requires either an admin-granted `netsh http add urlacl` reservation
+# or binding a wildcard address (itself admin-only), neither of which a
+# non-admin dev account has. Every request the listener ever needs to
+# receive comes from the browser on this same machine, so there is never a
+# reason to bind wider than loopback -- see the plugin's Windows support
+# notes for why this specific line must never change.
 
 param(
   [Parameter(Mandatory = $true)][string]$BaseUrl
@@ -22,7 +24,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $ClientId = "cursor-plugin"
-$CallbackTimeoutSeconds = 120
+# 300s: how long the user has to actually complete the browser login flow
+# (click through, possibly sign up first) before this CLI process gives up
+# waiting for the callback. Matches the bash side.
+$CallbackTimeoutSeconds = 300
 # 120s, matching the bash side and pn_config.ps1's refresh timeout -- this
 # hits the same host for the token exchange, and establishing the HTTPS
 # connection alone has been observed to take ~20-25s on a real Windows
@@ -78,31 +83,44 @@ function ConvertTo-NormalizedBaseUrl {
   return $match.Groups[1].Value.TrimEnd('/')
 }
 
-# Starts an HttpListener bound to 127.0.0.1 only (see header comment for
-# why), trying successive ports starting at 8000 the same way the bash
-# version probes with `nc -z` -- catches the "already in use" exception
-# and moves on rather than pre-checking.
+# Starts a TcpListener bound to 127.0.0.1 only (see header comment for
+# why), trying successive ports starting at 8000. Only retries on
+# "address already in use" -- an access-denied or other bind failure would
+# apply to every port equally, so it's rethrown immediately instead of
+# burning through the whole range first.
 function Start-CallbackListener {
-  $port = 8000
-  while ($port -lt 65000) {
-    $listener = New-Object System.Net.HttpListener
-    $listener.Prefixes.Add("http://127.0.0.1:$port/")
+  $startPort = 8000
+  $endPort = 8099
+  for ($port = $startPort; $port -le $endPort; $port++) {
+    $listener = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $port)
     try {
       $listener.Start()
       return [PSCustomObject]@{ Listener = $listener; Port = $port }
-    } catch {
-      $listener.Close()
-      $port++
+    } catch [System.Net.Sockets.SocketException] {
+      if ($_.Exception.SocketErrorCode -eq [System.Net.Sockets.SocketError]::AddressAlreadyInUse) {
+        continue
+      }
+      throw
     }
   }
-  throw "no free port found between 8000 and 65000"
+  throw "no free port found between $startPort and $endPort"
 }
 
 # Waits for a GET /callback request, with a timeout. Returns a
 # PSCustomObject with Code/State/ErrorMessage, or $null on timeout.
+#
+# Hand-rolls the minimal HTTP handling a TcpListener needs (no HttpListener
+# available to parse the request for us): reads the request line off the
+# raw NetworkStream, matches it against `/callback`, and decodes the query
+# string manually. Uses System.Net.WebUtility.UrlDecode (not
+# Uri.UnescapeDataString) for code/state/error specifically because it
+# decodes '+' as space, matching scripts/login.sh's urldecode_strict
+# (Python's urllib.parse.unquote_plus semantics) -- Uri.UnescapeDataString
+# does not treat '+' as space and would silently corrupt any value that
+# contains one.
 function Wait-ForCallback {
   param(
-    [Parameter(Mandatory = $true)][System.Net.HttpListener]$Listener,
+    [Parameter(Mandatory = $true)][System.Net.Sockets.TcpListener]$Listener,
     [Parameter(Mandatory = $true)][int]$TimeoutSeconds
   )
 
@@ -112,32 +130,51 @@ function Wait-ForCallback {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $deadline) {
     $remainingMs = [Math]::Max(200, [int](($deadline - (Get-Date)).TotalMilliseconds))
-    $contextTask = $Listener.GetContextAsync()
-    $completed = [System.Threading.Tasks.Task]::WaitAny(@($contextTask), $remainingMs)
+    $acceptTask = $Listener.AcceptTcpClientAsync()
+    $completed = [System.Threading.Tasks.Task]::WaitAny(@($acceptTask), $remainingMs)
     if ($completed -ne 0) {
       continue
     }
 
-    $context = $contextTask.Result
-    $request = $context.Request
+    $client = $acceptTask.Result
+    try {
+      $stream = $client.GetStream()
+      $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::ASCII)
+      $requestLine = $reader.ReadLine()
 
-    if ($request.Url.AbsolutePath -ne "/callback") {
-      $context.Response.StatusCode = 404
-      $context.Response.Close()
-      continue
-    }
+      if ($null -eq $requestLine -or $requestLine -notmatch '^GET /callback\?(\S*) HTTP') {
+        $notFoundBytes = [System.Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nConnection: close`r`n`r`n")
+        $stream.Write($notFoundBytes, 0, $notFoundBytes.Length)
+        continue
+      }
 
-    $code = $request.QueryString["code"]
-    $state = $request.QueryString["state"]
-    $errorParam = $request.QueryString["error"]
+      $queryString = $Matches[1]
+      $code = $null
+      $state = $null
+      $errorParam = $null
+      foreach ($pair in $queryString -split '&') {
+        if (-not $pair) { continue }
+        $kv = $pair -split '=', 2
+        $key = $kv[0]
+        $value = if ($kv.Length -gt 1) { $kv[1] } else { '' }
+        switch ($key) {
+          'code' { $code = [System.Net.WebUtility]::UrlDecode($value) }
+          'state' { $state = [System.Net.WebUtility]::UrlDecode($value) }
+          'error' { $errorParam = [System.Net.WebUtility]::UrlDecode($value) }
+        }
+      }
 
-    $context.Response.ContentType = "text/html"
-    $context.Response.ContentLength64 = $responseBytes.Length
-    $context.Response.OutputStream.Write($responseBytes, 0, $responseBytes.Length)
-    $context.Response.OutputStream.Close()
+      $header = "HTTP/1.1 200 OK`r`nContent-Type: text/html`r`nContent-Length: $($responseBytes.Length)`r`nConnection: close`r`n`r`n"
+      $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
+      $stream.Write($headerBytes, 0, $headerBytes.Length)
+      $stream.Write($responseBytes, 0, $responseBytes.Length)
+      $stream.Flush()
 
-    if ($code -or $errorParam) {
-      return [PSCustomObject]@{ Code = $code; State = $state; ErrorMessage = $errorParam }
+      if ($code -or $errorParam) {
+        return [PSCustomObject]@{ Code = $code; State = $state; ErrorMessage = $errorParam }
+      }
+    } finally {
+      $client.Close()
     }
   }
 
@@ -255,8 +292,9 @@ function Invoke-Main {
   try {
     $callbackResult = Wait-ForCallback -Listener $listenerInfo.Listener -TimeoutSeconds $CallbackTimeoutSeconds
   } finally {
+    # TcpListener has no Close() method (unlike HttpListener) -- Stop()
+    # alone closes the underlying socket and releases the resources.
     $listenerInfo.Listener.Stop()
-    $listenerInfo.Listener.Close()
   }
 
   if ($null -eq $callbackResult) {

@@ -4,6 +4,112 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-14 — Two real bugs found testing on an actual Windows dev-account machine
+
+- **`.ps1` files with a literal non-ASCII character (emoji, em dash) failed
+  to parse on real Windows PowerShell 5.1** with cascading, misleading
+  errors ("string is missing the terminator", "missing closing brace") on
+  lines far from the actual offending character. Root cause: none of
+  `scripts/check-prompt.ps1`, `scripts/check-write.ps1`,
+  `scripts/check-session.ps1`, or `scripts/paradigmnetworks-models.ps1`
+  have a byte-order mark, and Windows PowerShell 5.1 (unlike PS7+ or bash)
+  doesn't reliably assume UTF-8 for a BOM-less script file -- it fell back
+  to the system codepage and misread the multi-byte UTF-8 bytes, which
+  threw off token boundaries for the rest of the file. Fixed by building
+  each character via `[char]`/`ConvertFromUtf32` escapes instead of a
+  literal, so the `.ps1` source itself is pure ASCII and immune to this
+  regardless of what encoding any future edit saves the file with -- the
+  visible output to the user is unchanged (verified byte-for-byte
+  identical). This would have hit any Windows PowerShell 5.1 user running
+  these scripts, not just a restricted dev account.
+- **The Windows invocation lines in the `paradigmnetworks-login`,
+  `paradigmnetworks-logout`, and `paradigmnetworks-models` skills were
+  cmd.exe syntax, run in a PowerShell-native context.** `"%SystemRoot%\...\powershell.exe" -NoProfile ...`
+  is valid for `cmd.exe` (which is what the now-deleted
+  `run-powershell.cmd` shim always guaranteed), but PowerShell parses a
+  bare quoted string at the start of a line as a string expression, not a
+  command to invoke -- it needs the call operator (`& "path" -args`).
+  `%SystemRoot%` is also cmd.exe/batch syntax that PowerShell doesn't
+  expand; the PowerShell equivalent is `$env:SystemRoot`. Fixed all three
+  skill files to `& "$env:SystemRoot\...\powershell.exe" ...`.
+
+## 2026-09-13 — Scan-call timeout and hooks.json ceiling raised back to 240s/250s
+
+The 2026-09-12 entry below lowered `PARADIGM_NETWORKS_TIMEOUT` to 25s and
+the `hooks.json` timeout for `beforeSubmitPrompt`/`preToolUse` to 30s,
+specifically because `failClosed: true` had just been turned on for those
+two hooks -- a long timeout there means a slow/dead backend freezes the
+IDE before denying, so failing fast seemed like the safer default.
+
+Reverted back to 240s/250s, deliberately keeping `failClosed: true` as-is.
+This explicitly accepts the tradeoff the previous entry was trying to
+avoid: a genuinely slow or unreachable backend can now freeze prompt
+submission or a Write for up to ~4 minutes before it finally denies,
+in exchange for enough headroom that real (slow-but-legitimate) scan
+latency doesn't get mistaken for a dead backend and start denying
+prompts/writes that would have succeeded. `PARADIGM_NETWORKS_TIMEOUT` is
+still env-overridable per-machine if a shorter fail-fast window is wanted
+on a specific box; `hooks.json`'s own ceiling is a static value and would
+need a direct edit to shorten again.
+
+## 2026-09-12 — Windows non-admin fixes: TcpListener login, single hook dispatcher, fail-closed gate, lowered timeouts again
+
+Four fixes needed to make the plugin usable on a Windows account without
+admin rights:
+
+- **Login (`login.ps1`)**: `Start-CallbackListener` now binds a raw
+  `System.Net.Sockets.TcpListener` on `127.0.0.1` instead of
+  `System.Net.HttpListener`. `HttpListener` registers through HTTP.SYS and
+  needs a `netsh http add urlacl` reservation a standard user can't grant
+  themselves, so login was completely broken on any non-admin account. A
+  plain socket bind needs no such reservation. `Wait-ForCallback` now
+  hand-rolls the minimal HTTP parsing this requires (previously provided by
+  `HttpListener`), decoding `code`/`state`/`error` with
+  `System.Net.WebUtility.UrlDecode` to match `login.sh`'s `+`-as-space
+  `urldecode_strict` semantics.
+- **Port-scan retry**: the old loop caught every exception from
+  `.Start()` and just moved on, scanning 8000-64999 -- on an account
+  where the bind fails for every port, that meant ~57,000 useless
+  iterations before a misleading "no free port" message. Now only retries
+  on `SocketException` with `SocketErrorCode -eq AddressAlreadyInUse`;
+  anything else rethrows immediately. Range capped at 8000-8099.
+- **Hooks (`hooks/hooks.json`)**: replaced the bash+PowerShell entry pair
+  on every event with a single entry per event pointing at a new polyglot
+  dispatcher, `scripts/run-hook.cmd` (deletes `scripts/run-powershell.cmd`).
+  The old setup had two confirmed defects on Windows: `run-powershell.cmd`'s
+  `-File %*` was unquoted, breaking any install path with a space (hits the
+  login skill directly); and on a Windows box with no Git Bash, the bash
+  entries failed to spawn on every single event. `run-hook.cmd` is a
+  polyglot file -- its first line is a no-op label to `cmd.exe` and a real
+  `exec bash ".../$1.sh"` to `/bin/sh` -- so one command now works
+  correctly on both platforms.
+- **Fail-closed gate**: `beforeSubmitPrompt` (`check-prompt`) and
+  `preToolUse` (`check-write`) now set `failClosed: true`. This wasn't
+  safe before today's hooks.json change -- with two entries per event, the
+  entry that failed to spawn on the wrong platform would have blocked
+  everything. With exactly one entry per event that genuinely runs, a
+  broken dispatcher now correctly blocks instead of Cursor silently
+  failing open.
+- **Timeouts lowered again**: the 2026-09-01 entry below raised
+  `PARADIGM_NETWORKS_TIMEOUT` to 240s and the `hooks.json` per-hook
+  timeout to 250s, deliberately, for latency headroom. That's no longer
+  safe now that `check-prompt`/`check-write` fail closed: a 250s ceiling
+  means a slow or unreachable backend now freezes the IDE for over four
+  minutes before denying, instead of failing fast. Both come back down:
+  `PARADIGM_NETWORKS_TIMEOUT` 240s → **25s**, `hooks.json` timeout for
+  `beforeSubmitPrompt`/`preToolUse` 250s → **30s**. `check-session` and
+  `check-repo-context` are untouched (10s, `failClosed: false`, neither
+  gates anything).
+- **Scan-staleness warning**: `~/.paradigm-scanner/anomaly_state.json`
+  gained a `last_successful_scan` epoch field, written on every
+  allow/block verdict (repurposing the existing
+  `pn_reset_scan_anomaly`/`Reset-PnScanAnomaly` call sites, renamed to
+  `pn_record_successful_scan`/`Set-PnLastSuccessfulScan`). `check-session`
+  now warns via `additional_context` when that timestamp is absent or
+  over an hour old while credentials exist -- covering the case
+  `failClosed` can't: the hook runs fine, but the backend has been
+  degraded for a while.
+
 ## 2026-09-01 — Raised default timeouts across the board
 
 Real-world testing showed the previous defaults left too little margin,

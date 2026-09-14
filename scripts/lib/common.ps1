@@ -77,7 +77,7 @@ function Set-Utf8FileTextNoBom {
 # check (and [Console]::In generally) sits on top of Windows console-mode
 # detection that has been observed to misreport when PowerShell is
 # launched through an intermediate process (cmd.exe -> powershell.exe
-# -File, which is exactly how run-powershell.cmd invokes every hook here),
+# -File, which is exactly how run-hook.cmd invokes every hook here),
 # silently leaving the payload empty and making a real, piped-in JSON
 # payload look like invalid input. Reading the raw standard-input stream
 # directly, with an explicit encoding, sidesteps both that and a possible
@@ -473,7 +473,7 @@ function Write-AuditLog {
 }
 
 # Anomaly-streak tracking. Mirrors pn_record_scan_anomaly/
-# pn_reset_scan_anomaly in common.sh -- see that comment for the full
+# pn_record_successful_scan in common.sh -- see that comment for the full
 # rationale: ConvertFrom-PnMessagesResponse's block/allow verdict is a
 # reverse-engineered heuristic with no real structured field from the
 # backend yet, so a silent, complete loss of enforcement (every scan
@@ -482,14 +482,19 @@ function Write-AuditLog {
 # transport-level failures, same as the bash side.
 $Script:PnAnomalyStatePath = Join-Path $HOME ".paradigm-scanner\anomaly_state.json"
 $Script:PnAnomalyWarningThreshold = 3
+$Script:PnScanStalenessThresholdSeconds = 3600
 
 function Add-PnScanAnomaly {
   $count = 0
+  $lastSuccessfulScan = $null
   if (Test-Path $Script:PnAnomalyStatePath -PathType Leaf) {
     try {
       $existing = Get-Content -Path $Script:PnAnomalyStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
       $existingCount = Get-JsonProperty -InputObject $existing -Name "consecutive_anomaly_count" -Default 0
       if ($existingCount -match '^\d+$') { $count = [int]$existingCount }
+      # Preserve whatever was there -- an anomaly verdict must not erase
+      # the last confirmed-good scan's timestamp, only bump the streak.
+      $lastSuccessfulScan = Get-JsonProperty -InputObject $existing -Name "last_successful_scan" -Default $null
     } catch {
       $count = 0
     }
@@ -504,8 +509,10 @@ function Add-PnScanAnomaly {
     if ($dir -and -not (Test-Path $dir)) {
       New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
     }
+    $stateObject = @{ consecutive_anomaly_count = $count }
+    if ($null -ne $lastSuccessfulScan) { $stateObject["last_successful_scan"] = $lastSuccessfulScan }
     $tempFile = "$($Script:PnAnomalyStatePath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
-    (ConvertTo-CompactJson @{ consecutive_anomaly_count = $count }) | Set-Content -Path $tempFile -Encoding UTF8 -ErrorAction Stop
+    (ConvertTo-CompactJson $stateObject) | Set-Content -Path $tempFile -Encoding UTF8 -ErrorAction Stop
     Move-Item -Path $tempFile -Destination $Script:PnAnomalyStatePath -Force -ErrorAction Stop
   } catch {
     # Non-fatal -- see comment above.
@@ -514,8 +521,51 @@ function Add-PnScanAnomaly {
   return $count
 }
 
-function Reset-PnScanAnomaly {
-  Remove-Item -Path $Script:PnAnomalyStatePath -Force -ErrorAction SilentlyContinue
+# Called on every allow/block verdict -- never on anomaly/timeout/
+# connection-error/HTTP-error/invalid-JSON, since those are exactly the
+# failure modes staleness tracking exists to catch. Replaces the old
+# Reset-PnScanAnomaly (Remove-Item only): the anomaly streak still needs
+# clearing, but that now happens alongside writing a fresh timestamp, so a
+# bare file delete no longer fits. This is a blind write (no read step) --
+# see pn_record_successful_scan's comment in common.sh for why that's safe
+# under a concurrent Add-PnScanAnomaly call.
+function Set-PnLastSuccessfulScan {
+  try {
+    $dir = Split-Path -Parent $Script:PnAnomalyStatePath
+    if ($dir -and -not (Test-Path $dir)) {
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+    }
+    $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $tempFile = "$($Script:PnAnomalyStatePath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    (ConvertTo-CompactJson @{ consecutive_anomaly_count = 0; last_successful_scan = $nowEpoch }) |
+      Set-Content -Path $tempFile -Encoding UTF8 -ErrorAction Stop
+    Move-Item -Path $tempFile -Destination $Script:PnAnomalyStatePath -Force -ErrorAction Stop
+  } catch {
+    # Non-fatal -- same posture as Add-PnScanAnomaly.
+  }
+}
+
+# Mirrors pn_check_scan_staleness, but returns $true/$false directly since
+# a PowerShell function can return a single value cleanly (bash's global-
+# variable convention there works around $(...) subshells stripping state).
+function Test-PnScanStale {
+  $lastSuccessfulScan = $null
+  if (Test-Path $Script:PnAnomalyStatePath -PathType Leaf) {
+    try {
+      $existing = Get-Content -Path $Script:PnAnomalyStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $lastSuccessfulScan = Get-JsonProperty -InputObject $existing -Name "last_successful_scan" -Default $null
+    } catch {
+      $lastSuccessfulScan = $null
+    }
+  }
+
+  if ($null -eq $lastSuccessfulScan) { return $true }
+
+  $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  $age = $nowEpoch - [int64]$lastSuccessfulScan
+  # Clock skew -- see Set-PnLastSuccessfulScan's bash mirror comment.
+  if ($age -lt 0) { return $false }
+  return ($age -gt $Script:PnScanStalenessThresholdSeconds)
 }
 
 # Get-FileTail -Path ... -MaxBytes ...
