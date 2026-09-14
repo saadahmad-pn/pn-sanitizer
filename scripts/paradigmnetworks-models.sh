@@ -15,7 +15,7 @@
 # reasoning as login.sh's guard).
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
-    echo "error: this is the Unix script. On Windows, run paradigmnetworks-models.ps1 instead (via scripts/run-powershell.cmd paradigmnetworks-models.ps1)." >&2
+    echo "error: this is the Unix script. On Windows, run paradigmnetworks-models.ps1 instead (via powershell -File paradigmnetworks-models.ps1)." >&2
     exit 1
     ;;
 esac

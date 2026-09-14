@@ -80,7 +80,7 @@ bash <path-to-logout.sh>
 Windows:
 
 ```
-<scripts-dir>\run-powershell.cmd <scripts-dir>\logout.ps1
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\logout.ps1"
 ```
 
 ### 4. Relay the outcome

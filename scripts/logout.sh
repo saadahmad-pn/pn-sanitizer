@@ -16,7 +16,7 @@
 # instead of the .ps1 sibling (same reasoning as login.sh's guard).
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
-    echo "error: this is the Unix logout script. On Windows, run logout.ps1 instead (via scripts/run-powershell.cmd logout.ps1)." >&2
+    echo "error: this is the Unix logout script. On Windows, run logout.ps1 instead (via powershell -File logout.ps1)." >&2
     exit 1
     ;;
 esac

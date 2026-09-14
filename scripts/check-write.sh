@@ -5,13 +5,11 @@
 
 set -o pipefail
 
-# On Windows, this same hook event also has a PowerShell entry (run via
-# scripts/run-powershell.cmd) that does the real work -- Cursor has no way
-# to run only one entry per platform per event (confirmed against Cursor's
-# own hooks documentation), so both are always present in hooks.json. If
-# bash happens to be available anyway (Git Bash, MSYS2, Cygwin), this would
-# otherwise run a second time for the same event. Defer to the PowerShell
-# entry instead.
+# Dead code on the hook path: hooks.json now registers exactly one entry
+# per event, dispatched by scripts/run-hook.cmd (bash here, PowerShell on
+# Windows), so Cursor never spawns this script under Git Bash/MSYS2/Cygwin
+# in the first place. Left in place only so this .sh still behaves
+# correctly if someone invokes it directly under one of those.
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
     echo '{"permission": "allow"}'
@@ -392,7 +390,7 @@ main() {
       fi
       ;;
     block)
-      pn_reset_scan_anomaly
+      pn_record_successful_scan
       # PN_MSG_MESSAGE is the block banner's own explanation, with only
       # the confirmed-fixed scaffolding stripped (pn_strip_block_banner
       # in lib/common.sh) -- already a complete, self-explanatory message
@@ -416,7 +414,7 @@ main() {
       # docs describe user_message as shown "when denied"; whether it's
       # actually rendered on an allow too is unconfirmed and being tested
       # live rather than assumed either way.
-      pn_reset_scan_anomaly
+      pn_record_successful_scan
       if [[ -n "$PN_MSG_MESSAGE" ]]; then
         json_permission_allow "$PN_MSG_MESSAGE"
       else

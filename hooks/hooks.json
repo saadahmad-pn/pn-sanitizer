@@ -3,13 +3,7 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "bash ./scripts/check-session.sh",
-        "matcher": "",
-        "failClosed": false,
-        "timeout": 10
-      },
-      {
-        "command": "./scripts/run-powershell.cmd ./scripts/check-session.ps1",
+        "command": "scripts/run-hook.cmd check-session",
         "matcher": "",
         "failClosed": false,
         "timeout": 10
@@ -17,20 +11,14 @@
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "bash ./scripts/check-prompt.sh",
-        "timeout": 250
+        "command": "scripts/run-hook.cmd check-prompt",
+        "timeout": 250,
+        "failClosed": true
       },
       {
-        "command": "./scripts/run-powershell.cmd ./scripts/check-prompt.ps1",
-        "timeout": 250
-      },
-      {
-        "command": "bash ./scripts/check-repo-context.sh",
-        "timeout": 10
-      },
-      {
-        "command": "./scripts/run-powershell.cmd ./scripts/check-repo-context.ps1",
-        "timeout": 10
+        "command": "scripts/run-hook.cmd check-repo-context",
+        "timeout": 10,
+        "failClosed": false
       }
     ],
     "preToolUse": [

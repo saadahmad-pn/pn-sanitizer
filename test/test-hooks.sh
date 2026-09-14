@@ -20,20 +20,36 @@ result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
 assert_json_valid "$result" "Valid JSON output"
 assert_json_has_key "$result" "additional_context" "Shows context when not configured"
 
-test_case "check-session.sh with jq and Paradigm Networks configured"
+test_case "check-session.sh with jq, configured, and a recent successful scan"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+pn_record_successful_scan
 result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
 assert_json_valid "$result" "Valid JSON output"
-# Should be empty context when configured
+# Should be empty context when configured and the last scan is recent
 if [[ "$result" == "{}" ]]; then
   TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${GREEN}✓${NC} Returns empty context when configured"
+  echo -e "  ${GREEN}✓${NC} Returns empty context when configured with a recent scan"
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
   TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${RED}✗${NC} Should return empty context when configured (got: $result)"
+  echo -e "  ${RED}✗${NC} Should return empty context when configured with a recent scan (got: $result)"
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
+
+test_case "check-session.sh warns when configured but no successful scan has ever completed"
+mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+rm -f "$PN_ANOMALY_STATE_PATH"
+result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
+assert_json_valid "$result" "Valid JSON output"
+assert_json_has_key "$result" "additional_context" "Shows a staleness warning when no scan has ever succeeded"
+
+test_case "check-session.sh warns when configured but the last successful scan is over an hour old"
+mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+mkdir -p "$(dirname "$PN_ANOMALY_STATE_PATH")"
+echo "{\"consecutive_anomaly_count\": 0, \"last_successful_scan\": $(( $(date +%s) - 7200 ))}" > "$PN_ANOMALY_STATE_PATH"
+result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
+assert_json_valid "$result" "Valid JSON output"
+assert_json_has_key "$result" "additional_context" "Shows a staleness warning for a 2-hour-old last successful scan"
 
 echo ""
 echo -e "${BLUE}=== Integration Tests: check-prompt.sh ===${NC}"
