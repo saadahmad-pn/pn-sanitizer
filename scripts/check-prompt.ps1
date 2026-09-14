@@ -133,7 +133,17 @@ try {
   # to distinguish sub-causes of 403 (e.g. an expired token).
   if ($result.StatusCode -eq 403) {
     Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
-    Write-JsonDeny -Message "### 🛡️ Complete Your Paradigm Networks Setup
+    # Emoji built via ConvertFromUtf32/[char] escapes, not a literal
+    # character, so this file stays pure ASCII -- Windows PowerShell 5.1
+    # (unlike PS7+/bash) doesn't reliably assume UTF-8 for a .ps1 with no
+    # byte-order mark, and a real UTF-8 multi-byte character here corrupts
+    # the parser's token stream for the rest of the file (confirmed
+    # directly: an em dash elsewhere in this codebase caused "missing
+    # string terminator"/"missing closing brace" errors dozens of lines
+    # away). Pure-ASCII source sidesteps the whole class of bug regardless
+    # of what encoding any future edit saves the file with.
+    $shield = "$([System.Char]::ConvertFromUtf32(0x1F6E1))$([char]0xFE0F)"
+    Write-JsonDeny -Message "### $shield Complete Your Paradigm Networks Setup
 
 You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
 
@@ -185,7 +195,10 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       $anomalyStreak = Add-PnScanAnomaly
       $anomalyPrefix = ""
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
-        $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+        # See the shield-emoji comment above for why this is built via
+        # [char] escapes rather than a literal character.
+        $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
+        $anomalyPrefix = "$warningSign Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
       # $parsedVerdict.Message is whatever the backend actually returned,
       # in full (may be empty if there was truly no text content at all).

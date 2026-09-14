@@ -4,6 +4,35 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-14 — Two real bugs found testing on an actual Windows dev-account machine
+
+- **`.ps1` files with a literal non-ASCII character (emoji, em dash) failed
+  to parse on real Windows PowerShell 5.1** with cascading, misleading
+  errors ("string is missing the terminator", "missing closing brace") on
+  lines far from the actual offending character. Root cause: none of
+  `scripts/check-prompt.ps1`, `scripts/check-write.ps1`,
+  `scripts/check-session.ps1`, or `scripts/paradigmnetworks-models.ps1`
+  have a byte-order mark, and Windows PowerShell 5.1 (unlike PS7+ or bash)
+  doesn't reliably assume UTF-8 for a BOM-less script file -- it fell back
+  to the system codepage and misread the multi-byte UTF-8 bytes, which
+  threw off token boundaries for the rest of the file. Fixed by building
+  each character via `[char]`/`ConvertFromUtf32` escapes instead of a
+  literal, so the `.ps1` source itself is pure ASCII and immune to this
+  regardless of what encoding any future edit saves the file with -- the
+  visible output to the user is unchanged (verified byte-for-byte
+  identical). This would have hit any Windows PowerShell 5.1 user running
+  these scripts, not just a restricted dev account.
+- **The Windows invocation lines in the `paradigmnetworks-login`,
+  `paradigmnetworks-logout`, and `paradigmnetworks-models` skills were
+  cmd.exe syntax, run in a PowerShell-native context.** `"%SystemRoot%\...\powershell.exe" -NoProfile ...`
+  is valid for `cmd.exe` (which is what the now-deleted
+  `run-powershell.cmd` shim always guaranteed), but PowerShell parses a
+  bare quoted string at the start of a line as a string expression, not a
+  command to invoke -- it needs the call operator (`& "path" -args`).
+  `%SystemRoot%` is also cmd.exe/batch syntax that PowerShell doesn't
+  expand; the PowerShell equivalent is `$env:SystemRoot`. Fixed all three
+  skill files to `& "$env:SystemRoot\...\powershell.exe" ...`.
+
 ## 2026-09-13 — Scan-call timeout and hooks.json ceiling raised back to 240s/250s
 
 The 2026-09-12 entry below lowered `PARADIGM_NETWORKS_TIMEOUT` to 25s and

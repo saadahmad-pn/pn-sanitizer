@@ -91,7 +91,15 @@ function Invoke-Main {
   foreach ($model in $models) {
     $id = Get-JsonProperty -InputObject $model -Name "id" -Default ""
     $displayName = Get-JsonProperty -InputObject $model -Name "display_name" -Default ""
-    Write-ConsoleLine "- ``$id`` — $displayName"
+    # Em dash built via [char] escape, not a literal character, so this
+    # file stays pure ASCII -- Windows PowerShell 5.1 doesn't reliably
+    # assume UTF-8 for a .ps1 with no byte-order mark, and a real
+    # multi-byte UTF-8 character here corrupts the parser's token stream
+    # for the rest of the file (confirmed directly: this exact line threw
+    # "missing string terminator"/"missing closing brace" errors dozens of
+    # lines away on real Windows PowerShell 5.1).
+    $emDash = [char]0x2014
+    Write-ConsoleLine "- ``$id`` $emDash $displayName"
   }
 
   $hasMore = Get-JsonProperty -InputObject $parsed -Name "has_more" -Default $false

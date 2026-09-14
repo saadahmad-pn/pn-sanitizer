@@ -19,7 +19,14 @@ Get-StdinText | Out-Null
 try {
   if (Test-PnConfigured) {
     if (Test-PnScanStale) {
-      $staleMessage = "⚠️ Paradigm Networks security scanning hasn't completed a successful scan in over an hour (or hasn't completed one yet this session). Prompts and file writes may currently be going through unscanned. Check your network connection and Paradigm Networks login status; if this continues, contact your administrator."
+      # Built via [char] escapes, not a literal character, so this file
+      # stays pure ASCII -- Windows PowerShell 5.1 doesn't reliably assume
+      # UTF-8 for a .ps1 with no byte-order mark, and a real multi-byte
+      # UTF-8 character here corrupts the parser's token stream for the
+      # rest of the file (confirmed directly elsewhere in this codebase).
+      # See scripts/check-prompt.ps1 for the fuller comment.
+      $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
+      $staleMessage = "$warningSign Paradigm Networks security scanning hasn't completed a successful scan in over an hour (or hasn't completed one yet this session). Prompts and file writes may currently be going through unscanned. Check your network connection and Paradigm Networks login status; if this continues, contact your administrator."
       Write-JsonSessionContext -Context $staleMessage
     } else {
       Write-Output "{}"

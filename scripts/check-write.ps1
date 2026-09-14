@@ -287,7 +287,15 @@ try {
       $anomalyStreak = Add-PnScanAnomaly
       $anomalyPrefix = ""
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
-        $anomalyPrefix = "⚠️ Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+        # Built via [char] escapes, not a literal character, so this file
+        # stays pure ASCII -- Windows PowerShell 5.1 doesn't reliably
+        # assume UTF-8 for a .ps1 with no byte-order mark, and a real
+        # multi-byte UTF-8 character here corrupts the parser's token
+        # stream for the rest of the file (confirmed directly elsewhere in
+        # this codebase). See scripts/check-prompt.ps1 for the fuller
+        # comment.
+        $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
+        $anomalyPrefix = "$warningSign Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
       # $parsedVerdict.Message is whatever the backend actually returned,
       # in full (may be empty if there was truly no text content at all).

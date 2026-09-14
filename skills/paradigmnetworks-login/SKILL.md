@@ -130,7 +130,7 @@ bash <path-to-login.sh> --base-url <the-base-url>
 Windows:
 
 ```
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\login.ps1" -BaseUrl <the-base-url>
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\login.ps1" -BaseUrl <the-base-url>
 ```
 
 ("the base URL" is whatever the user gave you in step 2.)
