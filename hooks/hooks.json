@@ -24,9 +24,27 @@
     "preToolUse": [
       {
         "matcher": "Write",
-        "command": "scripts/run-hook.cmd check-write",
-        "timeout": 250,
-        "failClosed": true
+        "command": "bash ./scripts/check-write.sh",
+        "timeout": 250
+      },
+      {
+        "matcher": "Write",
+        "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
+        "timeout": 250
+      },
+      {
+        "matcher": "",
+        "command": "bash ./scripts/spike-skill-detection.sh",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "matcher": "",
+        "command": "bash ./scripts/spike-skill-detection.sh",
+        "failClosed": false,
+        "timeout": 10
       }
     ]
   }
