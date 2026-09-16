@@ -47,7 +47,7 @@ MODEL="$PN_RESOLVED_MODEL"
 # reply is surfaced to the user as user_message -- 150 would truncate most
 # real answers (a plain "write me hello.py" reply alone ran ~224 output
 # tokens in testing).
-MAX_TOKENS=1024
+MAX_TOKENS=4096
 
 # PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (manual env var override:
 # block/allow — no Cursor Settings UI for this, must be set directly in
@@ -101,6 +101,15 @@ main() {
   local prompt
   prompt=$(echo "$payload" | "$JQ_BIN" -r '.prompt // ""')
 
+  # session_id/conversation_id are the same value in practice (confirmed
+  # directly against real Cursor hook payloads) -- forwarded to the
+  # backend as-is so it can correlate this scan with others in the same
+  # conversation. Deliberately just this one opaque id, never
+  # user_email/workspace_roots/etc. which sit right next to it in the
+  # same hook payload.
+  local session_id
+  session_id=$(echo "$payload" | "$JQ_BIN" -r '.session_id // .conversation_id // ""')
+
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
@@ -137,7 +146,7 @@ main() {
 
   local response
   local raw_response
-  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS")
+  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id")
   local curl_exit=$?
   http_post_split_status "$raw_response"
   response="$HTTP_POST_BODY"

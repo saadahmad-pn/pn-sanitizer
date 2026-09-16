@@ -45,7 +45,7 @@ $Model = (Resolve-PnModel).Model
 # reply is surfaced to the user as user_message -- 150 would truncate most
 # real answers (a plain "write me hello.py" reply alone ran ~224 output
 # tokens in testing).
-$MaxTokens = 1024
+$MaxTokens = 4096
 
 $rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
 if (-not $rawMode) { $rawMode = "allow" }
@@ -77,6 +77,17 @@ try {
 
   $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
 
+  # session_id/conversation_id are the same value in practice (confirmed
+  # directly against real Cursor hook payloads) -- forwarded to the
+  # backend as-is so it can correlate this scan with others in the same
+  # conversation. Deliberately just this one opaque id, never
+  # user_email/workspace_roots/etc. which sit right next to it in the
+  # same hook payload.
+  $sessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "session_id" -Default "")
+  if (-not $sessionId) {
+    $sessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "conversation_id" -Default "")
+  }
+
   Write-DebugLog -Message "Resolving config (may refresh an expiring token)..." -LogPath $DebugLogPath
   $config = Resolve-PnConfig
   Write-DebugLog -Message "Config resolved | configured=$($null -ne $config)" -LogPath $DebugLogPath
@@ -94,7 +105,7 @@ try {
 
   $callStart = Get-Date
   Write-DebugLog -Message "POST starting -> $scanUrl" -LogPath $DebugLogPath
-  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $prompt -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $prompt -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds -SessionId $sessionId
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
 
   $bodyPreview = ""

@@ -76,7 +76,7 @@ MODEL="$PN_RESOLVED_MODEL"
 # reply is surfaced to the user as user_message -- 150 would truncate most
 # real answers (a plain "write me hello.py" reply alone ran ~224 output
 # tokens in testing).
-MAX_TOKENS=1024
+MAX_TOKENS=4096
 
 main() {
   # Read and validate JSON from stdin (skip if nothing is piped in — avoids
@@ -135,12 +135,20 @@ main() {
   local file_path
   local file_content
   local shell_command
+  local session_id
 
   agent_message=$(echo "$payload" | "$JQ_BIN" -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   transcript_path=$(echo "$payload" | "$JQ_BIN" -r '.transcript_path // ""')
   file_path=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')
   file_content=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.content // ""')
   shell_command=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.command // ""')
+  # session_id/conversation_id are the same value in practice (confirmed
+  # directly against real Cursor hook payloads) -- forwarded to the
+  # backend as-is so it can correlate this scan with others in the same
+  # conversation. Deliberately just this one opaque id, never
+  # user_email/workspace_roots/etc. which sit right next to it in the
+  # same hook payload.
+  session_id=$(echo "$payload" | "$JQ_BIN" -r '.session_id // .conversation_id // ""')
 
   # "subject" is what's actually about to happen -- the file content being
   # written for a Write call, or the command about to run for a Shell call.
@@ -241,7 +249,7 @@ main() {
 
   local response
   local raw_response
-  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS")
+  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id")
   local curl_exit=$?
   http_post_split_status "$raw_response"
   response="$HTTP_POST_BODY"

@@ -202,7 +202,8 @@ function Invoke-HttpPostRaw {
     [Parameter(Mandatory = $true)][byte[]]$BodyBytes,
     [Parameter(Mandatory = $true)][string]$ContentType,
     [string]$AuthToken = "",
-    [int]$TimeoutSec = 5
+    [int]$TimeoutSec = 5,
+    [hashtable]$ExtraHeaders = $null
   )
 
   # The request body is written to a temp file and sent via
@@ -228,6 +229,11 @@ function Invoke-HttpPostRaw {
     )
     if ($AuthToken) {
       $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
+    }
+    if ($ExtraHeaders) {
+      foreach ($headerName in $ExtraHeaders.Keys) {
+        $curlArgs += @("-H", "${headerName}: $($ExtraHeaders[$headerName])")
+      }
     }
 
     return Invoke-CurlRequest -CurlArgs $curlArgs
@@ -270,7 +276,8 @@ function Invoke-MessagesHttpPost {
     [Parameter(Mandatory = $true)][string]$Model,
     [int]$MaxTokens = 150,
     [string]$AuthToken = "",
-    [int]$TimeoutSec = 5
+    [int]$TimeoutSec = 5,
+    [string]$SessionId = ""
   )
 
   $requestBody = [PSCustomObject]@{
@@ -287,9 +294,20 @@ function Invoke-MessagesHttpPost {
   $bodyJson = $requestBody | ConvertTo-Json -Depth 5 -Compress
   $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
 
+  # SessionId is Cursor's own session_id/conversation_id from the hook
+  # payload (the two are the same value in practice) -- forwarded as-is so
+  # the backend can correlate this scan with others in the same
+  # conversation. Deliberately just this one opaque id, never
+  # user_email/workspace_roots/etc. which sit right next to it in the same
+  # hook payload.
+  $extraHeaders = $null
+  if ($SessionId) {
+    $extraHeaders = @{ "X-Claude-Code-Session-Id" = $SessionId }
+  }
+
   return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
     -ContentType "application/json" `
-    -AuthToken $AuthToken -TimeoutSec $TimeoutSec
+    -AuthToken $AuthToken -TimeoutSec $TimeoutSec -ExtraHeaders $extraHeaders
 }
 
 # ConvertFrom-PnMessagesResponse -ResponseBody ...

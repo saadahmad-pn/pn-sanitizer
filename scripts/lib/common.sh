@@ -178,11 +178,20 @@ http_post_json() {
   local json_body="$2"
   local auth_token="$3"
   local timeout="${4:-5}"
+  # Cursor's own session_id/conversation_id from the hook payload (the two
+  # are the same value in practice) -- forwarded as-is so the backend can
+  # correlate this scan with others in the same conversation. Deliberately
+  # just this one opaque id, never user_email/workspace_roots/etc. which
+  # sit right next to it in the same hook payload.
+  local session_id="${5:-}"
 
   local headers=()
   headers+=(-H "Content-Type: application/json")
   if [[ -n "$auth_token" ]]; then
     headers+=(-H "Authorization: Bearer $auth_token")
+  fi
+  if [[ -n "$session_id" ]]; then
+    headers+=(-H "X-Claude-Code-Session-Id: $session_id")
   fi
 
   curl -s -X POST "$url" \
