@@ -27,6 +27,10 @@ source "$SCRIPT_DIR/pn_config.sh"
 SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
 TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-240}"
 TRANSCRIPT_LINES="${PARADIGM_NETWORKS_TRANSCRIPT_LINES:-500}"
+# Identifies this plugin to the backend's vendor-classification engine (see
+# http_post_json's comment in lib/common.sh). Distinct from pn_config.sh's
+# own CLIENT_ID ("cursor-plugin"), which is an unrelated OAuth parameter.
+PN_CLIENT_ID="cursor"
 # PARADIGM_NETWORKS_FAILURE_MODE (manual env var override: block/allow —
 # no Cursor Settings UI for this, must be set directly in the
 # environment).
@@ -249,7 +253,7 @@ main() {
 
   local response
   local raw_response
-  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id")
+  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id" "$PN_CLIENT_ID")
   local curl_exit=$?
   http_post_split_status "$raw_response"
   response="$HTTP_POST_BODY"

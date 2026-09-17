@@ -18,6 +18,12 @@ $ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
 # fail-fast timeout would give), but this restores headroom for real scan
 # latency. See CHANGELOG.md for the full history/tradeoff.
 $TimeoutSeconds = 240
+# Identifies this plugin to the backend's vendor-classification engine (see
+# Invoke-MessagesHttpPost's comment in lib/common.ps1). Deliberately NOT
+# named $PnClientId -- pn_config.ps1 already sets $Script:PnClientId to the
+# unrelated OAuth value "cursor-plugin", and dot-sourcing it into this
+# script's scope means reusing that name here would silently overwrite it.
+$PnPluginClientId = "cursor"
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
@@ -105,7 +111,7 @@ try {
 
   $callStart = Get-Date
   Write-DebugLog -Message "POST starting -> $scanUrl" -LogPath $DebugLogPath
-  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $prompt -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds -SessionId $sessionId
+  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $prompt -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds -SessionId $sessionId -ClientId $PnPluginClientId
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
 
   $bodyPreview = ""

@@ -24,13 +24,9 @@
     "preToolUse": [
       {
         "matcher": "Write",
-        "command": "bash ./scripts/check-write.sh",
-        "timeout": 250
-      },
-      {
-        "matcher": "Write",
-        "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
-        "timeout": 250
+        "command": "scripts/run-hook.cmd check-write",
+        "timeout": 250,
+        "failClosed": true
       },
       {
         "matcher": "",
@@ -43,6 +39,22 @@
       {
         "matcher": "",
         "command": "bash ./scripts/spike-skill-detection.sh",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "matcher": "",
+        "command": "scripts/run-hook.cmd debug-capture-payload",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "",
+        "command": "scripts/run-hook.cmd debug-capture-payload",
         "failClosed": false,
         "timeout": 10
       }

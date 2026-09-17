@@ -184,6 +184,13 @@ http_post_json() {
   # just this one opaque id, never user_email/workspace_roots/etc. which
   # sit right next to it in the same hook payload.
   local session_id="${5:-}"
+  # Identifies this plugin to the backend's vendor-classification engine.
+  # Every plugin's hooks reach this endpoint through curl, so without this
+  # the backend sees generic "curl/x.y" from all of them and cannot tell
+  # this plugin apart from any other -- confirmed against a sibling
+  # Paradigm Networks integration that an unattributed call can be dropped
+  # from user-facing observability while still incrementing counters.
+  local client_id="${6:-}"
 
   local headers=()
   headers+=(-H "Content-Type: application/json")
@@ -192,6 +199,9 @@ http_post_json() {
   fi
   if [[ -n "$session_id" ]]; then
     headers+=(-H "X-Claude-Code-Session-Id: $session_id")
+  fi
+  if [[ -n "$client_id" ]]; then
+    headers+=(-H "X-Paradigm-Client: $client_id")
   fi
 
   curl -s -X POST "$url" \

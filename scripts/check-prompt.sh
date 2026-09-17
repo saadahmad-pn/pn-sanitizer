@@ -26,6 +26,10 @@ source "$SCRIPT_DIR/pn_config.sh"
 SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
 TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-240}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
+# Identifies this plugin to the backend's vendor-classification engine (see
+# http_post_json's comment in lib/common.sh). Distinct from pn_config.sh's
+# own CLIENT_ID ("cursor-plugin"), which is an unrelated OAuth parameter.
+PN_CLIENT_ID="cursor"
 
 # codedefense/scan is retired; this now calls the Anthropic-compatible
 # /v1/messages endpoint on the same backend, which requires a model.
@@ -146,7 +150,7 @@ main() {
 
   local response
   local raw_response
-  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id")
+  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id" "$PN_CLIENT_ID")
   local curl_exit=$?
   http_post_split_status "$raw_response"
   response="$HTTP_POST_BODY"

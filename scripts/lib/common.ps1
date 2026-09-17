@@ -277,7 +277,8 @@ function Invoke-MessagesHttpPost {
     [int]$MaxTokens = 150,
     [string]$AuthToken = "",
     [int]$TimeoutSec = 5,
-    [string]$SessionId = ""
+    [string]$SessionId = "",
+    [string]$ClientId = ""
   )
 
   $requestBody = [PSCustomObject]@{
@@ -301,8 +302,12 @@ function Invoke-MessagesHttpPost {
   # user_email/workspace_roots/etc. which sit right next to it in the same
   # hook payload.
   $extraHeaders = $null
-  if ($SessionId) {
-    $extraHeaders = @{ "X-Claude-Code-Session-Id" = $SessionId }
+  if ($SessionId -or $ClientId) {
+    $extraHeaders = @{}
+    if ($SessionId) { $extraHeaders["X-Claude-Code-Session-Id"] = $SessionId }
+    # Identifies this plugin to the backend's vendor-classification engine
+    # -- see the matching comment on the bash side's http_post_json.
+    if ($ClientId) { $extraHeaders["X-Paradigm-Client"] = $ClientId }
   }
 
   return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
