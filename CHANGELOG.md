@@ -4,6 +4,74 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-17 — Added git push/commit/PR-create governance via a new `beforeShellExecution` hook
+
+Adds `scripts/check-git-event.sh`/`.ps1`, wired into three new
+`beforeShellExecution` matchers in `hooks/hooks.json` (`git push`, `git
+commit`, `gh pr create`). Unlike the existing prompt/write hooks, this calls
+a new backend endpoint, `POST /api/v1/detections/evaluate` (control-server),
+a generic command/event detection contract designed to be extensible to a
+future non-git command source without a contract change (see
+`design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md`, section 0.5,
+for the full design). One script is parameterized by `EventType`
+(`git.push`/`git.commit`/`git.pr_create`) rather than three near-duplicate
+scripts, since only the file-collection step differs per event:
+
+- `git.push`/`git.pr_create` diff against, respectively, "everything not
+  reachable from any remote branch" and "the PR's base branch" -- these are
+  genuinely different comparisons, not interchangeable: a branch already
+  pushed before `gh pr create` runs (the common flow) has every commit
+  already on a remote branch, so the push-style "not on any remote"
+  comparison finds nothing to scan at exactly the moment a PR is about to
+  open. Confirmed directly with a real push-then-create-PR scenario before
+  landing on the base-branch-diff approach for PR creation.
+- `git.commit` scans the git index (staged changes), since
+  `beforeShellExecution` fires before the commit exists to diff against.
+- Binary files are filtered out before submission (`is_binary_file` in the
+  new `lib/detection-client.sh`) -- an LLM-based scanner has no meaningful
+  use for one. The first implementation of this check compared a
+  `head -c`-captured sample against a NUL-stripped copy of itself as bash
+  string variables; caught by the new unit test suite before it shipped,
+  since bash strings are NUL-terminated C strings internally and command
+  substitution silently truncates at the first NUL -- both copies came out
+  identically truncated and the check never actually detected a NUL.
+  Rewritten to use `grep -I` (present in both BSD and GNU grep), which
+  operates on the file directly rather than routing bytes through a shell
+  variable.
+- A file-count/total-size guardrail (`PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES`/
+  `_MAX_BYTES`, default 60 files / 8 MB) caps the fan-out submitted for one
+  push/commit/PR, since no measured latency benchmark exists yet for how
+  many parallel scanner calls one submission can trigger -- see the design
+  doc's section 9. Content sent is each file's current working-tree state,
+  not an exact historical/staged blob -- a deliberate simplification (the
+  two coincide in the common case, and the alternative adds real complexity
+  for a race that exists regardless of which content source is picked).
+- Defaults fail-**closed** (`PARADIGM_NETWORKS_FAILURE_MODE=block`), matching
+  `check-write.sh`'s posture, not `check-prompt.sh`'s fail-open default: a
+  push/commit/PR reaching its destination unscanned is a comparable risk to
+  an unscanned file write.
+- `GitRepoUrl`/`GitBranch` sent with each request reuse the existing
+  `sanitize_git_value` (credential-stripping) treatment from
+  `lib/git-utils.sh`; two new `_or_empty` variants were added there since the
+  existing `get_remote_url`/`get_current_branch` intentionally return
+  human-readable placeholder text ("No remote"/"detached") for a different
+  caller (`check-repo-context.sh`)'s context injection, which the API
+  contract's "empty means not applicable" requirement does not want.
+- `scripts/run-hook.cmd`'s `/bin/sh` line was fixed to forward extra
+  arguments (`shift; exec bash "$d/$n.sh" "$@"`, previously just
+  `exec bash "$d/$1.sh"` with no forwarding at all) -- needed so
+  `run-hook.cmd check-git-event git.push` actually delivers the event-type
+  argument through on macOS/Linux; the Windows batch side already forwarded
+  `%2..%9` and needed no change.
+- Verified: 34 new tests in `test/test-git-event.sh` (git-utils resolvers
+  against real throwaway git repos, `pn_evaluate_detection`'s HTTP-status/
+  response-shape classification via a narrow test-only override of
+  `http_post_multipart_form`, and `check-git-event.sh`'s allow/deny paths),
+  wired into `test/run-all-tests.sh`. `test/mock-server.sh` gained
+  `detections_allow`/`detections_warn`/`detections_block` response modes
+  for the new endpoint's response shape, alongside its existing
+  `/v1/messages`-shaped modes.
+
 ## 2026-09-14 — Two real bugs found testing on an actual Windows dev-account machine
 
 - **`.ps1` files with a literal non-ASCII character (emoji, em dash) failed

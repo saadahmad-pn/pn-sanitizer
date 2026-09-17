@@ -257,6 +257,32 @@ function Invoke-HttpGetRaw {
   return Invoke-CurlRequest -CurlArgs $curlArgs
 }
 
+# Invoke-HttpPostMultipart -Url ... -FormArgs <string[]> -AuthToken ... -TimeoutSec ...
+# Generic multipart/form-data POST for the detections API (lib/detection-
+# client.ps1) -- mirrors http_post_multipart_form in common.sh. FormArgs is
+# the full, flat list of curl --form-string/-F flag/value tokens the caller
+# wants sent (e.g. "--form-string", "EventType=git.push", ..., "-F",
+# "Files=@C:\path\to\file;filename=rel/path"), passed straight through to
+# curl.exe via Invoke-CurlRequest. Unlike Invoke-HttpPostRaw's JSON body,
+# there's no quote-escaping problem here needing a temp-file workaround --
+# Invoke-CurlRequest already preserves each array element's own boundaries
+# when invoking curl.exe as a native process.
+function Invoke-HttpPostMultipart {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$FormArgs,
+    [string]$AuthToken = "",
+    [int]$TimeoutSec = 5
+  )
+
+  $curlArgs = @("-s", "-X", "POST", $Url) + $FormArgs + @("--max-time", "$TimeoutSec", "-w", "`n%{http_code}")
+  if ($AuthToken) {
+    $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
+  }
+
+  return Invoke-CurlRequest -CurlArgs $curlArgs
+}
+
 # Invoke-MessagesHttpPost -Url ... -TextData ... -Model ... -MaxTokens ... -AuthToken ... -TimeoutSec ...
 # Builds a request body for the Anthropic-compatible /v1/messages
 # endpoint via ConvertTo-Json (not hand-built string interpolation --

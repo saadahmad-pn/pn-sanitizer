@@ -193,10 +193,38 @@ http_post_json() {
     2>/dev/null
 }
 
-# Splits the combined body+status output of http_post_form / http_post_json.
-# Must be called as a plain function call (never via $(...)) so
-# HTTP_POST_BODY/HTTP_POST_STATUS persist in the caller's own shell instead
-# of vanishing with a subshell.
+# http_post_multipart_form <url> <auth_token> <timeout> <curl_form_arg>...
+# Generic multipart/form-data POST for the detections API (lib/detection-
+# client.sh) -- unlike http_post_form above (which always sends exactly one
+# "text" field), the field set here varies per caller (flat form fields plus
+# zero or more repeated file parts), so the caller builds the full list of
+# curl --form-string/-F arguments itself and this function just adds
+# auth/timeout/status-capture around it. Same body+status-via-trailing-line
+# contract as http_post_form/http_post_json (split off with
+# http_post_split_status).
+http_post_multipart_form() {
+  local url="$1"
+  local auth_token="$2"
+  local timeout="$3"
+  shift 3
+
+  local headers=()
+  if [[ -n "$auth_token" ]]; then
+    headers+=(-H "Authorization: Bearer $auth_token")
+  fi
+
+  curl -s -X POST "$url" \
+    "${headers[@]}" \
+    "$@" \
+    --max-time "$timeout" \
+    -w $'\n%{http_code}' \
+    2>/dev/null
+}
+
+# Splits the combined body+status output of http_post_form / http_post_json /
+# http_post_multipart_form. Must be called as a plain function call (never
+# via $(...)) so HTTP_POST_BODY/HTTP_POST_STATUS persist in the caller's own
+# shell instead of vanishing with a subshell.
 http_post_split_status() {
   local raw="$1"
   HTTP_POST_BODY="${raw%$'\n'*}"

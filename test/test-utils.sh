@@ -289,5 +289,23 @@ mock_credentials() {
 source_scripts() {
   source "$SCRIPTS_DIR/lib/common.sh"
   source "$SCRIPTS_DIR/lib/git-utils.sh"
+  source "$SCRIPTS_DIR/lib/detection-client.sh"
   source "$SCRIPTS_DIR/pn_config.sh"
+}
+
+# Create a throwaway git repo under TEST_TEMP_DIR for git-utils/detection
+# tests. Prints the repo's absolute path. Always on branch "main" with one
+# initial commit, no remote configured -- callers add a remote/commits as
+# their scenario needs.
+make_test_git_repo() {
+  local name="${1:-repo}"
+  local repo_path="$TEST_TEMP_DIR/$name"
+  mkdir -p "$repo_path"
+  git -C "$repo_path" init -q -b main
+  git -C "$repo_path" config user.email "test@example.com"
+  git -C "$repo_path" config user.name "Test"
+  echo "init" > "$repo_path/README.md"
+  git -C "$repo_path" add README.md
+  git -C "$repo_path" commit -q -m "init"
+  echo "$repo_path"
 }

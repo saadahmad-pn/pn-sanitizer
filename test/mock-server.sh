@@ -1,13 +1,24 @@
 #!/bin/bash
 # Mock Paradigm Networks API server for testing
 # Usage: start_mock_server <port> [mode]
-# Modes: allow, block, anomaly, timeout, error500, error401
+# Modes: allow, block, anomaly, timeout, error500, error401,
+#        detections_allow, detections_warn, detections_block
 #
-# Response bodies match the /v1/messages (Anthropic-compatible) shape, not
-# the old codedefense/scan shape -- see pn_parse_messages_response in
-# lib/common.sh for what each mode is meant to exercise. "warn" is retired:
-# the new endpoint has no equivalent signal (see that function's comment).
-# "anomaly" is new: zero usage without the block banner, the case that must
+# The detections_* modes return the POST /api/v1/detections/evaluate shape
+# (design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md, section
+# 0.5.3 -- Decision/Message/FileAnalyses/LatencyMs/AuditId) for testing
+# check-git-event.sh / lib/detection-client.sh against this endpoint,
+# distinct from the /v1/messages-shaped modes below used by
+# check-write.sh/check-prompt.sh.
+#
+# Response bodies for the non-detections modes match the /v1/messages
+# (Anthropic-compatible) shape, not the old codedefense/scan shape -- see
+# pn_parse_messages_response in lib/common.sh for what each mode is meant
+# to exercise. "warn" is retired for that endpoint: it has no equivalent
+# signal there (see that function's comment) -- "warn" only applies to the
+# detections_* modes above, which are a different endpoint with a real
+# warn verdict. "anomaly" is /v1/messages-specific too: zero usage without
+# the block banner, the case that must
 # NOT be silently guessed as either allow or block.
 
 PORT=""
@@ -50,6 +61,15 @@ start_mock_server() {
               ;;
             error401)
               send_response "401" '{"error": "Unauthorized"}'
+              ;;
+            detections_allow)
+              send_response "200" '{"Decision":"allow","Message":"","FileAnalyses":[],"LatencyMs":0,"AuditId":"mock-scan-allow"}'
+              ;;
+            detections_warn)
+              send_response "200" '{"Decision":"warn","Message":"mock policy warning","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"low","ActionToTake":"warn","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-warn"}'
+              ;;
+            detections_block)
+              send_response "200" '{"Decision":"block","Message":"mock policy violation","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"high","ActionToTake":"block","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-block"}'
               ;;
           esac
         fi
@@ -109,6 +129,15 @@ start_simple_mock_server() {
       ;;
     error401)
       echo 'HTTP/1.1 401 Unauthorized\r\n\r\n{"error": "unauthorized"}' >"$response_file"
+      ;;
+    detections_allow)
+      echo '{"Decision":"allow","Message":"","FileAnalyses":[],"LatencyMs":0,"AuditId":"mock-scan-allow"}' >"$response_file"
+      ;;
+    detections_warn)
+      echo '{"Decision":"warn","Message":"mock policy warning","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"low","ActionToTake":"warn","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-warn"}' >"$response_file"
+      ;;
+    detections_block)
+      echo '{"Decision":"block","Message":"mock policy violation","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"high","ActionToTake":"block","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-block"}' >"$response_file"
       ;;
   esac
 

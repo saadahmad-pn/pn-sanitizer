@@ -46,6 +46,26 @@
         "failClosed": false,
         "timeout": 10
       }
+    ],
+    "beforeShellExecution": [
+      {
+        "matcher": "^\\s*git\\s+push\\b",
+        "command": "scripts/run-hook.cmd check-git-event git.push",
+        "timeout": 240,
+        "failClosed": true
+      },
+      {
+        "matcher": "^\\s*git\\s+commit\\b",
+        "command": "scripts/run-hook.cmd check-git-event git.commit",
+        "timeout": 240,
+        "failClosed": true
+      },
+      {
+        "matcher": "^\\s*gh\\s+pr\\s+create\\b",
+        "command": "scripts/run-hook.cmd check-git-event git.pr_create",
+        "timeout": 240,
+        "failClosed": true
+      }
     ]
   }
 }

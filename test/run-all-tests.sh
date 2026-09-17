@@ -25,7 +25,7 @@ TOTAL_FAILED=0
 FAILED_SUITES=()
 
 # Test Suite 1: Unit Tests
-echo -e "${BLUE}[1/4]${NC} Running Unit Tests..."
+echo -e "${BLUE}[1/5]${NC} Running Unit Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-unit.sh" > /tmp/unit-test.log 2>&1
 unit_status=$?
@@ -48,7 +48,7 @@ fi
 echo ""
 
 # Test Suite 2: Integration Tests
-echo -e "${BLUE}[2/4]${NC} Running Integration Tests..."
+echo -e "${BLUE}[2/5]${NC} Running Integration Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-hooks.sh" > /tmp/integration-test.log 2>&1
 int_status=$?
@@ -66,8 +66,28 @@ else
 fi
 echo ""
 
+# Test Suite 2b: Git Event Detection Tests (lib/git-utils.sh resolvers,
+# lib/detection-client.sh, check-git-event.sh)
+echo -e "${BLUE}[3/5]${NC} Running Git Event Detection Tests..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+"$TEST_DIR/test-git-event.sh" > /tmp/git-event-test.log 2>&1
+gitevent_status=$?
+gitevent_passed=$(grep "Passed:" /tmp/git-event-test.log | awk '{print $2}')
+gitevent_total=$(grep "Total:" /tmp/git-event-test.log | awk '{print $2}')
+gitevent_failed=$(grep "Failed:" /tmp/git-event-test.log | awk '{print $2}')
+TOTAL_TESTS=$((TOTAL_TESTS + ${gitevent_total:-0}))
+TOTAL_PASSED=$((TOTAL_PASSED + ${gitevent_passed:-0}))
+TOTAL_FAILED=$((TOTAL_FAILED + ${gitevent_failed:-0}))
+if [[ $gitevent_status -eq 0 ]]; then
+  echo -e "${GREEN}✓ Git Event Detection Tests: $gitevent_passed/$gitevent_total passed${NC}"
+else
+  echo -e "${RED}✗ Git Event Detection Tests failed ($gitevent_passed/$gitevent_total passed)${NC}"
+  FAILED_SUITES+=("Git Event Detection Tests")
+fi
+echo ""
+
 # Test Suite 3: Error Scenario Tests
-echo -e "${BLUE}[3/4]${NC} Running Error Scenario Tests..."
+echo -e "${BLUE}[4/5]${NC} Running Error Scenario Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-errors.sh" > /tmp/error-test.log 2>&1
 err_status=$?
@@ -86,7 +106,7 @@ fi
 echo ""
 
 # Suite 4: Dependency Check
-echo -e "${BLUE}[4/4]${NC} Checking Dependencies..."
+echo -e "${BLUE}[5/5]${NC} Checking Dependencies..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 DEPS_OK=true
 DEPS_FOUND=()
@@ -125,9 +145,10 @@ if [[ $TOTAL_FAILED -eq 0 ]]; then
   echo -e "  Failed:       ${GREEN}0${NC}"
   echo ""
   echo "Test Coverage:"
-  echo "  • Unit Tests:           ${unit_total} assertions (lib/common.sh, lib/git-utils.sh, pn_config.sh)"
-  echo "  • Integration Tests:    ${int_total} tests (check-session.sh, check-prompt.sh, check-write.sh, check-repo-context.sh)"
-  echo "  • Error Scenarios:      ${err_total} tests (edge cases, malformed input, file system errors)"
+  echo "  • Unit Tests:              ${unit_total} assertions (lib/common.sh, lib/git-utils.sh, pn_config.sh)"
+  echo "  • Integration Tests:       ${int_total} tests (check-session.sh, check-prompt.sh, check-write.sh, check-repo-context.sh)"
+  echo "  • Git Event Detection:     ${gitevent_total} tests (git-utils resolvers, detection-client.sh, check-git-event.sh)"
+  echo "  • Error Scenarios:         ${err_total} tests (edge cases, malformed input, file system errors)"
   echo ""
   echo "Dependencies:"
   echo "  Found:   ${#DEPS_FOUND[@]} (${DEPS_FOUND[*]})"
@@ -157,6 +178,7 @@ else
   echo "Check test logs:"
   echo "  /tmp/unit-test.log"
   echo "  /tmp/integration-test.log"
+  echo "  /tmp/git-event-test.log"
   echo "  /tmp/error-test.log"
   echo ""
   exit 1
