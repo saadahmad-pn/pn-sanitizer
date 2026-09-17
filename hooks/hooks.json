@@ -46,17 +46,9 @@
     "afterShellExecution": [
       {
         "matcher": "",
-        "command": "scripts/run-hook.cmd debug-capture-payload",
+        "command": "scripts/run-hook.cmd report-tool",
         "failClosed": false,
-        "timeout": 10
-      }
-    ],
-    "postToolUse": [
-      {
-        "matcher": "",
-        "command": "scripts/run-hook.cmd debug-capture-payload",
-        "failClosed": false,
-        "timeout": 10
+        "timeout": 25
       }
     ]
   }

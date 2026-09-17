@@ -228,6 +228,57 @@ assert_json_field_equals "$result" "continue" "true" "Fails open on invalid inpu
 rm -rf "$REPO_CTX_WORKSPACE"
 
 echo ""
+echo -e "${BLUE}=== Integration Tests: report-tool.sh ===${NC}"
+
+# report-tool.sh is fire-and-forget by design (afterShellExecution, never
+# blocks, posts detached) -- the only client-observable contract is "always
+# returns {} quickly, never hangs, never crashes." Whether it actually
+# reports is exercised manually against a live listener, not here (this
+# repo's mock-server.sh doesn't capture request headers/body, only status).
+# Pointed at a closed local port so the detached curl (if one fires) fails
+# instantly with connection-refused instead of lingering past this test run.
+export PARADIGM_NETWORKS_SCAN_URL_OVERRIDE="http://127.0.0.1:19999"
+
+test_case "report-tool.sh with a non-git command never reports"
+mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+payload='{"session_id": "s1", "command": "ls -la", "output": "total 0", "hook_event_name": "afterShellExecution"}'
+result=$("$SCRIPTS_DIR/report-tool.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_output_equals "echo '$result'" "{}" "Always the bare no-op response"
+
+test_case "report-tool.sh with a git command but no session_id never reports"
+payload='{"command": "git push", "output": "done", "hook_event_name": "afterShellExecution"}'
+result=$("$SCRIPTS_DIR/report-tool.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_output_equals "echo '$result'" "{}" "Bare no-op response, missing session_id skips silently"
+
+test_case "report-tool.sh with a git command but no output never reports"
+payload='{"session_id": "s1", "command": "git push", "output": "", "hook_event_name": "afterShellExecution"}'
+result=$("$SCRIPTS_DIR/report-tool.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_output_equals "echo '$result'" "{}" "Bare no-op response, empty output (pre-execution shape) skips silently"
+
+test_case "report-tool.sh with a real git command, session_id and output returns cleanly"
+payload=$("$JQ_BIN" -n '{session_id: "s1", command: "gh pr create --base main", output: "https://github.com/acme/repo/pull/1\n", hook_event_name: "afterShellExecution"}')
+result=$("$SCRIPTS_DIR/report-tool.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_output_equals "echo '$result'" "{}" "Bare no-op response even on the reporting path -- nothing for Cursor to act on"
+
+test_case "report-tool.sh when not configured never reports"
+rm -f "$HOME/.pn/credentials.json"
+payload='{"session_id": "s1", "command": "git push", "output": "done", "hook_event_name": "afterShellExecution"}'
+result=$("$SCRIPTS_DIR/report-tool.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_output_equals "echo '$result'" "{}" "Bare no-op response, not signed in skips silently (never nags)"
+
+test_case "report-tool.sh with invalid JSON input never crashes"
+result=$("$SCRIPTS_DIR/report-tool.sh" <<< "not valid json" 2>/dev/null)
+assert_json_valid "$result" "Valid JSON output even with bad input"
+assert_output_equals "echo '$result'" "{}" "Fails open on invalid input, never blocks"
+
+unset PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
+
+echo ""
 echo ""
 test_summary
 FINAL_RESULT=$?
