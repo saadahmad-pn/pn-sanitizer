@@ -15,7 +15,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $CodechainTimeoutSec = if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) { [int]$env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT } else { 10 }
-$DebugLogPath = Join-Path $env:USERPROFILE ".paradigm-scanner\check-git-event-record.log"
 
 $stdinText = Get-StdinText
 
@@ -41,15 +40,9 @@ try {
         $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
       }
 
-      Get-CodechainSessionId -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
-        -ClientSessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Platform "cursor-hooks"
-
-      if ($Script:PnCodechainSessionId) {
-        Send-CodechainShellEvent -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
-          -SessionId $Script:PnCodechainSessionId -CommandText $commandText -Output $output -Cwd $cwd
-      } else {
-        Write-DebugLog -Message "codechain: no session id available, skipping shell-event recording" -LogPath $DebugLogPath
-      }
+      Send-CodechainShellEvent -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
+        -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch `
+        -CommandText $commandText -Output $output
     }
   }
 } catch {

@@ -1,10 +1,8 @@
 #!/bin/bash
-# sessionEnd hook: finalizes this conversation's Code Chain session, if one
-# was ever registered (check-session.sh's sessionStart, or lazily by
-# check-git-event-record.sh/check-turn-complete.sh). A session that never
-# touched git or produced a recorded turn has no cache entry -- a normal
-# no-op, not an error. Per Cursor's hooks contract this is fire-and-forget;
-# it cannot affect session teardown.
+# sessionEnd hook: records a session-end marker for this conversation's Code
+# Chain session. SessionId is Cursor's own conversation_id, used as-is -- no
+# prior registration is required for this to be meaningful. Per Cursor's
+# hooks contract this is fire-and-forget; it cannot affect session teardown.
 # See design-ideas/Codechain_Plugin_Hooks_Design.md.
 
 set -o pipefail

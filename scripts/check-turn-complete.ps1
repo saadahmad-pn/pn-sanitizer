@@ -14,7 +14,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $CodechainTimeoutSec = if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) { [int]$env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT } else { 10 }
 $TranscriptLines = if ($env:PARADIGM_NETWORKS_TRANSCRIPT_LINES) { [int]$env:PARADIGM_NETWORKS_TRANSCRIPT_LINES } else { 500 }
-$DebugLogPath = Join-Path $env:USERPROFILE ".paradigm-scanner\check-turn-complete.log"
 
 $stdinText = Get-StdinText
 
@@ -43,15 +42,9 @@ try {
             $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
           }
 
-          Get-CodechainSessionId -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
-            -ClientSessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Platform "cursor-hooks"
-
-          if ($Script:PnCodechainSessionId) {
-            Send-CodechainTurn -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
-              -SessionId $Script:PnCodechainSessionId -Prompt $Script:PnTurnPrompt -Response $Script:PnTurnResponse
-          } else {
-            Write-DebugLog -Message "codechain: no session id available, skipping turn recording" -LogPath $DebugLogPath
-          }
+          Send-CodechainTurn -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
+            -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch `
+            -Prompt $Script:PnTurnPrompt -Response $Script:PnTurnResponse
         }
       }
     }

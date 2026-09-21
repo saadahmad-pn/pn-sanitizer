@@ -4,6 +4,53 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-21 — Stop minting a separate SessionId for Code Chain recording
+
+`lib/codechain-client.sh`/`.ps1` no longer register-and-cache a
+server-minted `SessionId` before recording turns/shell-events. The control-
+server side dropped its `plugin_codechain_sessions` collection (which
+existed only to mint an id and look up `Platform`/`Cwd`/`GitRepoUrl`/
+`GitBranch` on every write) in favor of using Cursor's own
+`conversation_id` directly as the SessionId — the same pattern every other
+vendor here already used (Claude Code's `X-Claude-Code-Session-Id` header,
+Cursor gateway mode's `cursorConversationId`). There was nothing left for a
+dedicated session collection, or a client-side local cache mapping
+conversation id → minted id, to do.
+
+What changed:
+- `pn_get_codechain_session_id`/`Get-CodechainSessionId` (the mint-or-reuse
+  call, backed by a `~/.paradigm-scanner/codechain-sessions/*.txt` file
+  cache) is gone, along with `sanitize_client_session_id`/
+  `_codechain_cache_*`/`Get-SanitizedClientSessionId`/`Get-CodechainCache*`.
+- New `pn_register_codechain_session`/`Register-CodechainSession` records a
+  session-start marker directly against the client's own session id — it
+  is independent of every other call below, not a prerequisite for them.
+- `pn_record_codechain_turn`/`Send-CodechainTurn` and
+  `pn_record_codechain_shell_event`/`Send-CodechainShellEvent` now take
+  `Cwd`/`GitRepoUrl`/`GitBranch` directly as parameters (previously looked
+  up server-side from the registered session) — the callers already
+  compute these locally on every hook invocation, so nothing new had to be
+  threaded through.
+- `pn_close_codechain_session`/`Close-CodechainSession` posts to the given
+  session id directly; no more cache lookup to find what to close.
+- `check-session.sh`/`.ps1`, `check-turn-complete.sh`/`.ps1`,
+  `check-git-event-record.sh`/`.ps1` updated to call these directly instead
+  of a lookup-then-record two-step. `check-session-end.sh`/`.ps1` barely
+  changed (it already passed the client's own session id through).
+
+Verified: `bash test/run-all-tests.sh` — 198/199 passing (Code Chain
+Recording Tests 22/22; the one failure, `check-repo-context.sh`'s
+sanitized-GIT-tag assertion, reproduces identically without this change —
+confirmed unrelated, pre-existing). `test/test-codechain-client.sh`
+rewritten to match (no more cache-hit/miss cases — there is no cache left).
+`shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` reports only the
+same pre-existing SC2034 pattern already established for this codebase's
+global-return convention, none of it in `codechain-client.sh`.
+
+Also updated `design-ideas/Codechain_Plugin_Hooks_Design.md`'s `POST
+/sessions` section to match — it previously documented a server-minted
+`SessionId` returned from a `ClientSessionId` idempotency key.
+
 ## 2026-09-21 — Move prompt/write scanning off /v1/messages onto POST /api/v1/codedefense/scan
 
 `check-prompt.sh`/`check-write.sh` (+ `.ps1` twins) no longer call

@@ -1,6 +1,6 @@
-# sessionEnd hook (Windows): finalizes this conversation's Code Chain
-# session, if one was ever registered. Mirrors scripts/check-session-end.sh
-# -- see that file's header for the full rationale. Fire-and-forget per
+# sessionEnd hook (Windows): records a session-end marker for this
+# conversation's Code Chain session. Mirrors scripts/check-session-end.sh --
+# see that file's header for the full rationale. Fire-and-forget per
 # Cursor's hooks contract; cannot affect session teardown.
 
 Set-StrictMode -Version Latest
@@ -24,7 +24,7 @@ try {
     }
     if ($clientSessionId -and (Test-PnConfigured)) {
       $config = Resolve-PnConfig
-      Close-CodechainSession -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec -ClientSessionId $clientSessionId
+      Close-CodechainSession -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec -SessionId $clientSessionId
     }
   }
 } catch {

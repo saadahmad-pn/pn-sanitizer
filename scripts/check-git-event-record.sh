@@ -26,7 +26,6 @@ source "$SCRIPT_DIR/lib/codechain-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-10}"
-DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-git-event-record.log"
 
 main() {
   local payload=""
@@ -61,15 +60,8 @@ main() {
     git_branch=$(get_current_branch_or_empty "$cwd")
   fi
 
-  pn_get_codechain_session_id "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "cursor-hooks"
-  if [[ -z "$PN_CODECHAIN_SESSION_ID" ]]; then
-    log_debug "codechain: no session id available, skipping shell-event recording" "$DEBUG_LOG_PATH"
-    return 0
-  fi
-
   pn_record_codechain_shell_event "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$PN_CODECHAIN_SESSION_ID" "$command_text" "$output" "$cwd"
+    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$command_text" "$output"
 
   return 0
 }

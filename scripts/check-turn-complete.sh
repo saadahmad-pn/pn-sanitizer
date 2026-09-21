@@ -31,7 +31,6 @@ CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-10}"
 # remotely close to this many transcript lines in practice (see
 # get_current_turn_messages' own doc in lib/common.sh).
 TRANSCRIPT_LINES="${PARADIGM_NETWORKS_TRANSCRIPT_LINES:-500}"
-DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-turn-complete.log"
 
 main() {
   local payload=""
@@ -68,15 +67,8 @@ main() {
     git_branch=$(get_current_branch_or_empty "$cwd")
   fi
 
-  pn_get_codechain_session_id "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "cursor-hooks"
-  if [[ -z "$PN_CODECHAIN_SESSION_ID" ]]; then
-    log_debug "codechain: no session id available, skipping turn recording" "$DEBUG_LOG_PATH"
-    return 0
-  fi
-
   pn_record_codechain_turn "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$PN_CODECHAIN_SESSION_ID" "$PN_TURN_PROMPT" "$PN_TURN_RESPONSE"
+    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$PN_TURN_PROMPT" "$PN_TURN_RESPONSE"
 
   return 0
 }

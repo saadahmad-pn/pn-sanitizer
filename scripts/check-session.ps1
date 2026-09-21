@@ -20,12 +20,13 @@ $CodechainTimeoutSec = if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) { [int]$env
 
 $stdinText = Get-StdinText
 
-# Best-effort Code Chain session registration, run as a background job so it
+# Best-effort Code Chain session-start marker, run as a background job so it
 # never delays the login-check message below -- see
 # design-ideas/Codechain_Plugin_Hooks_Design.md and check-session.sh's
 # identical rationale. If this fails or never completes before the process
-# exits, later hooks (check-git-event-record, check-turn-complete) simply
-# re-attempt idempotent registration themselves.
+# exits, later hooks (check-git-event-record, check-turn-complete) still
+# record fine on their own -- they use the same client-supplied session id
+# directly and don't depend on this call.
 try {
   if ($stdinText) {
     $sessionPayload = $stdinText | ConvertFrom-Json -ErrorAction Stop
@@ -48,11 +49,11 @@ try {
         $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
       }
       Start-Job -ScriptBlock {
-        param($ScriptDir, $BaseUrl, $AccessToken, $Timeout, $ClientSessionId, $Cwd, $GitRepoUrl, $GitBranch)
+        param($ScriptDir, $BaseUrl, $AccessToken, $Timeout, $SessionId, $Cwd, $GitRepoUrl, $GitBranch)
         . (Join-Path $ScriptDir "lib\common.ps1")
         . (Join-Path $ScriptDir "lib\codechain-client.ps1")
-        Get-CodechainSessionId -BaseUrl $BaseUrl -AccessToken $AccessToken -TimeoutSec $Timeout `
-          -ClientSessionId $ClientSessionId -Cwd $Cwd -GitRepoUrl $GitRepoUrl -GitBranch $GitBranch -Platform "cursor-hooks"
+        Register-CodechainSession -BaseUrl $BaseUrl -AccessToken $AccessToken -TimeoutSec $Timeout `
+          -SessionId $SessionId -Cwd $Cwd -GitRepoUrl $GitRepoUrl -GitBranch $GitBranch
       } -ArgumentList $ScriptDir, $config.BaseUrl, $config.AccessToken, $CodechainTimeoutSec, $clientSessionId, $cwd, $gitRepoUrl, $gitBranch | Out-Null
     }
   }

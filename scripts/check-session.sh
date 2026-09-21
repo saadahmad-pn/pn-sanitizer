@@ -32,11 +32,12 @@ if [[ ! -t 0 ]]; then
   stdin_data=$(cat 2>/dev/null)
 fi
 
-# Best-effort Code Chain session registration -- see design-ideas/
+# Best-effort Code Chain session-start marker -- see design-ideas/
 # Codechain_Plugin_Hooks_Design.md. Never affects this hook's own JSON
 # output/exit code (sessionStart is fire-and-forget context injection
-# regardless): if this fails, later hooks (check-git-event, check-turn-
-# complete) simply re-attempt idempotent registration themselves.
+# regardless): if this fails, later hooks (check-git-event-record,
+# check-turn-complete) still record fine on their own -- they use the same
+# client-supplied session id directly and don't depend on this call.
 register_codechain_session() {
   [[ -z "$JQ_BIN" ]] && return 0
   [[ -z "$stdin_data" ]] && return 0
@@ -59,8 +60,8 @@ register_codechain_session() {
     git_branch=$(get_current_branch_or_empty "$cwd")
   fi
 
-  pn_get_codechain_session_id "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "cursor-hooks"
+  pn_register_codechain_session "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
+    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch"
 }
 # Backgrounded, not called inline: this must never delay the login-check
 # message below, which is this hook's actual job. Genuinely best-effort — if
