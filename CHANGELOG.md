@@ -4,6 +4,66 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-21 — Fix turn recording: was wired to "stop", which never fires per-turn
+
+Live testing found that prompts sent through Cursor were never landing in
+Code Chain at all — `~/.paradigm-scanner/codechain-client.log` stayed empty
+across multiple real prompts, even after confirming the recording pipeline
+itself worked end-to-end (a synthetic payload posted successfully and got a
+204 back). Checked Cursor's hooks docs directly
+(`cursor.com/docs/agent/hooks`) rather than continuing to guess: `stop`
+fires when **the whole agent loop ends** — payload is just `{status,
+loop_count}`, no response text, no reliable per-turn timing — not once per
+completed turn as this repo's design doc had assumed (hedged as
+"`afterAgentResponse`/`stop`" without picking one). `afterAgentResponse` is
+the hook that actually fires once per completed assistant message, and its
+payload carries the final assistant text directly (`.text`).
+
+What changed:
+- `hooks/hooks.json`: retargeted the `check-turn-complete` entry from
+  `"stop"` to `"afterAgentResponse"`.
+- `check-turn-complete.sh`/`.ps1`: now reads `.text` from the payload as
+  the authoritative Response (falls back to the transcript-derived guess
+  only if `.text` is empty). The Prompt still has to be recovered from
+  `.transcript_path` — `afterAgentResponse` carries no prompt field of its
+  own, unlike `beforeSubmitPrompt`. No cross-hook correlation state (no
+  stash file mapping prompt-by-generation_id) was introduced; this keeps
+  the existing transcript-based approach for the prompt half only.
+- `design-ideas/Codechain_Plugin_Hooks_Design.md` updated to firmly state
+  `afterAgentResponse` as the confirmed, correct trigger everywhere it had
+  been hedged as "`afterAgentResponse`/`stop`".
+
+**Known limitation, not resolved here:** Cursor's docs describe
+`afterAgentResponse` as firing "after the agent has completed an assistant
+message" — if a single user turn produces more than one assistant message
+(e.g. several tool-call round-trips before a final answer), this could
+record more than one turn per user prompt. Not reproduced or ruled out;
+revisit if duplicate/fragmented turns show up in `chatapi`.
+
+Verified: manually invoked `check-turn-complete.sh` directly three times
+with crafted `afterAgentResponse`-shaped payloads (text-field takes
+precedence over a deliberately-different transcript response; falls back
+to the transcript when `.text` is absent; no-ops cleanly with no
+`conversation_id`) — each confirmed via `~/.paradigm-scanner/codechain-
+client.log`. No new automated test coverage was added for
+`check-turn-complete.sh` itself: the underlying HTTP call
+(`pn_record_codechain_turn`) is already covered by
+`test/test-codechain-client.sh`, and this script can't be sourced into
+that suite (it calls `exit 0` at its own top level) without standing up
+new mock-server infrastructure for the `/turns` endpoint — judged
+disproportionate for a purely observational recording path given the
+manual verification above. `bash test/run-all-tests.sh` — 198/199 passing
+(the one failure is the pre-existing unrelated `check-repo-context.sh`
+flake). `shellcheck -S warning -x scripts/check-turn-complete.sh` clean.
+
+Separately confirmed the same root cause explains why git push/commit
+scanning wasn't firing either: `beforeShellExecution` was also added on
+this branch and is still unregistered in the currently-loaded Cursor
+plugin instance — not a code bug, but this repo's local-plugin-install
+docs don't yet cover "newly-added hook types need a full plugin
+remove/re-add, not just Reload Window." Not fixed here (nothing to fix in
+this repo); flagged for a `LOCAL_TESTING.md` follow-up.
+
 ## 2026-09-21 — Stop minting a separate SessionId for Code Chain recording
 
 `lib/codechain-client.sh`/`.ps1` no longer register-and-cache a
