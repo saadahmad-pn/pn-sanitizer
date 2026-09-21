@@ -25,7 +25,7 @@ TOTAL_FAILED=0
 FAILED_SUITES=()
 
 # Test Suite 1: Unit Tests
-echo -e "${BLUE}[1/6]${NC} Running Unit Tests..."
+echo -e "${BLUE}[1/7]${NC} Running Unit Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-unit.sh" > /tmp/unit-test.log 2>&1
 unit_status=$?
@@ -48,7 +48,7 @@ fi
 echo ""
 
 # Test Suite 2: Integration Tests
-echo -e "${BLUE}[2/6]${NC} Running Integration Tests..."
+echo -e "${BLUE}[2/7]${NC} Running Integration Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-hooks.sh" > /tmp/integration-test.log 2>&1
 int_status=$?
@@ -68,7 +68,7 @@ echo ""
 
 # Test Suite 2b: Git Event Detection Tests (lib/git-utils.sh resolvers,
 # lib/detection-client.sh, check-git-event.sh)
-echo -e "${BLUE}[3/6]${NC} Running Git Event Detection Tests..."
+echo -e "${BLUE}[3/7]${NC} Running Git Event Detection Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-git-event.sh" > /tmp/git-event-test.log 2>&1
 gitevent_status=$?
@@ -88,7 +88,7 @@ echo ""
 
 # Test Suite 3b: Code Chain Recording Tests (lib/codechain-client.sh,
 # get_current_turn_messages)
-echo -e "${BLUE}[4/6]${NC} Running Code Chain Recording Tests..."
+echo -e "${BLUE}[4/7]${NC} Running Code Chain Recording Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-codechain-client.sh" > /tmp/codechain-client-test.log 2>&1
 codechain_status=$?
@@ -106,8 +106,28 @@ else
 fi
 echo ""
 
-# Test Suite 4: Error Scenario Tests
-echo -e "${BLUE}[5/6]${NC} Running Error Scenario Tests..."
+# Test Suite 4b: Scan Client Tests (lib/scan-client.sh, the
+# POST /api/v1/codedefense/scan client used by check-prompt.sh/check-write.sh)
+echo -e "${BLUE}[5/7]${NC} Running Scan Client Tests..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+"$TEST_DIR/test-scan-client.sh" > /tmp/scan-client-test.log 2>&1
+scan_status=$?
+scan_passed=$(grep "Passed:" /tmp/scan-client-test.log | awk '{print $2}')
+scan_total=$(grep "Total:" /tmp/scan-client-test.log | awk '{print $2}')
+scan_failed=$(grep "Failed:" /tmp/scan-client-test.log | awk '{print $2}')
+TOTAL_TESTS=$((TOTAL_TESTS + ${scan_total:-0}))
+TOTAL_PASSED=$((TOTAL_PASSED + ${scan_passed:-0}))
+TOTAL_FAILED=$((TOTAL_FAILED + ${scan_failed:-0}))
+if [[ $scan_status -eq 0 ]]; then
+  echo -e "${GREEN}✓ Scan Client Tests: $scan_passed/$scan_total passed${NC}"
+else
+  echo -e "${RED}✗ Scan Client Tests failed ($scan_passed/$scan_total passed)${NC}"
+  FAILED_SUITES+=("Scan Client Tests")
+fi
+echo ""
+
+# Test Suite 5: Error Scenario Tests
+echo -e "${BLUE}[6/7]${NC} Running Error Scenario Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-errors.sh" > /tmp/error-test.log 2>&1
 err_status=$?
@@ -125,8 +145,8 @@ else
 fi
 echo ""
 
-# Suite 5: Dependency Check
-echo -e "${BLUE}[6/6]${NC} Checking Dependencies..."
+# Suite 6: Dependency Check
+echo -e "${BLUE}[7/7]${NC} Checking Dependencies..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 DEPS_OK=true
 DEPS_FOUND=()
@@ -169,6 +189,7 @@ if [[ $TOTAL_FAILED -eq 0 ]]; then
   echo "  • Integration Tests:       ${int_total} tests (check-session.sh, check-prompt.sh, check-write.sh, check-repo-context.sh)"
   echo "  • Git Event Detection:     ${gitevent_total} tests (git-utils resolvers, detection-client.sh, check-git-event.sh)"
   echo "  • Code Chain Recording:    ${codechain_total} tests (codechain-client.sh, get_current_turn_messages)"
+  echo "  • Scan Client:             ${scan_total} tests (scan-client.sh, POST /api/v1/codedefense/scan)"
   echo "  • Error Scenarios:         ${err_total} tests (edge cases, malformed input, file system errors)"
   echo ""
   echo "Dependencies:"
@@ -201,6 +222,7 @@ else
   echo "  /tmp/integration-test.log"
   echo "  /tmp/git-event-test.log"
   echo "  /tmp/codechain-client-test.log"
+  echo "  /tmp/scan-client-test.log"
   echo "  /tmp/error-test.log"
   echo ""
   exit 1

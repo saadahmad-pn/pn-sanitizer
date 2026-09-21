@@ -21,11 +21,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/scan-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
-SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
-TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-240}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-60}"
 TRANSCRIPT_LINES="${PARADIGM_NETWORKS_TRANSCRIPT_LINES:-500}"
 # PARADIGM_NETWORKS_FAILURE_MODE (manual env var override: block/allow —
 # no Cursor Settings UI for this, must be set directly in the
@@ -46,37 +46,13 @@ DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-write.log"
 # second finding and every category/standard name (e.g. "OWASP", "ASVS")
 # it was quoting from. Deliberately generic here (not "relay the OWASP
 # findings," specifically) since the backend's categorization scheme
-# isn't guaranteed to always be OWASP-flavored -- see pn_strip_block_
-# banner's own comment on why the content after the banner header can't
-# be assumed to have any particular shape.
+# isn't guaranteed to always be OWASP-flavored.
 # Takes "this write" or "this command" (see action_desc, set once tool_name
 # is known) since the same instruction now covers both Write and Shell.
 build_stop_instruction() {
   local action_desc="$1"
   echo "A security scan blocked ${action_desc} due to a detected policy violation. Do not retry ${action_desc} or attempt a workaround (e.g. re-encoding it, splitting it up, or otherwise disguising it to bypass detection). Stop this task and relay the findings above to the user in full, exactly as given -- every issue, category, code, and standard name mentioned. Do not summarize or paraphrase them into a general statement; the user needs the precise details to know what to fix."
 }
-
-# codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model.
-# pn_resolve_model (pn_config.sh) is the shared precedence chain (env var
-# override > saved preference > hardcoded default) -- see its own
-# comment for the full rationale. The hardcoded default is a cheap/fast
-# tier, chosen because testing showed the block/allow verdict is
-# identical across models and max_tokens values -- the platform's guard
-# fires before the requested model ever runs, so model choice only
-# affects cost/latency on the allow-path reply, not detection accuracy.
-pn_resolve_model
-MODEL="$PN_RESOLVED_MODEL"
-# The block banner itself is never subject to max_tokens (confirmed via
-# live testing: output_tokens is 0 even for the full banner, since the
-# platform's guard injects it before the requested model runs at all), so
-# this budget only governs the allow-path reply's length. Raised from an
-# earlier 150 (which comfortably covered the banner but wasn't meant to
-# cover anything else, back when that reply was discarded) now that the
-# reply is surfaced to the user as user_message -- 150 would truncate most
-# real answers (a plain "write me hello.py" reply alone ran ~224 output
-# tokens in testing).
-MAX_TOKENS=1024
 
 main() {
   # Read and validate JSON from stdin (skip if nothing is piped in — avoids
@@ -144,8 +120,6 @@ main() {
 
   # "subject" is what's actually about to happen -- the file content being
   # written for a Write call, or the command about to run for a Shell call.
-  # Same role file_content played before Shell existed, just named for what
-  # it now covers.
   local subject=""
   if [[ "$tool_name" == "Write" ]]; then
     subject="$file_content"
@@ -164,13 +138,9 @@ main() {
   # Scan the current turn's conversation together with the write/command
   # subject -- neither alone is enough. The subject alone can miss malicious
   # *intent* that doesn't show up in code/commands that look ordinary on
-  # their own (e.g. the user's actual ask was the problem, not the resulting
-  # file or command). A raw transcript tail on its own can drag in stale
-  # context from an earlier, unrelated turn (confirmed directly: a trivial
-  # follow-up write was blocked purely because recent transcript text
-  # mentioned a security topic from a previous, unrelated prompt).
-  # get_current_turn_text() above scopes to the most recent user message
-  # onward, so it can't repeat that -- combining it with the actual subject
+  # their own. A raw transcript tail on its own can drag in stale context
+  # from an earlier, unrelated turn. get_current_turn_text() scopes to the
+  # most recent user message onward, so combining it with the actual subject
   # covers both what was asked for and what's actually about to happen.
   local scan_text=""
   local scan_source=""
@@ -222,164 +192,116 @@ main() {
   local access_token
   read -r base_url access_token <<<"$config"
 
-  local scan_url="${SCAN_URL_OVERRIDE}"
-  if [[ -z "$scan_url" ]]; then
-    scan_url="${base_url%/}/v1/messages"
-  fi
+  log_debug "Scanning write | base_url=$base_url | scan_text_len=${#scan_text}" "$DEBUG_LOG_PATH"
 
-  log_debug "Scanning write | scan_url=$scan_url | model=$MODEL | scan_text_len=${#scan_text}" "$DEBUG_LOG_PATH"
+  # pn_scan_text (lib/scan-client.sh) posts to POST /api/v1/codedefense/scan
+  # -- no model invocation, a real structured action_to_take verdict instead
+  # of the old /v1/messages zero-usage/banner-text heuristic. Called as a
+  # plain statement, not $(...): it sets PN_SCAN_* as globals in this shell.
+  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$scan_text"
 
-  # Built via jq -n --arg, not string interpolation: scan_text can contain
-  # quotes/backslashes/newlines that must be escaped correctly, and jq
-  # handles that safely where hand-built JSON would not.
-  local json_body
-  json_body=$("$JQ_BIN" -n \
-    --arg model "$MODEL" \
-    --argjson max_tokens "$MAX_TOKENS" \
-    --arg content "$scan_text" \
-    '{model: $model, max_tokens: $max_tokens, stream: false, messages: [{role: "user", content: $content}]}')
+  case "$PN_SCAN_STATUS" in
+    timeout)
+      audit_log_entry=$("$JQ_BIN" -n \
+        --arg tool_name "$tool_name" \
+        --arg file_path "$file_path" \
+        --arg command "$shell_command" \
+        --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
+        --arg reason "api_timeout" \
+        --arg detail "${TIMEOUT_SECONDS}s timeout" \
+        '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail}')
+      audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
-  local response
-  local raw_response
-  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS")
-  local curl_exit=$?
-  http_post_split_status "$raw_response"
-  response="$HTTP_POST_BODY"
+      if [[ "$FAILURE_MODE" == "open" ]]; then
+        json_permission_allow "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). ${action_noun} allowed WITHOUT a security scan."
+      else
+        json_permission_deny "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). ${action_noun} blocked." "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Do not retry ${action_desc}."
+      fi
+      return 0
+      ;;
+    unreachable)
+      audit_log_entry=$("$JQ_BIN" -n \
+        --arg tool_name "$tool_name" \
+        --arg file_path "$file_path" \
+        --arg command "$shell_command" \
+        --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
+        --arg reason "api_unreachable" \
+        --arg detail "connection failed" \
+        '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail}')
+      audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
-  # Handle curl errors
-  if [[ $curl_exit -eq 28 ]]; then
-    # Timeout
-    audit_log_entry=$("$JQ_BIN" -n \
-      --arg tool_name "$tool_name" \
-      --arg file_path "$file_path" \
-      --arg command "$shell_command" \
-      --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-      --arg reason "api_timeout" \
-      --arg detail "${TIMEOUT_SECONDS}s timeout" \
-      --arg scan_url "$scan_url" \
-      '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail, scan_url: $scan_url}')
-    audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
+      if [[ "$FAILURE_MODE" == "open" ]]; then
+        json_permission_allow "The scanning service is unavailable (connection failed). ${action_noun} allowed WITHOUT a security scan."
+      else
+        json_permission_deny "The scanning service is unavailable (connection failed). ${action_noun} blocked." "The scanning service is unavailable (connection failed). Do not retry ${action_desc}."
+      fi
+      return 0
+      ;;
+    http_error)
+      audit_log_entry=$("$JQ_BIN" -n \
+        --arg tool_name "$tool_name" \
+        --arg file_path "$file_path" \
+        --arg command "$shell_command" \
+        --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
+        --arg reason "api_http_error" \
+        --arg detail "HTTP ${PN_SCAN_HTTP_STATUS}" \
+        '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail}')
+      audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
-    if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). ${action_noun} allowed WITHOUT a security scan."
-    else
-      json_permission_deny "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). ${action_noun} blocked." "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). Do not retry ${action_desc}."
-    fi
-    return 0
-  elif [[ $curl_exit -ne 0 ]]; then
-    # Connection error
-    audit_log_entry=$("$JQ_BIN" -n \
-      --arg tool_name "$tool_name" \
-      --arg file_path "$file_path" \
-      --arg command "$shell_command" \
-      --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-      --arg reason "api_unreachable" \
-      --arg detail "connection failed" \
-      --arg scan_url "$scan_url" \
-      '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail, scan_url: $scan_url}')
-    audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
+      if [[ "$FAILURE_MODE" == "open" ]]; then
+        json_permission_allow "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). ${action_noun} allowed WITHOUT a security scan."
+      else
+        json_permission_deny "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). ${action_noun} blocked." "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). Do not retry ${action_desc}."
+      fi
+      return 0
+      ;;
+    invalid_json)
+      audit_log_entry=$("$JQ_BIN" -n \
+        --arg tool_name "$tool_name" \
+        --arg file_path "$file_path" \
+        --arg command "$shell_command" \
+        --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
+        --arg reason "api_invalid_json" \
+        --arg detail "scanner returned invalid JSON" \
+        '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail}')
+      audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
-    if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "The scanning service is unavailable (connection failed). ${action_noun} allowed WITHOUT a security scan."
-    else
-      json_permission_deny "The scanning service is unavailable (connection failed). ${action_noun} blocked." "The scanning service is unavailable (connection failed). Do not retry ${action_desc}."
-    fi
-    return 0
-  fi
+      if [[ "$FAILURE_MODE" == "open" ]]; then
+        json_permission_allow "The scanning service returned an invalid response. ${action_noun} allowed WITHOUT a security scan."
+      else
+        json_permission_deny "The scanning service returned an invalid response. ${action_noun} blocked." "The scanning service returned an invalid response. Do not retry ${action_desc}."
+      fi
+      return 0
+      ;;
+  esac
 
-  # Reject non-2xx responses (expired/invalid token, server error, etc.)
-  # before treating the body as a real verdict — a valid-JSON error body
-  # would otherwise default to "allow" via the // fallback below and
-  # silently mask the actual failure.
-  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
-    audit_log_entry=$("$JQ_BIN" -n \
-      --arg tool_name "$tool_name" \
-      --arg file_path "$file_path" \
-      --arg command "$shell_command" \
-      --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-      --arg reason "api_http_error" \
-      --arg detail "HTTP ${HTTP_POST_STATUS}" \
-      --arg scan_url "$scan_url" \
-      '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail, scan_url: $scan_url}')
-    audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
-
-    if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). ${action_noun} allowed WITHOUT a security scan."
-    else
-      json_permission_deny "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). ${action_noun} blocked." "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Do not retry ${action_desc}."
-    fi
-    return 0
-  fi
-
-  # Validate response is JSON
-  if ! echo "$response" | "$JQ_BIN" empty 2>/dev/null; then
-    audit_log_entry=$("$JQ_BIN" -n \
-      --arg tool_name "$tool_name" \
-      --arg file_path "$file_path" \
-      --arg command "$shell_command" \
-      --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-      --arg reason "api_invalid_json" \
-      --arg detail "scanner returned invalid JSON" \
-      --arg scan_url "$scan_url" \
-      '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail, scan_url: $scan_url}')
-    audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
-
-    if [[ "$FAILURE_MODE" == "open" ]]; then
-      json_permission_allow "The scanning service returned an invalid response. ${action_noun} allowed WITHOUT a security scan."
-    else
-      json_permission_deny "The scanning service returned an invalid response. ${action_noun} blocked." "The scanning service returned an invalid response. Do not retry ${action_desc}."
-    fi
-    return 0
-  fi
-
-  # pn_parse_messages_response (lib/common.sh) classifies this response --
-  # see that function's comment for the full detection-rule rationale.
-  # Called as a plain statement, not $(...): it sets PN_MSG_ACTION /
-  # PN_MSG_MESSAGE as globals in this shell, same contract as
-  # http_post_split_status above.
-  pn_parse_messages_response "$response"
-  local action="$PN_MSG_ACTION"
-
-  # Audit log the decision. "message_id" (the /v1/messages response's own
-  # "id" field) replaces the old scan_id -- different endpoint, same
-  # purpose: a value to correlate this decision against backend logs.
-  local message_id
-  message_id=$(echo "$response" | "$JQ_BIN" -r '.id // ""')
+  # Audit log the decision.
   audit_log_entry=$("$JQ_BIN" -n \
     --arg tool_name "$tool_name" \
     --arg file_path "$file_path" \
     --arg command "$shell_command" \
-    --arg decision "$action" \
-    --arg message_id "$message_id" \
-    '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, message_id: $message_id}')
+    --arg decision "$PN_SCAN_ACTION" \
+    --arg threat_level "$PN_SCAN_THREAT_LEVEL" \
+    '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, threat_level: $threat_level}')
   audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
   # Return verdict
-  case "$action" in
-    anomaly)
-      # Zero usage without the block banner -- an unrecognized response
-      # shape, not a confirmed verdict either way. Same posture as an
-      # invalid-JSON or non-2xx response above: don't guess allow or block.
-      log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+  case "$PN_SCAN_ACTION" in
+    ""|null)
+      # A valid JSON response with no recognized action_to_take -- an
+      # unexpected response shape, not a confirmed verdict either way.
+      log_debug "Scan response shape unexpected (no recognized action_to_take)" "$DEBUG_LOG_PATH"
       local anomaly_streak
       anomaly_streak=$(pn_record_scan_anomaly)
       local anomaly_prefix=""
       if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
         anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
       fi
-      # PN_MSG_MESSAGE is whatever the backend actually returned, in full
-      # (may be empty if there was truly no text content at all). Shown
-      # directly, the same way a real block's reason is shown directly --
-      # not wrapped in a canned "unexpected response" sentence, which
-      # would bury real content (e.g. a not-yet-recognized block-banner
-      # variant, confirmed to happen in practice) behind boilerplate. The
-      # generic sentence is only a last resort when there's genuinely
-      # nothing to show.
-      if [[ -n "$PN_MSG_MESSAGE" ]]; then
+      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
         if [[ "$FAILURE_MODE" == "open" ]]; then
-          json_permission_allow "${anomaly_prefix}${PN_MSG_MESSAGE}"
+          json_permission_allow "${anomaly_prefix}${PN_SCAN_MESSAGE}"
         else
-          json_permission_deny "${anomaly_prefix}${PN_MSG_MESSAGE}" "$PN_MSG_MESSAGE Do not retry ${action_desc}."
+          json_permission_deny "${anomaly_prefix}${PN_SCAN_MESSAGE}" "$PN_SCAN_MESSAGE Do not retry ${action_desc}."
         fi
       else
         if [[ "$FAILURE_MODE" == "open" ]]; then
@@ -391,32 +313,24 @@ main() {
       ;;
     block)
       pn_record_successful_scan
-      # PN_MSG_MESSAGE is the block banner's own explanation, with only
-      # the confirmed-fixed scaffolding stripped (pn_strip_block_banner
-      # in lib/common.sh) -- already a complete, self-explanatory message
-      # in the backend's own words, whether it's a short phrase or a long
-      # structured report, so it's used directly rather than wrapped in a
-      # sentence built around assuming a short noun-phrase. That
-      # assumption is exactly what broke when a second, longer banner
-      # shape showed up (a multi-finding OWASP report) -- the old wrapper
-      # produced "...security concerns: <entire multi-line report>.",
-      # doubling up on the report's own already-complete explanation.
-      local user_message="$PN_MSG_MESSAGE"
+      local user_message="$PN_SCAN_MESSAGE"
+      [[ -z "$user_message" ]] && user_message="A policy violation was detected."
       json_permission_deny "$user_message" "$user_message $(build_stop_instruction "$action_desc")"
       ;;
-    *)
-      # "allow" is the only other action pn_parse_messages_response
-      # produces -- there is no "warn" state on this endpoint (see that
-      # function's comment). The backend is also a coding assistant, not
-      # just a scanner, so its reply (PN_MSG_MESSAGE, full text on this
-      # path) is surfaced as user_message rather than discarded -- may be
-      # empty if there was no text content to show. Cursor's own hooks
-      # docs describe user_message as shown "when denied"; whether it's
-      # actually rendered on an allow too is unconfirmed and being tested
-      # live rather than assumed either way.
+    warn)
+      # Non-blocking: surface the scan's own explanation and let it proceed.
       pn_record_successful_scan
-      if [[ -n "$PN_MSG_MESSAGE" ]]; then
-        json_permission_allow "$PN_MSG_MESSAGE"
+      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
+        json_permission_allow "$PN_SCAN_MESSAGE"
+      else
+        json_permission_allow
+      fi
+      ;;
+    *)
+      # "allow"
+      pn_record_successful_scan
+      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
+        json_permission_allow "$PN_SCAN_MESSAGE"
       else
         json_permission_allow
       fi

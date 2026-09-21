@@ -9,15 +9,10 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
+. (Join-Path $ScriptDir "lib\scan-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-$ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 240s, matching the bash side. Deliberately kept long even though
-# beforeSubmitPrompt runs with failClosed: true -- a slow/dead backend will
-# now freeze the IDE for up to 240s before denying (worse than the 25s a
-# fail-fast timeout would give), but this restores headroom for real scan
-# latency. See CHANGELOG.md for the full history/tradeoff.
-$TimeoutSeconds = 240
+$TimeoutSeconds = 60
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
@@ -25,27 +20,6 @@ if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   }
 }
 $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
-
-# codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model.
-# Resolve-PnModel (pn_config.ps1) is the shared precedence chain (env var
-# override > saved preference > hardcoded default) -- see its own
-# comment for the full rationale. The hardcoded default is a cheap/fast
-# tier, chosen because testing showed the block/allow verdict is
-# identical across models and max_tokens values -- the platform's guard
-# fires before the requested model ever runs, so model choice only
-# affects cost/latency on the allow-path reply, not detection accuracy.
-$Model = (Resolve-PnModel).Model
-# The block banner itself is never subject to max_tokens (confirmed via
-# live testing: output_tokens is 0 even for the full banner, since the
-# platform's guard injects it before the requested model runs at all), so
-# this budget only governs the allow-path reply's length. Raised from an
-# earlier 150 (which comfortably covered the banner but wasn't meant to
-# cover anything else, back when that reply was discarded) now that the
-# reply is surfaced to the user as user_message -- 150 would truncate most
-# real answers (a plain "write me hello.py" reply alone ran ~224 output
-# tokens in testing).
-$MaxTokens = 1024
 
 $rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
 if (-not $rawMode) { $rawMode = "allow" }
@@ -65,12 +39,7 @@ try {
     Write-DebugLog -Message "Payload failed to parse as JSON | error=$($_.Exception.Message) | raw(first 300 chars)=$($payload.Substring(0, [Math]::Min(300, $payload.Length)))" -LogPath $DebugLogPath
     # Deliberately always allow here, unlike the $PromptFailureMode-driven
     # branches below: a malformed payload usually signals a Cursor
-    # integration/encoding quirk, not an unreachable scanner. Routing it
-    # through $PromptFailureMode would mean an affected machine gets every
-    # single prompt blocked persistently, which is worse than a transient
-    # scanner outage -- and here the blast radius is the whole product, not
-    # just file writes (see check-write.ps1's identical handling of this
-    # same situation for the write side).
+    # integration/encoding quirk, not an unreachable scanner.
     Write-JsonAllow -Message "Received invalid input. Allowing prompt -- it was not scanned."
     return
   }
@@ -85,173 +54,85 @@ try {
     return
   }
 
-  $scanUrl = $ScanUrlOverride
-  if (-not $scanUrl) {
-    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/v1/messages"
-  }
+  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
-  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | scan_url=$scanUrl | model=$Model | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
-
+  # Invoke-PnScanText (lib/scan-client.ps1) posts to
+  # POST /api/v1/codedefense/scan -- no model invocation, a real structured
+  # Action verdict instead of the old /v1/messages zero-usage/banner-text
+  # heuristic.
   $callStart = Get-Date
-  Write-DebugLog -Message "POST starting -> $scanUrl" -LogPath $DebugLogPath
-  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $prompt -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds -Text $prompt
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
+  Write-DebugLog -Message "Scan returned after ${elapsedMs}ms | Status=$($scanResult.Status) | Action=$($scanResult.Action)" -LogPath $DebugLogPath
 
-  $bodyPreview = ""
-  if ($result.Body) {
-    $bodyPreview = $result.Body.Substring(0, [Math]::Min(500, $result.Body.Length))
-  }
-  Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode) | body(first 500 chars)=$bodyPreview" -LogPath $DebugLogPath
-
-  if ($result.TimedOut) {
-    Write-DebugLog -Message "API timeout | after ${TimeoutSeconds}s | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service timed out (${TimeoutSeconds}s). Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service timed out (${TimeoutSeconds}s). Allowing prompt."
+  switch ($scanResult.Status) {
+    "timeout" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service timed out (${TimeoutSeconds}s). Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service timed out (${TimeoutSeconds}s). Allowing prompt."
+      }
+      return
     }
-    return
-  }
-  if ($result.ConnectionFailed) {
-    Write-DebugLog -Message "API unreachable | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service is unreachable. Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service is unreachable. Allowing prompt."
+    "unreachable" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service is unreachable. Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service is unreachable. Allowing prompt."
+      }
+      return
     }
-    return
-  }
-
-  # HTTP 403 from this endpoint means the org is logged in but has no
-  # models configured on the backend -- a known, deterministic state, not
-  # a transient/ambiguous failure. Always block here regardless of
-  # $PromptFailureMode (same posture as the unconditional-allow branch
-  # above for "not configured": a known state gets a fixed, correct
-  # outcome rather than being left to the generic failure-mode setting).
-  # Mirrors scripts/check-prompt.sh's identical 403 branch -- see that
-  # file's comment for the full rationale, including why this doesn't try
-  # to distinguish sub-causes of 403 (e.g. an expired token).
-  if ($result.StatusCode -eq 403) {
-    Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
-    # Emoji built via ConvertFromUtf32/[char] escapes, not a literal
-    # character, so this file stays pure ASCII -- Windows PowerShell 5.1
-    # (unlike PS7+/bash) doesn't reliably assume UTF-8 for a .ps1 with no
-    # byte-order mark, and a real UTF-8 multi-byte character here corrupts
-    # the parser's token stream for the rest of the file (confirmed
-    # directly: an em dash elsewhere in this codebase caused "missing
-    # string terminator"/"missing closing brace" errors dozens of lines
-    # away). Pure-ASCII source sidesteps the whole class of bug regardless
-    # of what encoding any future edit saves the file with.
-    $shield = "$([System.Char]::ConvertFromUtf32(0x1F6E1))$([char]0xFE0F)"
-    Write-JsonDeny -Message "### $shield Complete Your Paradigm Networks Setup
-
-You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
-
-Please visit the following link to finish your configuration, and then try again:
-[$($config.BaseUrl.TrimEnd('/'))]($($config.BaseUrl.TrimEnd('/')))
-
-If you run into any issues during setup, feel free to reach out to customer.support@paradigmnetworks.ai for assistance."
-    return
-  }
-
-  if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
-    Write-DebugLog -Message "API HTTP error | status=$($result.StatusCode) | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service returned an error (HTTP $($result.StatusCode)). Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service returned an error (HTTP $($result.StatusCode)). Allowing prompt."
+    "http_error" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service returned an error (HTTP $($scanResult.HttpStatus)). Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service returned an error (HTTP $($scanResult.HttpStatus)). Allowing prompt."
+      }
+      return
     }
-    return
-  }
-
-  $responseObject = $null
-  try {
-    $responseObject = $result.Body | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    Write-DebugLog -Message "API invalid JSON response | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service returned an invalid response. Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service returned an invalid response. Allowing prompt."
+    "invalid_json" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service returned an invalid response. Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service returned an invalid response. Allowing prompt."
+      }
+      return
     }
-    return
   }
 
-  # ConvertFrom-PnMessagesResponse (lib/common.ps1) classifies this
-  # response -- see that function's (and its bash sibling
-  # pn_parse_messages_response's) comment for the full detection-rule
-  # rationale.
-  $parsedVerdict = ConvertFrom-PnMessagesResponse -ResponseBody $result.Body
-  $action = $parsedVerdict.Action
-
-  Write-DebugLog -Message "API response received | action=$action" -LogPath $DebugLogPath
-
-  switch ($action) {
-    "anomaly" {
-      # Zero usage without the block banner -- an unrecognized response
-      # shape, not a confirmed verdict either way. Same posture as an
-      # invalid-JSON or non-2xx response above: don't guess allow or block.
-      Write-DebugLog -Message "API response shape unexpected (zero usage, no block banner) | url=$scanUrl" -LogPath $DebugLogPath
+  switch ($scanResult.Action) {
+    { [string]::IsNullOrEmpty($_) } {
+      # A valid JSON response with no recognized action_to_take -- an
+      # unexpected response shape, not a confirmed verdict either way.
+      Write-DebugLog -Message "Scan response shape unexpected (no recognized action_to_take)" -LogPath $DebugLogPath
       $anomalyStreak = Add-PnScanAnomaly
       $anomalyPrefix = ""
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
-        # See the shield-emoji comment above for why this is built via
-        # [char] escapes rather than a literal character.
         $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
         $anomalyPrefix = "$warningSign Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
-      # $parsedVerdict.Message is whatever the backend actually returned,
-      # in full (may be empty if there was truly no text content at all).
-      # Shown directly, the same way a real block's reason is shown
-      # directly -- not wrapped in a canned "unexpected response"
-      # sentence, which would bury real content (e.g. a not-yet-
-      # recognized block-banner variant, confirmed to happen in
-      # practice) behind boilerplate. The generic sentence is only a
-      # last resort when there's genuinely nothing to show.
-      if ($parsedVerdict.Message) {
+      if ($scanResult.Message) {
         if ($PromptFailureMode -eq "closed") {
-          Write-JsonDeny -Message "${anomalyPrefix}$($parsedVerdict.Message)"
+          Write-JsonDeny -Message "${anomalyPrefix}$($scanResult.Message)"
         } else {
-          Write-JsonAllow -Message "${anomalyPrefix}$($parsedVerdict.Message)"
+          Write-JsonAllow -Message "${anomalyPrefix}$($scanResult.Message)"
         }
-        return
-      }
-      if ($PromptFailureMode -eq "closed") {
-        Write-JsonDeny -Message "${anomalyPrefix}The scanning service returned an unexpected response. Prompt blocked."
       } else {
-        Write-JsonAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Allowing prompt."
+        if ($PromptFailureMode -eq "closed") {
+          Write-JsonDeny -Message "${anomalyPrefix}The scanning service returned an unexpected response. Prompt blocked."
+        } else {
+          Write-JsonAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Allowing prompt."
+        }
       }
     }
     "block" {
       Set-PnLastSuccessfulScan
-      # Mirrors scripts/check-prompt.sh's block-message formatting
-      # exactly -- see that file's comments for the full rationale.
-      # Markdown formatting confirmed rendering correctly in Cursor's UI,
-      # with one known exception from testing on a real Windows target:
-      # one specific Cursor UI surface ("Submission blocked by hook")
-      # silently drops **bold** weight (the markdown gets stripped, but
-      # no bold is applied), while `inline code`, `### heading`, and
-      # `> blockquote` all render correctly there.
-      #
-      # $parsedVerdict.Message is the block banner's own explanation,
-      # with only the confirmed-fixed scaffolding stripped
-      # (ConvertTo-PnStrippedBlockBanner in lib/common.ps1) -- no second
-      # extraction pass needed here. It's already a complete explanation
-      # in the backend's own words, and can be either a short phrase-in-
-      # a-sentence or a long multi-line structured report, so the
-      # "Concern" section below has to handle both shapes.
-      $reason = $parsedVerdict.Message
+      # Markdown formatting confirmed rendering correctly in Cursor's UI.
+      $reason = $scanResult.Message
+      if (-not $reason) { $reason = "A policy violation was detected." }
 
-      # Preview of the actual prompt that got flagged, capped at 60 words
-      # so a long prompt doesn't blow up the message. Collapsed to a
-      # single line first: markdown's ">" blockquote syntax only quotes
-      # the line it's on, so a multi-line prompt would otherwise break out
-      # of the quote after the first line.
+      # Preview of the actual prompt that got flagged, capped at 60 words.
       $flaggedPreview = ($prompt -replace '\s+', ' ').Trim()
-      # @(...) matters even though Where-Object already returns a
-      # collection: a single-word prompt would otherwise reduce to a bare
-      # string crossing this pipeline, and .Count would throw the same way
-      # it did once already this session for a single-item collection.
       $words = @($flaggedPreview -split ' ' | Where-Object { $_ -ne '' })
       $wasTruncated = $words.Count -gt 60
       $flaggedPreview = ($words | Select-Object -First 60) -join ' '
@@ -259,16 +140,6 @@ If you run into any issues during setup, feel free to reach out to customer.supp
         $flaggedPreview = "$flaggedPreview..."
       }
 
-      # Built via single-quoted (fully literal) fragments concatenated in,
-      # not backtick-escaped inside a double-quoted string: backtick is
-      # PowerShell's own escape character, so embedding a literal backtick
-      # directly in a double-quoted string needs doubling it up, which is
-      # easy to get wrong -- concatenating literal single-quoted pieces
-      # sidesteps that entirely.
-      # A single-line reason reads fine as an inline-code label; a
-      # multi-line one (e.g. a structured findings report) does not --
-      # markdown inline code spans aren't meant to carry embedded line
-      # breaks, so a long reason gets its own section instead.
       if ($reason -match "`n") {
         $concernLine = "**Concern**`n`n$reason"
       } else {
@@ -276,15 +147,6 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       }
       $quotedContent = '> ' + $flaggedPreview
 
-      # Built from its Unicode code points, not embedded as a literal
-      # character in this source file: a literal multi-byte emoji here
-      # depends on the file being read back with the exact encoding it was
-      # saved with, which is exactly the kind of ambiguity that produced
-      # mojibake ("dY>...") on a real Windows target even after forcing
-      # [Console]::OutputEncoding to UTF-8 in common.ps1. The shield emoji
-      # is two code points -- U+1F6E1 SHIELD, U+FE0F VARIATION SELECTOR-16
-      # (selects the emoji-style presentation) -- constructing both from
-      # their code points sidesteps source-file encoding entirely.
       $shieldEmoji = [char]::ConvertFromUtf32(0x1F6E1) + [char]::ConvertFromUtf32(0xFE0F)
       $brandedMessage = "### $shieldEmoji Request blocked by Paradigm Networks`n`n" +
         "This message wasn't sent to the model. Your organization's proxy inspects`n" +
@@ -294,19 +156,20 @@ If you run into any issues during setup, feel free to reach out to customer.supp
         "$quotedContent"
       Write-JsonDeny -Message $brandedMessage
     }
-    default {
-      # "allow" is the only other action ConvertFrom-PnMessagesResponse
-      # produces -- there is no "warn" state on this endpoint (see that
-      # function's comment). The backend is also a coding assistant, not
-      # just a scanner, so its reply ($parsedVerdict.Message, full text on
-      # this path) is surfaced as user_message rather than discarded --
-      # may be empty if there was no text content to show. Cursor's own
-      # hooks docs describe user_message as shown "when blocked"; whether
-      # it's actually rendered on an allow too is unconfirmed and being
-      # tested live rather than assumed either way.
+    "warn" {
+      # Non-blocking: surface the scan's own explanation and let it proceed.
       Set-PnLastSuccessfulScan
-      if ($parsedVerdict.Message) {
-        Write-JsonAllow -Message $parsedVerdict.Message
+      if ($scanResult.Message) {
+        Write-JsonAllow -Message $scanResult.Message
+      } else {
+        Write-JsonAllow
+      }
+    }
+    default {
+      # "allow"
+      Set-PnLastSuccessfulScan
+      if ($scanResult.Message) {
+        Write-JsonAllow -Message $scanResult.Message
       } else {
         Write-JsonAllow
       }

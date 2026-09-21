@@ -8,15 +8,10 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
+. (Join-Path $ScriptDir "lib\scan-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-$ScanUrlOverride = $env:PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
-# 240s, matching the bash side. Deliberately kept long even though
-# preToolUse (Write) runs with failClosed: true -- a slow/dead backend will
-# now freeze the IDE for up to 240s before denying (worse than the 25s a
-# fail-fast timeout would give), but this restores headroom for real scan
-# latency. See CHANGELOG.md for the full history/tradeoff.
-$TimeoutSeconds = 240
+$TimeoutSeconds = 60
 if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
   if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
@@ -40,41 +35,14 @@ $AuditLogPath = Join-Path $HOME ".paradigm-scanner\audit.jsonl"
 $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-write.log"
 # "relay ... in full, exactly as given" is deliberate, not just "report
 # the violation": confirmed directly that a vaguer instruction lets the
-# agent paraphrase the findings above into its own short summary,
-# dropping specific detail in the process -- observed losing an entire
-# second finding and every category/standard name (e.g. "OWASP", "ASVS")
-# it was quoting from. Deliberately generic here (not "relay the OWASP
-# findings," specifically) since the backend's categorization scheme
-# isn't guaranteed to always be OWASP-flavored -- see
-# ConvertTo-PnStrippedBlockBanner's own comment on why the content after
-# the banner header can't be assumed to have any particular shape.
-# Takes "this write" or "this command" (see $actionDesc, set once $toolName
-# is known) since the same instruction now covers both Write and Shell.
+# agent paraphrase the findings above into its own short summary, dropping
+# specific detail in the process. Deliberately generic here (not "relay
+# the OWASP findings," specifically) since the backend's categorization
+# scheme isn't guaranteed to always be OWASP-flavored.
 function Build-StopInstruction {
   param([string]$ActionDesc)
   return "A security scan blocked $ActionDesc due to a detected policy violation. Do not retry $ActionDesc or attempt a workaround (e.g. re-encoding it, splitting it up, or otherwise disguising it to bypass detection). Stop this task and relay the findings above to the user in full, exactly as given -- every issue, category, code, and standard name mentioned. Do not summarize or paraphrase them into a general statement; the user needs the precise details to know what to fix."
 }
-
-# codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model.
-# Resolve-PnModel (pn_config.ps1) is the shared precedence chain (env var
-# override > saved preference > hardcoded default) -- see its own
-# comment for the full rationale. The hardcoded default is a cheap/fast
-# tier, chosen because testing showed the block/allow verdict is
-# identical across models and max_tokens values -- the platform's guard
-# fires before the requested model ever runs, so model choice only
-# affects cost/latency on the allow-path reply, not detection accuracy.
-$Model = (Resolve-PnModel).Model
-# The block banner itself is never subject to max_tokens (confirmed via
-# live testing: output_tokens is 0 even for the full banner, since the
-# platform's guard injects it before the requested model runs at all), so
-# this budget only governs the allow-path reply's length. Raised from an
-# earlier 150 (which comfortably covered the banner but wasn't meant to
-# cover anything else, back when that reply was discarded) now that the
-# reply is surfaced to the user as user_message -- 150 would truncate most
-# real answers (a plain "write me hello.py" reply alone ran ~224 output
-# tokens in testing).
-$MaxTokens = 1024
 
 function Write-CheckWriteAuditLog {
   param(
@@ -84,20 +52,12 @@ function Write-CheckWriteAuditLog {
     [string]$Decision,
     [string]$Reason = "",
     [string]$Detail = "",
-    [string]$ScanUrl = "",
-    [string]$MessageId = ""
+    [string]$ThreatLevel = ""
   )
   $entry = [PSCustomObject]@{ tool_name = $ToolName; file_path = $FilePath; command = $Command; decision = $Decision }
-  # -PassThru not used, and piped through Out-Null regardless: Add-Member's
-  # pipeline-input behavior around emitting the modified object isn't
-  # worth relying on either way here -- this must never leak into stdout.
   if ($Reason) { $entry | Add-Member -NotePropertyName "reason" -NotePropertyValue $Reason | Out-Null }
   if ($Detail) { $entry | Add-Member -NotePropertyName "detail" -NotePropertyValue $Detail | Out-Null }
-  if ($ScanUrl) { $entry | Add-Member -NotePropertyName "scan_url" -NotePropertyValue $ScanUrl | Out-Null }
-  # "message_id" (the /v1/messages response's own "id" field) replaces the
-  # old scan_id -- different endpoint, same purpose: a value to correlate
-  # this decision against backend logs.
-  if ($PSBoundParameters.ContainsKey('MessageId')) { $entry | Add-Member -NotePropertyName "message_id" -NotePropertyValue $MessageId | Out-Null }
+  if ($PSBoundParameters.ContainsKey('ThreatLevel')) { $entry | Add-Member -NotePropertyName "threat_level" -NotePropertyValue $ThreatLevel | Out-Null }
   Write-AuditLog -Entry $entry -LogPath $AuditLogPath | Out-Null
 }
 
@@ -111,11 +71,6 @@ try {
   try {
     $parsedPayload = $payload | ConvertFrom-Json -ErrorAction Stop
   } catch {
-    # Deliberately always allow here, unlike the FailureMode-driven
-    # branches below: a malformed payload usually signals a Cursor
-    # integration/encoding quirk, not an unreachable scanner. Routing it
-    # through FailureMode would mean an affected machine gets every
-    # single write blocked persistently.
     Write-JsonPermissionAllow -Message "Received invalid input."
     return
   }
@@ -126,9 +81,6 @@ try {
     return
   }
 
-  # Tool-appropriate wording for user_message/agent_message below -- a
-  # message that says "Write blocked" for a blocked shell command would be
-  # actively misleading about what actually happened.
   $actionNoun = "Write"
   $actionDesc = "this write"
   if ($toolName -eq "Shell") {
@@ -143,10 +95,6 @@ try {
   $fileContent = [string](Get-JsonProperty -InputObject $toolInput -Name "content" -Default "")
   $shellCommand = [string](Get-JsonProperty -InputObject $toolInput -Name "command" -Default "")
 
-  # $subject is what's actually about to happen -- the file content being
-  # written for a Write call, or the command about to run for a Shell call.
-  # Same role $fileContent played before Shell existed, just named for what
-  # it now covers.
   $subject = if ($toolName -eq "Write") { $fileContent } else { $shellCommand }
 
   $turnText = ""
@@ -156,17 +104,6 @@ try {
 
   Write-DebugLog -Message "tool_input | tool_name=$toolName | file_path=$filePath | command_len=$($shellCommand.Length) | content_len=$($fileContent.Length) | turn_text_len=$($turnText.Length) | agent_message_len=$($agentMessage.Length)" -LogPath $DebugLogPath
 
-  # Scan the current turn's conversation together with the write/command
-  # subject -- neither alone is enough. The subject alone can miss malicious
-  # *intent* that doesn't show up in code/commands that look ordinary on
-  # their own (e.g. the user's actual ask was the problem, not the resulting
-  # file or command). A raw transcript tail on its own can drag in stale
-  # context from an earlier, unrelated turn (confirmed directly: a trivial
-  # follow-up write was blocked purely because recent transcript text
-  # mentioned a security topic from a previous, unrelated prompt).
-  # Get-CurrentTurnText above scopes to the most recent user message onward,
-  # so it can't repeat that -- combining it with the actual subject covers
-  # both what was asked for and what's actually about to happen.
   $scanText = ""
   $scanSource = ""
   if ($turnText -and $subject) {
@@ -207,110 +144,79 @@ try {
     return
   }
 
-  $scanUrl = $ScanUrlOverride
-  if (-not $scanUrl) {
-    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/v1/messages"
-  }
+  Write-DebugLog -Message "Scanning write | base_url=$($config.BaseUrl) | scan_text_len=$($scanText.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
   $callStart = Get-Date
-  Write-DebugLog -Message "POST starting -> $scanUrl | model=$Model | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
-  $result = Invoke-MessagesHttpPost -Url $scanUrl -TextData $scanText -Model $Model -MaxTokens $MaxTokens -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds -Text $scanText
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
-  Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode)" -LogPath $DebugLogPath
+  Write-DebugLog -Message "Scan returned after ${elapsedMs}ms | Status=$($scanResult.Status) | Action=$($scanResult.Action)" -LogPath $DebugLogPath
 
-  if ($result.TimedOut) {
-    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
-      -Reason "api_timeout" -Detail "${TimeoutSeconds}s timeout" -ScanUrl $scanUrl
-    if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). ${actionNoun} allowed WITHOUT a security scan."
-    } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). ${actionNoun} blocked." `
-        -AgentMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). Do not retry ${actionDesc}."
+  switch ($scanResult.Status) {
+    "timeout" {
+      Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+        -Reason "api_timeout" -Detail "${TimeoutSeconds}s timeout"
+      if ($FailureMode -eq "open") {
+        Write-JsonPermissionAllow -Message "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). ${actionNoun} allowed WITHOUT a security scan."
+      } else {
+        Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). ${actionNoun} blocked." `
+          -AgentMessage "The scanning service is unavailable (timed out after ${TimeoutSeconds}s). Do not retry ${actionDesc}."
+      }
+      return
     }
-    return
-  }
-  if ($result.ConnectionFailed) {
-    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
-      -Reason "api_unreachable" -Detail "connection failed" -ScanUrl $scanUrl
-    if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service is unavailable (connection failed). ${actionNoun} allowed WITHOUT a security scan."
-    } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (connection failed). ${actionNoun} blocked." `
-        -AgentMessage "The scanning service is unavailable (connection failed). Do not retry ${actionDesc}."
+    "unreachable" {
+      Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+        -Reason "api_unreachable" -Detail "connection failed"
+      if ($FailureMode -eq "open") {
+        Write-JsonPermissionAllow -Message "The scanning service is unavailable (connection failed). ${actionNoun} allowed WITHOUT a security scan."
+      } else {
+        Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable (connection failed). ${actionNoun} blocked." `
+          -AgentMessage "The scanning service is unavailable (connection failed). Do not retry ${actionDesc}."
+      }
+      return
     }
-    return
-  }
-
-  if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
-    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
-      -Reason "api_http_error" -Detail "HTTP $($result.StatusCode)" -ScanUrl $scanUrl
-    if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service returned an error (HTTP $($result.StatusCode)). ${actionNoun} allowed WITHOUT a security scan."
-    } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service returned an error (HTTP $($result.StatusCode)). ${actionNoun} blocked." `
-        -AgentMessage "The scanning service returned an error (HTTP $($result.StatusCode)). Do not retry ${actionDesc}."
+    "http_error" {
+      Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+        -Reason "api_http_error" -Detail "HTTP $($scanResult.HttpStatus)"
+      if ($FailureMode -eq "open") {
+        Write-JsonPermissionAllow -Message "The scanning service returned an error (HTTP $($scanResult.HttpStatus)). ${actionNoun} allowed WITHOUT a security scan."
+      } else {
+        Write-JsonPermissionDeny -UserMessage "The scanning service returned an error (HTTP $($scanResult.HttpStatus)). ${actionNoun} blocked." `
+          -AgentMessage "The scanning service returned an error (HTTP $($scanResult.HttpStatus)). Do not retry ${actionDesc}."
+      }
+      return
     }
-    return
-  }
-
-  $responseObject = $null
-  try {
-    $responseObject = $result.Body | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
-      -Reason "api_invalid_json" -Detail "scanner returned invalid JSON" -ScanUrl $scanUrl
-    if ($FailureMode -eq "open") {
-      Write-JsonPermissionAllow -Message "The scanning service returned an invalid response. ${actionNoun} allowed WITHOUT a security scan."
-    } else {
-      Write-JsonPermissionDeny -UserMessage "The scanning service returned an invalid response. ${actionNoun} blocked." `
-        -AgentMessage "The scanning service returned an invalid response. Do not retry ${actionDesc}."
+    "invalid_json" {
+      Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+        -Reason "api_invalid_json" -Detail "scanner returned invalid JSON"
+      if ($FailureMode -eq "open") {
+        Write-JsonPermissionAllow -Message "The scanning service returned an invalid response. ${actionNoun} allowed WITHOUT a security scan."
+      } else {
+        Write-JsonPermissionDeny -UserMessage "The scanning service returned an invalid response. ${actionNoun} blocked." `
+          -AgentMessage "The scanning service returned an invalid response. Do not retry ${actionDesc}."
+      }
+      return
     }
-    return
   }
 
-  # ConvertFrom-PnMessagesResponse (lib/common.ps1) classifies this
-  # response -- see that function's (and its bash sibling
-  # pn_parse_messages_response's) comment for the full detection-rule
-  # rationale.
-  $parsedVerdict = ConvertFrom-PnMessagesResponse -ResponseBody $result.Body
-  $action = $parsedVerdict.Action
-  $messageId = Get-JsonProperty -InputObject $responseObject -Name "id" -Default ""
+  Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $scanResult.Action -ThreatLevel $scanResult.ThreatLevel
 
-  Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $action -MessageId $messageId
-
-  switch ($action) {
-    "anomaly" {
-      # Zero usage without the block banner -- an unrecognized response
-      # shape, not a confirmed verdict either way. Same posture as an
-      # invalid-JSON or non-2xx response above: don't guess allow or block.
-      Write-DebugLog -Message "API response shape unexpected (zero usage, no block banner) | url=$scanUrl" -LogPath $DebugLogPath
+  switch ($scanResult.Action) {
+    { [string]::IsNullOrEmpty($_) } {
+      # A valid JSON response with no recognized action_to_take -- an
+      # unexpected response shape, not a confirmed verdict either way.
+      Write-DebugLog -Message "Scan response shape unexpected (no recognized action_to_take)" -LogPath $DebugLogPath
       $anomalyStreak = Add-PnScanAnomaly
       $anomalyPrefix = ""
       if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
-        # Built via [char] escapes, not a literal character, so this file
-        # stays pure ASCII -- Windows PowerShell 5.1 doesn't reliably
-        # assume UTF-8 for a .ps1 with no byte-order mark, and a real
-        # multi-byte UTF-8 character here corrupts the parser's token
-        # stream for the rest of the file (confirmed directly elsewhere in
-        # this codebase). See scripts/check-prompt.ps1 for the fuller
-        # comment.
         $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
         $anomalyPrefix = "$warningSign Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
       }
-      # $parsedVerdict.Message is whatever the backend actually returned,
-      # in full (may be empty if there was truly no text content at all).
-      # Shown directly, the same way a real block's reason is shown
-      # directly -- not wrapped in a canned "unexpected response"
-      # sentence, which would bury real content (e.g. a not-yet-
-      # recognized block-banner variant, confirmed to happen in
-      # practice) behind boilerplate. The generic sentence is only a
-      # last resort when there's genuinely nothing to show.
-      if ($parsedVerdict.Message) {
+      if ($scanResult.Message) {
         if ($FailureMode -eq "open") {
-          Write-JsonPermissionAllow -Message "${anomalyPrefix}$($parsedVerdict.Message)"
+          Write-JsonPermissionAllow -Message "${anomalyPrefix}$($scanResult.Message)"
         } else {
-          Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}$($parsedVerdict.Message)" `
-            -AgentMessage "$($parsedVerdict.Message) Do not retry ${actionDesc}."
+          Write-JsonPermissionDeny -UserMessage "${anomalyPrefix}$($scanResult.Message)" `
+            -AgentMessage "$($scanResult.Message) Do not retry ${actionDesc}."
         }
       } else {
         if ($FailureMode -eq "open") {
@@ -323,30 +229,24 @@ try {
     }
     "block" {
       Set-PnLastSuccessfulScan
-      # $parsedVerdict.Message is the block banner's own explanation,
-      # with only the confirmed-fixed scaffolding stripped
-      # (ConvertTo-PnStrippedBlockBanner in lib/common.ps1) -- already a
-      # complete, self-explanatory message in the backend's own words,
-      # whether short or a long structured report, so it's used directly
-      # rather than wrapped in a sentence built around assuming a short
-      # noun-phrase (that assumption is exactly what broke when a second,
-      # longer banner shape showed up).
-      $userMessage = $parsedVerdict.Message
+      $userMessage = $scanResult.Message
+      if (-not $userMessage) { $userMessage = "A policy violation was detected." }
       Write-JsonPermissionDeny -UserMessage $userMessage -AgentMessage "$userMessage $(Build-StopInstruction $actionDesc)"
     }
-    default {
-      # "allow" is the only other action ConvertFrom-PnMessagesResponse
-      # produces -- there is no "warn" state on this endpoint (see that
-      # function's comment). The backend is also a coding assistant, not
-      # just a scanner, so its reply ($parsedVerdict.Message, full text on
-      # this path) is surfaced as user_message rather than discarded --
-      # may be empty if there was no text content to show. Cursor's own
-      # hooks docs describe user_message as shown "when denied"; whether
-      # it's actually rendered on an allow too is unconfirmed and being
-      # tested live rather than assumed either way.
+    "warn" {
+      # Non-blocking: surface the scan's own explanation and let it proceed.
       Set-PnLastSuccessfulScan
-      if ($parsedVerdict.Message) {
-        Write-JsonPermissionAllow -Message $parsedVerdict.Message
+      if ($scanResult.Message) {
+        Write-JsonPermissionAllow -Message $scanResult.Message
+      } else {
+        Write-JsonPermissionAllow
+      }
+    }
+    default {
+      # "allow"
+      Set-PnLastSuccessfulScan
+      if ($scanResult.Message) {
+        Write-JsonPermissionAllow -Message $scanResult.Message
       } else {
         Write-JsonPermissionAllow
       }
@@ -354,13 +254,7 @@ try {
   }
 } catch {
   # Anything unexpected -- match the FailureMode posture for an
-  # unreachable scanner rather than crash without a response. Deliberately
-  # tool-agnostic wording ("Allowed"/"Blocked", not "Write"/"Command"): an
-  # exception this early can happen before $actionNoun/$actionDesc are set
-  # (e.g. Get-StdinText itself throwing), and Set-StrictMode would turn a
-  # reference to either undefined variable into a second, uncaught
-  # exception here -- crashing with no JSON response at all instead of
-  # failing open/closed as intended.
+  # unreachable scanner rather than crash without a response.
   Write-DebugLog -Message "UNEXPECTED ERROR | $($_.Exception.GetType().FullName): $($_.Exception.Message)" -LogPath $DebugLogPath
   if ($FailureMode -eq "open") {
     Write-JsonPermissionAllow -Message "The scanning service is unavailable. Allowed WITHOUT a security scan."

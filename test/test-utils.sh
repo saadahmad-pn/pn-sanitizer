@@ -291,6 +291,7 @@ source_scripts() {
   source "$SCRIPTS_DIR/lib/git-utils.sh"
   source "$SCRIPTS_DIR/lib/detection-client.sh"
   source "$SCRIPTS_DIR/lib/codechain-client.sh"
+  source "$SCRIPTS_DIR/lib/scan-client.sh"
   source "$SCRIPTS_DIR/pn_config.sh"
 }
 

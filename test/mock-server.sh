@@ -7,19 +7,16 @@
 # The detections_* modes return the POST /api/v1/detections/evaluate shape
 # (design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md, section
 # 0.5.3 -- Decision/Message/FileAnalyses/LatencyMs/AuditId) for testing
-# check-git-event.sh / lib/detection-client.sh against this endpoint,
-# distinct from the /v1/messages-shaped modes below used by
-# check-write.sh/check-prompt.sh.
+# check-git-event.sh / lib/detection-client.sh against this endpoint.
 #
-# Response bodies for the non-detections modes match the /v1/messages
-# (Anthropic-compatible) shape, not the old codedefense/scan shape -- see
-# pn_parse_messages_response in lib/common.sh for what each mode is meant
-# to exercise. "warn" is retired for that endpoint: it has no equivalent
-# signal there (see that function's comment) -- "warn" only applies to the
-# detections_* modes above, which are a different endpoint with a real
-# warn verdict. "anomaly" is /v1/messages-specific too: zero usage without
-# the block banner, the case that must
-# NOT be silently guessed as either allow or block.
+# The non-detections modes (allow/block/anomaly/timeout/error500/error401)
+# return the /v1/messages (Anthropic-compatible) response shape -- LEGACY:
+# check-write.sh/check-prompt.sh no longer call /v1/messages at all (they
+# now call POST /api/v1/codedefense/scan, see lib/scan-client.sh), and no
+# current test invokes start_mock_server with these modes. Left in place as
+# unused scaffolding rather than removed outright; update or delete them if
+# CDS-shaped mock coverage for check-write.sh/check-prompt.sh is added
+# later.
 
 PORT=""
 MODE="allow"

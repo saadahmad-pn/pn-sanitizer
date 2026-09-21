@@ -4,6 +4,66 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-21 — Move prompt/write scanning off /v1/messages onto POST /api/v1/codedefense/scan
+
+`check-prompt.sh`/`check-write.sh` (+ `.ps1` twins) no longer call
+`/v1/messages` at all. That route required invoking a real, billed model
+completion just to get a scan verdict — every scanned prompt was answered
+twice (once for real by Cursor, once more by the Paradigm-configured model
+purely to produce something to classify), and the reverse-engineered
+verdict heuristic (`pn_parse_messages_response`, "zero usage + a
+`REQUEST BLOCKED` banner") was an admitted stopgap with no real structured
+field behind it. They now call the existing `POST /api/v1/codedefense/scan`
+(via new `lib/scan-client.sh`/`.ps1`) — no model invocation, and a real
+`action_to_take: allow|warn|block` field instead of a heuristic.
+
+**Interim step, not the final design**: this calls Code Defense Service
+only. The full `/v1/messages` pipeline also ran PromptGuard (jailbreak) and
+PolicyEngine (DLP/PII) — those are *not* replicated by this change yet.
+A composite backend endpoint that triggers PromptGuard + PolicyEngine + CDS
+together, based on the org's policy configuration, is the planned follow-up
+(PN-11847) — deliberately scoped to reuse the one endpoint that already
+exists today rather than the plugin calling three separate policy
+endpoints itself.
+
+What changed:
+- New `lib/scan-client.sh`/`.ps1` (`pn_scan_text`/`Invoke-PnScanText`):
+  posts `text` as multipart form data, returns a real `Status`/`Action`
+  pair instead of a parsed heuristic.
+- `check-prompt.sh`/`check-write.sh` (+ `.ps1`) rewritten to call it.
+  FAILURE_MODE/PROMPT_FAILURE_MODE semantics, audit logging, the
+  anomaly-streak staleness tracking, and all user-facing message branding
+  are unchanged — only the transport and verdict source changed. Dropped
+  the `/v1/messages`-specific HTTP-403 "complete your setup" special case
+  (tied to that route's own error behavior, not confirmed to apply to the
+  new endpoint) and the `MODEL`/`MAX_TOKENS` request parameters (CDS
+  resolves the org's configured scanning model server-side; the caller
+  doesn't choose one).
+- Removed the now-fully-dead `pn_parse_messages_response`/
+  `pn_strip_block_banner` (`lib/common.sh`) and their PowerShell mirrors
+  (`ConvertFrom-PnMessagesResponse`/`ConvertTo-PnStrippedBlockBanner`,
+  `Invoke-MessagesHttpPost`), plus their ~14 dedicated unit tests — these
+  had no other callers once check-prompt/check-write stopped using them.
+- `PARADIGM_NETWORKS_SCAN_URL_OVERRIDE` is gone — there was no equivalent
+  override wired for the new endpoint; nothing else referenced it.
+
+**Discovered, not fixed by this change**: `pn_resolve_model`/
+`Resolve-PnModel` and the two skills built on it
+(`paradigmnetworks-models`/`set-model`) are now orphaned — nothing consumes
+the saved "preferred model" for scanning anymore, since CDS takes no model
+parameter from the caller. Left in place pending a decision on whether to
+remove them.
+
+Verified: `bash test/run-all-tests.sh` — 197/198 passing (the one failure,
+`check-repo-context.sh`'s sanitized-GIT-tag assertion, reproduces
+identically on a version of this branch without this change — confirmed
+unrelated). New `test/test-scan-client.sh` (14 tests) covers `pn_scan_text`
+directly (allow/warn/block/anomaly/timeout/unreachable/http-error/
+invalid-json, and URL construction). `shellcheck -S warning -x scripts/*.sh
+scripts/lib/*.sh` reports only the same pre-existing SC2034 pattern already
+established for this codebase's global-return convention — the new
+`PN_SCAN_*` globals follow it, not a new problem.
+
 ## 2026-09-21 — Record Code Chain sessions/turns/commits from Cursor Hooks (PN-11880)
 
 Adds a second, independent concern alongside the existing gating pipeline

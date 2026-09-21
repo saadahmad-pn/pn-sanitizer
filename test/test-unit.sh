@@ -52,114 +52,6 @@ result=$(json_session_context "Configure Paradigm Networks")
 assert_json_valid "$result" "Valid JSON"
 assert_json_has_key "$result" "additional_context" "Has additional_context key"
 
-# Test pn_parse_messages_response (the /v1/messages response-classification
-# heuristic -- see the function's own comment in lib/common.sh for why each
-# of these cases lands where it does)
-test_case "pn_parse_messages_response: normal reply, nonzero usage -> allow"
-pn_parse_messages_response '{"content":[{"type":"text","text":"Hello there!"}],"usage":{"input_tokens":50,"output_tokens":10}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "allow" "action is allow"
-
-test_case "pn_parse_messages_response: banner + zero usage -> block, reason extracted"
-pn_parse_messages_response '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: destructive operation.\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "  The submitted content was flagged because it triggered the following security concerns: destructive operation." "reason extracted cleanly (banner scaffolding stripped, backend's own sentence kept as-is)"
-
-# Regression coverage for the real-world bug this replaced a brittle
-# regex with: the backend has at least two banner shapes -- a short
-# phrase-in-a-sentence (above) and a long, multi-finding structured
-# report (below, an actual example pulled from real hook logs, trimmed
-# to two findings). The old "security concerns: X" regex only matched
-# the first shape and silently dumped the entire raw banner -- dividers,
-# code fences, and all -- into the user-facing message for the second.
-# pn_strip_block_banner strips only the confirmed-fixed scaffolding
-# (the ==== dividers, the REQUEST BLOCKED line, the code fence) and
-# keeps everything else, so it has to handle both shapes correctly.
-test_case "pn_parse_messages_response: long structured-report banner -> block, full report kept (not the old regex's silent full-dump-with-double-wrap)"
-long_banner='```
-========================================================================
-  REQUEST BLOCKED
-========================================================================
-
-  The submitted content was flagged because it contains OWASP Top 10 and OWASP ASVS compliance violations.
-
-  OWASP Top 10 Findings (1 issue)
-  ----------------------------------------------------------------------
-
-  [1] [HIGH] Debug Mode Enabled in Production
-      Category : A02:2025 - Security Misconfiguration
-      Snippet  : debug=True
-
-========================================================================
-```'
-long_banner_json=$("$JQ_BIN" -n --arg text "$long_banner" '{content:[{type:"text",text:$text}],usage:{input_tokens:0,output_tokens:0}}')
-pn_parse_messages_response "$long_banner_json"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block"
-assert_output_contains "echo \"\$PN_MSG_MESSAGE\"" "OWASP Top 10 and OWASP ASVS compliance violations" "kept the backend's own explanation"
-assert_output_contains "echo \"\$PN_MSG_MESSAGE\"" "Debug Mode Enabled in Production" "kept the structured finding detail"
-result="$PN_MSG_MESSAGE"
-if [[ "$result" == *"===="* ]] || [[ "$result" == *'```'* ]] || [[ "$result" == *"REQUEST BLOCKED"* ]]; then
-  echo -e "  \033[0;31m✗\033[0m Banner scaffolding (dividers/fence/REQUEST BLOCKED) was stripped, not leaked into the message"
-  echo "    Got: $result"
-  TESTS_FAILED=$((TESTS_FAILED + 1))
-else
-  echo -e "  \033[0;32m✓\033[0m Banner scaffolding (dividers/fence/REQUEST BLOCKED) was stripped, not leaked into the message"
-  TESTS_PASSED=$((TESTS_PASSED + 1))
-fi
-TESTS_RUN=$((TESTS_RUN + 1))
-
-test_case "pn_parse_messages_response: zero usage, no banner -> anomaly (not guessed either way)"
-pn_parse_messages_response '{"content":[{"type":"text","text":"just a normal-looking short reply"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "just a normal-looking short reply" "PN_MSG_MESSAGE carries a raw preview instead of staying empty"
-
-test_case "pn_parse_messages_response: anomaly text is shown raw, not collapsed/reformatted"
-pn_parse_messages_response '{"content":[{"type":"text","text":"line one\nline two\t\tpadded"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "line one
-line two		padded" "PN_MSG_MESSAGE is the raw text verbatim -- newlines/tabs are not collapsed"
-
-test_case "pn_parse_messages_response: anomaly text is never truncated, however long"
-long_text=$(printf 'a%.0s' {1..250})
-pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_text}\"}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$long_text" "full 250-char text is kept, not clipped to 200 + ellipsis"
-
-test_case "pn_parse_messages_response: a second, unrecognized block-banner variant (zero usage, no REQUEST BLOCKED) is still shown in full as an anomaly"
-# Regression test: the backend has a real, confirmed second guard banner
-# ("RESPONSE BLOCKED", a post-generation check on the model's own
-# generated code) that this heuristic doesn't recognize as a block, only
-# as an anomaly -- but the full findings must still reach the user/agent,
-# not get swallowed behind a generic "unexpected response" sentence.
-response_blocked_text='```
-========================================================================
-  RESPONSE BLOCKED
-========================================================================
-
-  The generated code was blocked because post-generation security analysis identified OWASP compliance violations.
-```'
-pn_parse_messages_response "$("$JQ_BIN" -n --arg text "$response_blocked_text" '{content:[{type:"text",text:$text}],usage:{input_tokens:0,output_tokens:0}}')"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly (banner variant not recognized as a block)"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$response_blocked_text" "the full RESPONSE BLOCKED banner and findings are preserved, not clipped or discarded"
-
-test_case "pn_parse_messages_response: empty content array -> anomaly"
-pn_parse_messages_response '{"content":[],"usage":{"input_tokens":10,"output_tokens":5}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-
-test_case "pn_parse_messages_response: real allow (non-zero usage) surfaces the full reply, not truncated"
-long_reply=$(printf 'word %.0s' {1..80})
-pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_reply}\"}],\"usage\":{\"input_tokens\":117,\"output_tokens\":224}}"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "allow" "action is allow"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$long_reply" "PN_MSG_MESSAGE carries the full reply text"
-
-test_case "pn_parse_messages_response: leading thinking block -> still finds block signal in the text block after it"
-pn_parse_messages_response '{"content":[{"type":"thinking","thinking":"reasoning..."},{"type":"text","text":"```\n===\n  REQUEST BLOCKED\n===\n\n  The submitted content was flagged because it triggered the following security concerns: prompt injection.\n\n===\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block (not derailed by the leading thinking block)"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "  The submitted content was flagged because it triggered the following security concerns: prompt injection." "reason extracted from the correct block (also confirms a 3-char '===' divider strips the same as a 72-char one)"
-
-test_case "pn_parse_messages_response: usage entirely missing -> anomaly"
-pn_parse_messages_response '{"content":[{"type":"text","text":"some reply"}]}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-
 # Test command checking
 test_case "command_exists with available command"
 assert_success "command_exists bash" "bash command exists"
@@ -194,13 +86,13 @@ result=$(cat "$audit_file")
 assert_json_valid "$result" "Valid JSON line"
 assert_json_has_key "$result" "timestamp" "Has timestamp"
 
-# Regression coverage for P2-1: pn_parse_messages_response's block/allow
-# verdict is a reverse-engineered heuristic with no real structured field
-# from the backend -- if an upstream change ever turns every scan into
-# "anomaly", that's a silent, complete loss of enforcement under the
-# prompt hook's fail-open default. These functions track consecutive
-# anomalies so callers can escalate to a visible warning past a
-# threshold instead of staying silent indefinitely.
+# Regression coverage for P2-1: pn_scan_text (lib/scan-client.sh) treats a
+# valid-JSON response with no recognized action_to_take as an anomaly rather
+# than guessing allow/block -- rarer now than under the old /v1/messages
+# heuristic (a real structured field, not reverse-engineered), but still
+# possible on an API contract change. These functions track consecutive
+# anomalies so callers can escalate to a visible warning past a threshold
+# instead of staying silent indefinitely.
 test_case "pn_record_scan_anomaly counts consecutive calls and persists across them"
 rm -f "$PN_ANOMALY_STATE_PATH"
 assert_output_equals "pn_record_scan_anomaly" "1" "First call returns 1"
