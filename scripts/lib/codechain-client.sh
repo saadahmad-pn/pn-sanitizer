@@ -73,6 +73,7 @@ pn_get_codechain_session_id() {
   cached=$(_codechain_cache_read "$client_session_id")
   if [[ -n "$cached" ]]; then
     PN_CODECHAIN_SESSION_ID="$cached"
+    log_debug "codechain: reusing cached session id (client=$client_session_id session=$cached)" "$CODECHAIN_DEBUG_LOG_PATH"
     return 0
   fi
 
@@ -104,6 +105,7 @@ pn_get_codechain_session_id() {
 
   _codechain_cache_write "$client_session_id" "$session_id"
   PN_CODECHAIN_SESSION_ID="$session_id"
+  log_debug "codechain: registered new session (client=$client_session_id session=$session_id)" "$CODECHAIN_DEBUG_LOG_PATH"
   return 0
 }
 
@@ -131,6 +133,8 @@ pn_record_codechain_turn() {
   http_post_split_status "$raw"
   if [[ "$HTTP_POST_STATUS" != "204" ]]; then
     log_debug "codechain: turn recording failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$CODECHAIN_DEBUG_LOG_PATH"
+  else
+    log_debug "codechain: turn recorded successfully (session=$session_id, prompt_len=${#prompt}, response_len=${#response})" "$CODECHAIN_DEBUG_LOG_PATH"
   fi
 }
 
@@ -154,6 +158,8 @@ pn_record_codechain_shell_event() {
   http_post_split_status "$raw"
   if [[ "$HTTP_POST_STATUS" != "204" ]]; then
     log_debug "codechain: shell-event recording failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$CODECHAIN_DEBUG_LOG_PATH"
+  else
+    log_debug "codechain: shell-event recorded successfully (session=$session_id, command=${command_text:0:80})" "$CODECHAIN_DEBUG_LOG_PATH"
   fi
 }
 
@@ -177,6 +183,8 @@ pn_close_codechain_session() {
   http_post_split_status "$raw"
   if [[ "$HTTP_POST_STATUS" != "204" ]]; then
     log_debug "codechain: session close failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$CODECHAIN_DEBUG_LOG_PATH"
+  else
+    log_debug "codechain: session closed successfully (session=$session_id)" "$CODECHAIN_DEBUG_LOG_PATH"
   fi
 
   rm -f "$(_codechain_cache_path "$client_session_id")" 2>/dev/null

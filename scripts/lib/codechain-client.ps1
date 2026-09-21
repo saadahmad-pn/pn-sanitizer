@@ -69,6 +69,7 @@ function Get-CodechainSessionId {
   $cached = Get-CodechainCachedSessionId -ClientSessionId $ClientSessionId
   if ($cached) {
     $Script:PnCodechainSessionId = $cached
+    Write-DebugLog -Message "codechain: reusing cached session id (client=$ClientSessionId session=$cached)" -LogPath $Script:CodechainDebugLogPath
     return
   }
   if (-not $BaseUrl) { return }
@@ -99,6 +100,7 @@ function Get-CodechainSessionId {
 
   Set-CodechainCachedSessionId -ClientSessionId $ClientSessionId -SessionId $sessionId
   $Script:PnCodechainSessionId = $sessionId
+  Write-DebugLog -Message "codechain: registered new session (client=$ClientSessionId session=$sessionId)" -LogPath $Script:CodechainDebugLogPath
 }
 
 function Send-CodechainTurn {
@@ -119,6 +121,8 @@ function Send-CodechainTurn {
   $result = Invoke-HttpPostRaw -Url $url -BodyBytes $bodyBytes -ContentType "application/json" -AuthToken $AccessToken -TimeoutSec $TimeoutSec
   if ($result.StatusCode -ne 204) {
     Write-DebugLog -Message "codechain: turn recording failed (status=$($result.StatusCode)) session=$SessionId" -LogPath $Script:CodechainDebugLogPath
+  } else {
+    Write-DebugLog -Message "codechain: turn recorded successfully (session=$SessionId, prompt_len=$($Prompt.Length), response_len=$($Response.Length))" -LogPath $Script:CodechainDebugLogPath
   }
 }
 
@@ -141,6 +145,9 @@ function Send-CodechainShellEvent {
   $result = Invoke-HttpPostRaw -Url $url -BodyBytes $bodyBytes -ContentType "application/json" -AuthToken $AccessToken -TimeoutSec $TimeoutSec
   if ($result.StatusCode -ne 204) {
     Write-DebugLog -Message "codechain: shell-event recording failed (status=$($result.StatusCode)) session=$SessionId" -LogPath $Script:CodechainDebugLogPath
+  } else {
+    $commandPreview = if ($CommandText.Length -gt 80) { $CommandText.Substring(0, 80) } else { $CommandText }
+    Write-DebugLog -Message "codechain: shell-event recorded successfully (session=$SessionId, command=$commandPreview)" -LogPath $Script:CodechainDebugLogPath
   }
 }
 
@@ -164,6 +171,8 @@ function Close-CodechainSession {
   $result = Invoke-HttpPostRaw -Url $url -BodyBytes $bodyBytes -ContentType "application/json" -AuthToken $AccessToken -TimeoutSec $TimeoutSec
   if ($result.StatusCode -ne 204) {
     Write-DebugLog -Message "codechain: session close failed (status=$($result.StatusCode)) session=$sessionId" -LogPath $Script:CodechainDebugLogPath
+  } else {
+    Write-DebugLog -Message "codechain: session closed successfully (session=$sessionId)" -LogPath $Script:CodechainDebugLogPath
   }
 
   $path = Get-CodechainCachePath -ClientSessionId $ClientSessionId
