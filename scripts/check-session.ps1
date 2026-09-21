@@ -12,9 +12,53 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
+. (Join-Path $ScriptDir "lib\git-utils.ps1")
+. (Join-Path $ScriptDir "lib\codechain-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-Get-StdinText | Out-Null
+$CodechainTimeoutSec = if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) { [int]$env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT } else { 5 }
+
+$stdinText = Get-StdinText
+
+# Best-effort Code Chain session registration, run as a background job so it
+# never delays the login-check message below -- see
+# design-ideas/Codechain_Plugin_Hooks_Design.md and check-session.sh's
+# identical rationale. If this fails or never completes before the process
+# exits, later hooks (check-git-event-record, check-turn-complete) simply
+# re-attempt idempotent registration themselves.
+try {
+  if ($stdinText) {
+    $sessionPayload = $stdinText | ConvertFrom-Json -ErrorAction Stop
+    $clientSessionId = Get-JsonProperty -InputObject $sessionPayload -Name "conversation_id" -Default ""
+    if (-not $clientSessionId) {
+      $clientSessionId = Get-JsonProperty -InputObject $sessionPayload -Name "session_id" -Default ""
+    }
+    $cwd = Get-JsonProperty -InputObject $sessionPayload -Name "cwd" -Default ""
+    if (-not $cwd) {
+      $roots = @(Get-JsonProperty -InputObject $sessionPayload -Name "workspace_roots" -Default @())
+      if ($roots.Count -gt 0) { $cwd = $roots[0] }
+    }
+
+    if ($clientSessionId -and (Test-PnConfigured)) {
+      $config = Resolve-PnConfig
+      $gitRepoUrl = ""
+      $gitBranch = ""
+      if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+        $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
+        $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
+      }
+      Start-Job -ScriptBlock {
+        param($ScriptDir, $BaseUrl, $AccessToken, $Timeout, $ClientSessionId, $Cwd, $GitRepoUrl, $GitBranch)
+        . (Join-Path $ScriptDir "lib\common.ps1")
+        . (Join-Path $ScriptDir "lib\codechain-client.ps1")
+        Get-CodechainSessionId -BaseUrl $BaseUrl -AccessToken $AccessToken -TimeoutSec $Timeout `
+          -ClientSessionId $ClientSessionId -Cwd $Cwd -GitRepoUrl $GitRepoUrl -GitBranch $GitBranch -Platform "cursor-hooks"
+      } -ArgumentList $ScriptDir, $config.BaseUrl, $config.AccessToken, $CodechainTimeoutSec, $clientSessionId, $cwd, $gitRepoUrl, $gitBranch | Out-Null
+    }
+  }
+} catch {
+  # Never let this delay or fail the login-check logic below.
+}
 
 try {
   if (Test-PnConfigured) {

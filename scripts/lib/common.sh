@@ -645,3 +645,40 @@ get_current_turn_text() {
       | join("\n\n")
     ' 2>/dev/null
 }
+
+# Same scoping as get_current_turn_text (last user message to end of file),
+# but role-separated into PN_TURN_PROMPT/PN_TURN_RESPONSE instead of one
+# blended blob -- for Code Chain's turn-recording payload (lib/codechain-
+# client.sh), which has distinct Prompt/Response fields. Must be called as a
+# plain statement (see the multi-value-return convention above), never
+# $(...). Both globals are reset to "" up front so a missing/unreadable
+# transcript leaves neither stale from a previous call in the same process.
+get_current_turn_messages() {
+  local transcript_path="$1"
+  local max_lines="${2:-500}"
+
+  PN_TURN_PROMPT=""
+  PN_TURN_RESPONSE=""
+
+  if [[ ! -f "$transcript_path" ]]; then
+    return 0
+  fi
+
+  local combined
+  combined=$(tail -n "$max_lines" "$transcript_path" 2>/dev/null \
+    | "$JQ_BIN" -R -r 'fromjson? | @json' 2>/dev/null \
+    | "$JQ_BIN" -s -r '
+      . as $lines
+      | ([range(0; ($lines | length)) | select($lines[.].role == "user")] | last) as $start
+      | $lines[($start // 0):]
+      | {
+          prompt: ([.[] | select(.role == "user") | (.message.content // [])[]? | select(.type == "text") | .text] | join("\n\n")),
+          response: ([.[] | select(.role == "assistant") | (.message.content // [])[]? | select(.type == "text") | .text] | join("\n\n"))
+        }
+      | @json
+    ' 2>/dev/null)
+
+  [[ -z "$combined" ]] && return 0
+  PN_TURN_PROMPT=$(echo "$combined" | "$JQ_BIN" -r '.prompt // ""' 2>/dev/null)
+  PN_TURN_RESPONSE=$(echo "$combined" | "$JQ_BIN" -r '.response // ""' 2>/dev/null)
+}

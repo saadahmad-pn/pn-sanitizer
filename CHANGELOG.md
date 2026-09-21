@@ -4,6 +4,76 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-21 — Record Code Chain sessions/turns/commits from Cursor Hooks (PN-11880)
+
+Adds a second, independent concern alongside the existing gating pipeline
+(`/api/v1/detections/evaluate`): recording plugin-mode activity into Code
+Chain, control-server's session/commit/PR traceability system. Until now,
+plugin-mode Cursor sessions produced zero Code Chain visibility — confirmed
+directly during this design work: `lib/detection-client.sh` always sends an
+empty `SessionId`, and control-server's `committranscripts.ProcessPersistedRequest`
+bails on an empty `SessionId` before any detection runs, regardless of scan
+outcome. See `design-ideas/Codechain_Plugin_Hooks_Design.md` for the full
+design and control-server's matching `PN-11880` branch.
+
+Four new hook wirings in `hooks/hooks.json`, each calling a new shared
+client, `lib/codechain-client.sh`/`.ps1`:
+
+- `sessionStart` (extended `check-session.sh`/`.ps1`): best-effort registers
+  a Code Chain session against control-server's new
+  `POST /api/v1/plugin/codechain/sessions`, keyed on Cursor's own
+  `conversation_id`. Backgrounded (a PowerShell `Start-Job`, a bash `&`) so
+  it never delays the existing login-check message, this hook's real job.
+- `sessionEnd` (new `check-session-end.sh`/`.ps1`, a hook event this plugin
+  did not previously use at all): finalizes the session via
+  `POST .../sessions/{id}/close`.
+- `afterShellExecution` (new `check-git-event-record.sh`/`.ps1`, three new
+  matchers mirroring the existing `beforeShellExecution` ones): records the
+  git push/commit/`gh pr create` command's OUTPUT once it has actually run.
+  Deliberately NOT added to `check-git-event.sh` itself — that hook fires
+  BEFORE execution and only ever sees the command text, never the commit
+  SHA/push confirmation/PR URL control-server's detection regex needs, so
+  recording needed its own `afterShellExecution` hook rather than piggy-
+  backing on the existing gate.
+- `stop` (new `check-turn-complete.sh`/`.ps1`, another previously-unused
+  hook event): records the completed turn (prompt + response) via
+  `POST .../sessions/{id}/turns`. Reads Cursor's own `transcript.jsonl`
+  through a new role-separating extractor, `get_current_turn_messages`/
+  `Get-CurrentTurnMessages` (`lib/common.sh`/`.ps1`) — a sibling to the
+  existing `get_current_turn_text`, which blends prompt and response into
+  one string; Code Chain's turn payload needs them kept separate.
+
+Session identity is cached locally per `conversation_id`
+(`~/.paradigm-scanner/codechain-sessions/`, atomic writes) so only the
+first hook of a session pays the registration round-trip — every later
+hook call for the same conversation reads the cached, server-minted
+`SessionId`. Registration is itself idempotent server-side, so a cache miss
+racing a concurrent hook call is harmless.
+
+Every function in `lib/codechain-client.sh`/`.ps1` is unconditionally
+best-effort: a registration/recording failure is logged
+(`~/.paradigm-scanner/codechain-client.log`) and swallowed, never surfaced
+in a hook's returned JSON or exit code — this is a genuinely different
+contract from the existing gating hooks (`check-prompt.sh`, `check-write.sh`,
+`check-git-event.sh`), which must return a real allow/deny verdict. Recording
+and gating are deliberately kept as separate calls from
+`check-git-event-record.sh`/`check-git-event.sh` rather than merged into one,
+so a recording failure can never affect a gating decision and vice versa.
+
+Verified: `bash test/run-all-tests.sh` — 183/184 passing (the one failure,
+`check-repo-context.sh`'s sanitized-GIT-tag assertion, reproduces identically
+on the unmodified baseline via `git stash`, confirmed unrelated to this
+change). `shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` reports the
+same pre-existing SC2034 warning pattern already present on the baseline for
+this codebase's established global-return convention (`PN_MSG_ACTION`,
+`HTTP_POST_BODY`, etc.) — the three new globals this change adds
+(`PN_CODECHAIN_SESSION_ID`, `PN_TURN_PROMPT`, `PN_TURN_RESPONSE`) follow the
+same, already-tolerated pattern, not a new regression. PowerShell side
+written to mirror the bash implementation function-for-function but not yet
+run under a live Windows target or Pester — flagged as a follow-up
+verification step, consistent with this repo's existing, thinner Pester
+coverage (see `CLAUDE.md`).
+
 ## 2026-09-17 — Added git push/commit/PR-create governance via a new `beforeShellExecution` hook
 
 Adds `scripts/check-git-event.sh`/`.ps1`, wired into three new

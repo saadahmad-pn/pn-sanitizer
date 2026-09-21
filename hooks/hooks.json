@@ -9,6 +9,22 @@
         "timeout": 10
       }
     ],
+    "sessionEnd": [
+      {
+        "command": "scripts/run-hook.cmd check-session-end",
+        "matcher": "",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "scripts/run-hook.cmd check-turn-complete",
+        "matcher": "",
+        "failClosed": false,
+        "timeout": 15
+      }
+    ],
     "beforeSubmitPrompt": [
       {
         "command": "scripts/run-hook.cmd check-prompt",
@@ -65,6 +81,26 @@
         "command": "scripts/run-hook.cmd check-git-event git.pr_create",
         "timeout": 240,
         "failClosed": true
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "matcher": "^\\s*git\\s+push\\b",
+        "command": "scripts/run-hook.cmd check-git-event-record",
+        "timeout": 15,
+        "failClosed": false
+      },
+      {
+        "matcher": "^\\s*git\\s+commit\\b",
+        "command": "scripts/run-hook.cmd check-git-event-record",
+        "timeout": 15,
+        "failClosed": false
+      },
+      {
+        "matcher": "^\\s*gh\\s+pr\\s+create\\b",
+        "command": "scripts/run-hook.cmd check-git-event-record",
+        "timeout": 15,
+        "failClosed": false
       }
     ]
   }

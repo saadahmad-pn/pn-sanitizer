@@ -700,6 +700,73 @@ function Get-CurrentTurnText {
   return ($textParts -join "`n`n")
 }
 
+# Same scoping as Get-CurrentTurnText (last user message to end of file),
+# but role-separated into $Script:PnTurnPrompt/$Script:PnTurnResponse
+# instead of one blended string -- for Code Chain's turn-recording payload
+# (lib/codechain-client.ps1), which has distinct Prompt/Response fields.
+# Both globals are reset to "" up front so a missing/unreadable transcript
+# leaves neither stale from a previous call in the same process.
+function Get-CurrentTurnMessages {
+  param(
+    [Parameter(Mandatory = $true)][string]$TranscriptPath,
+    [int]$MaxLines = 500
+  )
+
+  $Script:PnTurnPrompt = ""
+  $Script:PnTurnResponse = ""
+
+  if (-not (Test-Path $TranscriptPath -PathType Leaf)) {
+    return
+  }
+
+  try {
+    $lines = @(Get-Content -Path $TranscriptPath -Tail $MaxLines -ErrorAction Stop)
+  } catch {
+    return
+  }
+
+  $parsed = New-Object System.Collections.Generic.List[object]
+  foreach ($line in $lines) {
+    if (-not $line) { continue }
+    try {
+      $parsed.Add(($line | ConvertFrom-Json -ErrorAction Stop))
+    } catch {
+      # Skip a malformed/partial line -- see Get-CurrentTurnText's identical comment.
+    }
+  }
+  if ($parsed.Count -eq 0) {
+    return
+  }
+
+  $startIndex = 0
+  for ($i = $parsed.Count - 1; $i -ge 0; $i--) {
+    $role = Get-JsonProperty -InputObject $parsed[$i] -Name "role" -Default ""
+    if ($role -eq "user") {
+      $startIndex = $i
+      break
+    }
+  }
+
+  $promptParts = New-Object System.Collections.Generic.List[string]
+  $responseParts = New-Object System.Collections.Generic.List[string]
+  for ($i = $startIndex; $i -lt $parsed.Count; $i++) {
+    $role = Get-JsonProperty -InputObject $parsed[$i] -Name "role" -Default ""
+    $message = Get-JsonProperty -InputObject $parsed[$i] -Name "message" -Default $null
+    if ($null -eq $message) { continue }
+    $content = @(Get-JsonProperty -InputObject $message -Name "content" -Default @())
+    foreach ($block in $content) {
+      $blockType = Get-JsonProperty -InputObject $block -Name "type" -Default ""
+      if ($blockType -ne "text") { continue }
+      $text = Get-JsonProperty -InputObject $block -Name "text" -Default ""
+      if (-not $text) { continue }
+      if ($role -eq "user") { $promptParts.Add($text) }
+      elseif ($role -eq "assistant") { $responseParts.Add($text) }
+    }
+  }
+  $Script:PnTurnPrompt = ($promptParts -join "`n`n")
+  $Script:PnTurnResponse = ($responseParts -join "`n`n")
+}
+
 # --- Hook response helpers (for beforeSubmitPrompt / preToolUse) ---
 
 function Write-JsonAllow {

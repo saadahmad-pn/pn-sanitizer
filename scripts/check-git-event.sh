@@ -1,6 +1,14 @@
 #!/bin/bash
 # beforeShellExecution hook: evaluate a detected git command (push, commit,
 # or PR creation) against the generic detections API before letting it run.
+#
+# Does NOT also record to Code Chain here, deliberately: beforeShellExecution
+# fires BEFORE the command runs, so only the command text is available --
+# there is no commit SHA / push confirmation / PR URL yet (those only appear
+# in the command's OUTPUT, which control-server's git/PR detection regex
+# needs). Recording happens from check-git-event-record.sh, a SEPARATE
+# afterShellExecution hook on the same matchers, which sees both command and
+# output. See design-ideas/Codechain_Plugin_Hooks_Design.md.
 # One script, parameterized by EventType ($1), rather than one clone per
 # git operation -- push/commit/pr_create are three instances of the same
 # generic contract (design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md,
