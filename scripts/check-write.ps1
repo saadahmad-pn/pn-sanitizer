@@ -8,6 +8,7 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
+. (Join-Path $ScriptDir "lib\git-utils.ps1")
 . (Join-Path $ScriptDir "lib\scan-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
@@ -97,6 +98,25 @@ try {
 
   $subject = if ($toolName -eq "Write") { $fileContent } else { $shellCommand }
 
+  # Session id + cwd/git context for the scan call's chatapi join -- see
+  # lib/scan-client.ps1's header. Same extraction pattern as every other
+  # hook here.
+  $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "conversation_id" -Default "")
+  if (-not $clientSessionId) {
+    $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "session_id" -Default "")
+  }
+  $cwd = [string](Get-JsonProperty -InputObject $parsedPayload -Name "cwd" -Default "")
+  if (-not $cwd) {
+    $roots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
+    if ($roots.Count -gt 0) { $cwd = $roots[0] }
+  }
+  $gitRepoUrl = ""
+  $gitBranch = ""
+  if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+    $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
+    $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
+  }
+
   $turnText = ""
   if ($transcriptPath) {
     $turnText = Get-CurrentTurnText -TranscriptPath $transcriptPath -MaxLines $TranscriptLines
@@ -147,11 +167,25 @@ try {
   Write-DebugLog -Message "Scanning write | base_url=$($config.BaseUrl) | scan_text_len=$($scanText.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
   $callStart = Get-Date
-  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds -Text $scanText
+  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds `
+    -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Text $scanText
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
   Write-DebugLog -Message "Scan returned after ${elapsedMs}ms | Status=$($scanResult.Status) | Action=$($scanResult.Action)" -LogPath $DebugLogPath
 
   switch ($scanResult.Status) {
+    "no_session" {
+      # Every preToolUse payload observed so far has carried conversation_id,
+      # so this is not expected in practice.
+      Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
+        -Reason "no_session_id" -Detail "no session id available"
+      if ($FailureMode -eq "open") {
+        Write-JsonPermissionAllow -Message "The scanning service could not be reached (no session id available). ${actionNoun} allowed WITHOUT a security scan."
+      } else {
+        Write-JsonPermissionDeny -UserMessage "The scanning service could not be reached (no session id available). ${actionNoun} blocked." `
+          -AgentMessage "The scanning service could not be reached (no session id available). Do not retry ${actionDesc}."
+      }
+      return
+    }
     "timeout" {
       Write-CheckWriteAuditLog -ToolName $toolName -FilePath $filePath -Command $shellCommand -Decision $(if ($FailureMode -eq "closed") { "deny" } else { "allow" }) `
         -Reason "api_timeout" -Detail "${TimeoutSeconds}s timeout"

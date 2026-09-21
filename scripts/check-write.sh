@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/scan-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
@@ -118,6 +119,17 @@ main() {
   file_content=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.content // ""')
   shell_command=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.command // ""')
 
+  # Session id + cwd/git context for the scan call's chatapi join -- see
+  # lib/scan-client.sh's header. Same extraction pattern as every other
+  # hook here (check-turn-complete.sh et al).
+  local client_session_id cwd git_repo_url="" git_branch=""
+  client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
+  cwd=$(echo "$payload" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
+  if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
+    git_repo_url=$(get_remote_url_or_empty "$cwd")
+    git_branch=$(get_current_branch_or_empty "$cwd")
+  fi
+
   # "subject" is what's actually about to happen -- the file content being
   # written for a Write call, or the command about to run for a Shell call.
   local subject=""
@@ -194,13 +206,34 @@ main() {
 
   log_debug "Scanning write | base_url=$base_url | scan_text_len=${#scan_text}" "$DEBUG_LOG_PATH"
 
-  # pn_scan_text (lib/scan-client.sh) posts to POST /api/v1/codedefense/scan
-  # -- no model invocation, a real structured action_to_take verdict instead
-  # of the old /v1/messages zero-usage/banner-text heuristic. Called as a
-  # plain statement, not $(...): it sets PN_SCAN_* as globals in this shell.
-  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$scan_text"
+  # pn_scan_text (lib/scan-client.sh) posts to the composite
+  # PromptGuard+PolicyEngine+CodeDefense scan endpoint -- no model
+  # invocation, a real structured action_to_take verdict instead of the old
+  # /v1/messages zero-usage/banner-text heuristic. Called as a plain
+  # statement, not $(...): it sets PN_SCAN_* as globals in this shell.
+  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$scan_text"
 
   case "$PN_SCAN_STATUS" in
+    no_session)
+      # Every preToolUse payload observed so far has carried conversation_id,
+      # so this is not expected in practice.
+      audit_log_entry=$("$JQ_BIN" -n \
+        --arg tool_name "$tool_name" \
+        --arg file_path "$file_path" \
+        --arg command "$shell_command" \
+        --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
+        --arg reason "no_session_id" \
+        --arg detail "no session id available" \
+        '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail}')
+      audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
+
+      if [[ "$FAILURE_MODE" == "open" ]]; then
+        json_permission_allow "The scanning service could not be reached (no session id available). ${action_noun} allowed WITHOUT a security scan."
+      else
+        json_permission_deny "The scanning service could not be reached (no session id available). ${action_noun} blocked." "The scanning service could not be reached (no session id available). Do not retry ${action_desc}."
+      fi
+      return 0
+      ;;
     timeout)
       audit_log_entry=$("$JQ_BIN" -n \
         --arg tool_name "$tool_name" \

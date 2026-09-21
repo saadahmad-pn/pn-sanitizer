@@ -4,6 +4,51 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-21 — Scan via the composite PromptGuard+PolicyEngine+CDS endpoint
+
+`check-prompt.sh`/`check-write.sh` now scan through control-server's new
+`POST /api/v1/plugin/codechain/sessions/{id}/scan` instead of calling
+`POST /api/v1/codedefense/scan` directly. That closes the gap the interim
+CDS-only design (2026-09-21, below) deliberately left open: PromptGuard
+(jailbreak) and PolicyEngine (DLP/PII) coverage that the original
+`/v1/messages` pipeline used to provide, and which the CDS-only scan never
+replicated, is now run again — server-side, gated by the org's policy
+configuration, in the same PG → PolicyEngine → CDS order and
+worst-result-wins logic the real gateway pipeline uses.
+
+This is also the first time a *scan* call joins Code Chain: the new
+endpoint requires a SessionId (Cursor's `conversation_id`, same as every
+other plugin-hooks call) and persists a chatapi document tagged with it,
+so a block/warn/allow decision now shows up in the session's Code Chain
+history the same way a real gateway `GatewayBlock` does — the CDS-only
+endpoint had no session concept and recorded nothing.
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`: `pn_scan_text`/`Invoke-PnScanText` now POST
+  JSON (not multipart form data) to the session-scoped scan endpoint, and
+  require `session_id`/`cwd`/`git_repo_url`/`git_branch` as new leading
+  parameters. New `no_session`/`"no_session"` status for the (not expected
+  in practice, but handled) case where a hook payload carries no
+  `conversation_id`.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`: now extract
+  `conversation_id`/`cwd` from the hook payload and derive git context
+  from `cwd` (same `lib/git-utils.*` pattern every other hook here already
+  uses), and pass all of it through to the scan call. A new `no_session`
+  failure branch mirrors the existing timeout/unreachable/http_error/
+  invalid_json branches (FAILURE_MODE-gated, audit-logged on the write
+  side).
+- `test/test-scan-client.sh` rewritten for the new signature and JSON
+  transport (mocks `http_post_json` instead of `http_post_multipart_form`).
+
+Verified: `bash test/run-all-tests.sh` — 203/204 passing (the one failure,
+`check-repo-context.sh`'s sanitized-GIT-tag assertion, reproduces
+identically without this change — confirmed unrelated, pre-existing).
+`shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` reports only the
+same pre-existing SC2034 global-return pattern already established for
+this codebase. **PowerShell changes were not executed or tested** —
+`pwsh`/`Invoke-ScriptAnalyzer` are unavailable in this environment; reviewed
+by hand against the `.sh` twin for structural/logical parity instead.
+
 ## 2026-09-21 — Fix turn recording: was wired to "stop", which never fires per-turn
 
 Live testing found that prompts sent through Cursor were never landing in

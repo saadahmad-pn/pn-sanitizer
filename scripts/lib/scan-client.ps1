@@ -1,14 +1,18 @@
-# Code Defense Service scan client (Windows) -- mirrors scripts/lib/scan-
-# client.sh. See that file's header for the full design rationale: replaces
-# /v1/messages-based prompt/write scanning with a direct call to
-# POST /api/v1/codedefense/scan (no model invocation), and is an interim
-# step -- PromptGuard/PolicyEngine coverage is not replicated here yet.
+# Composite scan client (Windows) -- mirrors scripts/lib/scan-client.sh.
+# See that file's header for the full design rationale: calls
+# POST /api/v1/plugin/codechain/sessions/{id}/scan, which runs whichever of
+# PromptGuard, PolicyEngine, and Code Defense the org's policy has enabled
+# against the given text and returns one allow/warn/block verdict.
+# SessionId is required -- the endpoint also persists a chatapi document
+# tagged with it, joining the gating decision to the session's other
+# recorded events.
 
 $Script:ScanDebugLogPath = Join-Path $HOME ".paradigm-scanner\scan-client.log"
 
-# Invoke-PnScanText -BaseUrl ... -AccessToken ... -TimeoutSec ... -Text ...
+# Invoke-PnScanText -BaseUrl ... -AccessToken ... -TimeoutSec ...
+#   -SessionId ... -Cwd ... -GitRepoUrl ... -GitBranch ... -Text ...
 # Returns [PSCustomObject]@{
-#   Status      = "ok" | "timeout" | "unreachable" | "http_error" | "invalid_json"
+#   Status      = "ok" | "no_session" | "timeout" | "unreachable" | "http_error" | "invalid_json"
 #   HttpStatus  = raw HTTP status (only meaningful for http_error)
 #   Action      = "allow" | "warn" | "block" | "" (only set when Status=ok;
 #                 empty means valid JSON with no recognized action_to_take --
@@ -21,6 +25,10 @@ function Invoke-PnScanText {
     [Parameter(Mandatory = $true)][string]$BaseUrl,
     [Parameter(Mandatory = $true)][string]$AccessToken,
     [Parameter(Mandatory = $true)][int]$TimeoutSec,
+    [Parameter(Mandatory = $true)][string]$SessionId,
+    [string]$Cwd = "",
+    [string]$GitRepoUrl = "",
+    [string]$GitBranch = "",
     [Parameter(Mandatory = $true)][string]$Text
   )
 
@@ -32,9 +40,22 @@ function Invoke-PnScanText {
     ThreatLevel = ""
   }
 
-  $url = "$($BaseUrl.TrimEnd('/'))/api/v1/codedefense/scan"
-  $formArgs = @("--form-string", "text=$Text")
-  $raw = Invoke-HttpPostMultipart -Url $url -FormArgs $formArgs -AuthToken $AccessToken -TimeoutSec $TimeoutSec
+  if (-not $SessionId) {
+    $result.Status = "no_session"
+    Write-DebugLog -Message "scan: no session id available, cannot call the scan endpoint" -LogPath $Script:ScanDebugLogPath
+    return $result
+  }
+
+  $bodyObj = [PSCustomObject]@{
+    Platform   = "cursor-hooks"
+    Cwd        = $Cwd
+    GitRepoUrl = $GitRepoUrl
+    GitBranch  = $GitBranch
+    Text       = $Text
+  }
+  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-CompactJson -InputObject $bodyObj))
+  $url = "$($BaseUrl.TrimEnd('/'))/api/v1/plugin/codechain/sessions/$SessionId/scan"
+  $raw = Invoke-HttpPostRaw -Url $url -BodyBytes $bodyBytes -ContentType "application/json" -AuthToken $AccessToken -TimeoutSec $TimeoutSec
 
   if ($raw.TimedOut) {
     $result.Status = "timeout"
@@ -67,6 +88,6 @@ function Invoke-PnScanText {
   $result.Message = [string](Get-JsonProperty -InputObject $parsed -Name "message" -Default "")
   $result.ThreatLevel = [string](Get-JsonProperty -InputObject $parsed -Name "overall_threat_level" -Default "")
   $result.Status = "ok"
-  Write-DebugLog -Message "scan: ok action=$($result.Action) threat_level=$($result.ThreatLevel) | url=$url" -LogPath $Script:ScanDebugLogPath
+  Write-DebugLog -Message "scan: ok action=$($result.Action) threat_level=$($result.ThreatLevel) session=$SessionId | url=$url" -LogPath $Script:ScanDebugLogPath
   return $result
 }

@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/scan-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
@@ -79,6 +80,17 @@ main() {
   local prompt
   prompt=$(echo "$payload" | "$JQ_BIN" -r '.prompt // ""')
 
+  # Extract session id + cwd (for the scan call's chatapi join and context
+  # -- see lib/scan-client.sh's header) and derive git context from cwd the
+  # same way every other hook here does (check-turn-complete.sh et al).
+  local client_session_id cwd git_repo_url="" git_branch=""
+  client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
+  cwd=$(echo "$payload" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
+  if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
+    git_repo_url=$(get_remote_url_or_empty "$cwd")
+    git_branch=$(get_current_branch_or_empty "$cwd")
+  fi
+
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
@@ -94,17 +106,30 @@ main() {
   log_debug "Prompt preview: ${prompt:0:200}$([ ${#prompt} -gt 200 ] && echo '...' || true)" "$DEBUG_LOG_PATH"
   log_debug "Timeout: ${TIMEOUT_SECONDS}s" "$DEBUG_LOG_PATH"
 
-  # pn_scan_text (lib/scan-client.sh) posts to POST /api/v1/codedefense/scan
-  # -- no model invocation, a real structured action_to_take verdict instead
-  # of the old /v1/messages zero-usage/banner-text heuristic. Called as a
-  # plain statement, not $(...): it sets PN_SCAN_* as globals in this shell,
-  # same contract as http_post_split_status above.
-  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$prompt"
+  # pn_scan_text (lib/scan-client.sh) posts to the composite
+  # PromptGuard+PolicyEngine+CodeDefense scan endpoint -- no model
+  # invocation, a real structured action_to_take verdict instead of the old
+  # /v1/messages zero-usage/banner-text heuristic. Called as a plain
+  # statement, not $(...): it sets PN_SCAN_* as globals in this shell, same
+  # contract as http_post_split_status above.
+  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt"
 
-  # These three failure states happen only after pn_resolve_config already
+  # These four failure states happen only after pn_resolve_config already
   # succeeded (the user is logged in), so it's safe to honor
   # PROMPT_FAILURE_MODE here — no onboarding deadlock risk.
   case "$PN_SCAN_STATUS" in
+    no_session)
+      # Every beforeSubmitPrompt payload observed so far has carried
+      # conversation_id, so this is not expected in practice -- treated the
+      # same as an invalid response rather than a distinct message, since
+      # there's nothing actionable to tell the user beyond "unscanned".
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "The scanning service could not be reached (no session id available). Prompt blocked."
+      else
+        json_allow "The scanning service could not be reached (no session id available). Allowing prompt."
+      fi
+      return 0
+      ;;
     timeout)
       if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
         json_deny "The scanning service timed out (${TIMEOUT_SECONDS}s). Prompt blocked."

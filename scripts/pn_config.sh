@@ -117,9 +117,10 @@ pn_get_preferred_model() {
 # pn_resolve_model
 # Resolves the user's preferred model (paradigmnetworks-models/set-model
 # skills). NOT currently consumed by check-prompt.sh/check-write.sh --
-# scanning moved to POST /api/v1/codedefense/scan, which resolves the org's
-# configured scanning model server-side and takes no model parameter from
-# the caller. This function and its two consuming skills are effectively
+# scanning moved to the composite plugin-hooks scan endpoint
+# (POST /api/v1/plugin/codechain/sessions/{id}/scan), which resolves the
+# org's configured scanning model server-side and takes no model parameter
+# from the caller. This function and its two consuming skills are effectively
 # orphaned as a result; kept as-is pending a decision on whether to remove
 # them (see CHANGELOG.md). Precedence:
 # PARADIGM_NETWORKS_MODEL env var (a manual override -- only takes effect

@@ -9,6 +9,7 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
+. (Join-Path $ScriptDir "lib\git-utils.ps1")
 . (Join-Path $ScriptDir "lib\scan-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
@@ -46,6 +47,25 @@ try {
 
   $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
 
+  # Session id + cwd (for the scan call's chatapi join and context -- see
+  # lib/scan-client.ps1's header) and derive git context from cwd the same
+  # way every other hook here does.
+  $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "conversation_id" -Default "")
+  if (-not $clientSessionId) {
+    $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "session_id" -Default "")
+  }
+  $cwd = [string](Get-JsonProperty -InputObject $parsedPayload -Name "cwd" -Default "")
+  if (-not $cwd) {
+    $roots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
+    if ($roots.Count -gt 0) { $cwd = $roots[0] }
+  }
+  $gitRepoUrl = ""
+  $gitBranch = ""
+  if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+    $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
+    $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
+  }
+
   Write-DebugLog -Message "Resolving config (may refresh an expiring token)..." -LogPath $DebugLogPath
   $config = Resolve-PnConfig
   Write-DebugLog -Message "Config resolved | configured=$($null -ne $config)" -LogPath $DebugLogPath
@@ -56,16 +76,27 @@ try {
 
   Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
-  # Invoke-PnScanText (lib/scan-client.ps1) posts to
-  # POST /api/v1/codedefense/scan -- no model invocation, a real structured
-  # Action verdict instead of the old /v1/messages zero-usage/banner-text
-  # heuristic.
+  # Invoke-PnScanText (lib/scan-client.ps1) posts to the composite
+  # PromptGuard+PolicyEngine+CodeDefense scan endpoint -- no model
+  # invocation, a real structured Action verdict instead of the old
+  # /v1/messages zero-usage/banner-text heuristic.
   $callStart = Get-Date
-  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds -Text $prompt
+  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds `
+    -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Text $prompt
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
   Write-DebugLog -Message "Scan returned after ${elapsedMs}ms | Status=$($scanResult.Status) | Action=$($scanResult.Action)" -LogPath $DebugLogPath
 
   switch ($scanResult.Status) {
+    "no_session" {
+      # Every beforeSubmitPrompt payload observed so far has carried
+      # conversation_id, so this is not expected in practice.
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service could not be reached (no session id available). Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service could not be reached (no session id available). Allowing prompt."
+      }
+      return
+    }
     "timeout" {
       if ($PromptFailureMode -eq "closed") {
         Write-JsonDeny -Message "The scanning service timed out (${TimeoutSeconds}s). Prompt blocked."
