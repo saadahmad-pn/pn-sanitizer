@@ -108,9 +108,17 @@ pn_record_codechain_turn() {
 
 # pn_record_codechain_shell_event <base_url> <access_token> <timeout>
 #   <session_id> <cwd> <git_repo_url> <git_branch> <command> <output>
+#   [generation_id]
+#
+# generation_id is Cursor's own generation_id, when the hook payload carried
+# one -- same correlator pn_record_codechain_turn already documents: lets
+# control-server find the EXACT open turn this command's tool_use/tool_result
+# pair belongs to, instead of relying solely on its session-scoped "most
+# recent open" fallback. Omit for callers that don't have one.
 pn_record_codechain_shell_event() {
   local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
   local cwd="$5" git_repo_url="$6" git_branch="$7" command_text="$8" output="$9"
+  local generation_id="${10:-}"
 
   [[ -z "$session_id" ]] && return 0
   [[ -z "$base_url" ]] && return 0
@@ -125,7 +133,8 @@ pn_record_codechain_shell_event() {
     --arg gitBranch "$git_branch" \
     --arg command "$command_text" \
     --arg output "$output" \
-    '{Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Command: $command, Output: $output}')
+    --arg generationId "$generation_id" \
+    '{Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Command: $command, Output: $output, GenerationId: $generationId}')
 
   local url="${base_url%/}/api/v1/plugin/codechain/sessions/${session_id}/shell-events"
   local raw

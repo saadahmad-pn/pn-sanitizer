@@ -93,19 +93,26 @@ function Send-CodechainShellEvent {
     [string]$GitRepoUrl = "",
     [string]$GitBranch = "",
     [Parameter(Mandatory = $true)][string]$CommandText,
-    [string]$Output = ""
+    [string]$Output = "",
+    # Cursor's own generation_id, when the hook payload carried one -- same
+    # correlator Send-CodechainTurn already documents: lets control-server
+    # find the EXACT open turn this command's tool_use/tool_result pair
+    # belongs to, instead of relying solely on its session-scoped "most
+    # recent open" fallback. Omit for callers that don't have one.
+    [string]$GenerationId = ""
   )
   if (-not $SessionId) { return }
   if (-not $BaseUrl) { return }
   if (-not $CommandText) { return }
 
   $bodyObj = [PSCustomObject]@{
-    Platform   = "cursor-hooks"
-    Cwd        = $Cwd
-    GitRepoUrl = $GitRepoUrl
-    GitBranch  = $GitBranch
-    Command    = $CommandText
-    Output     = $Output
+    Platform     = "cursor-hooks"
+    Cwd          = $Cwd
+    GitRepoUrl   = $GitRepoUrl
+    GitBranch    = $GitBranch
+    Command      = $CommandText
+    Output       = $Output
+    GenerationId = $GenerationId
   }
   $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-CompactJson -InputObject $bodyObj))
   $url = "$($BaseUrl.TrimEnd('/'))/api/v1/plugin/codechain/sessions/$SessionId/shell-events"

@@ -4,6 +4,70 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-22 — Record every shell command to Code Chain; fix a regex bug that silently dropped most real git push/commit events
+
+Confirmed live: real `git push`/`git commit` commands from actual Cursor
+sessions on this machine never reached Code Chain. Root cause was in
+`hooks/hooks.json`, not control-server: the `beforeShellExecution`/
+`afterShellExecution` matchers (`^\s*git\s+push\b` etc.) were anchored to
+the START of the command string. Cursor very commonly sends compound
+commands like `cd <repo> && git push -u origin <branch>` as a single string
+(confirmed by grepping this machine's own `preToolUse` diagnostic log for
+real `tool_input.command` values from actual sessions) — an anchored regex
+never matches that, since the string starts with `cd`, not `git`. Verified
+directly: three real local sessions with genuine `git push`/`git commit`
+commands (including actual, since-merged commits) had zero matching
+`commitTranscripts` records in the database, and `check-git-event.log` had
+never even been created on this machine despite real pushes having
+happened — the gate never fired once for them.
+
+Cursor's own docs confirm the `matcher` field is a substring/regex search
+against the command string, not an anchored full match (their own example,
+`"curl|wget|nc "`, matches mid-string) — so the anchor was entirely our own
+bug, not a Cursor limitation.
+
+What changed:
+- `hooks/hooks.json`: `beforeShellExecution`'s three matchers dropped the
+  `^\s*` anchor (`^\s*git\s+push\b` → `\bgit\s+push\b`, etc.) — fixes the
+  governance-gating half (this hook runs BEFORE the command executes and can
+  block it).
+- `hooks/hooks.json`: `afterShellExecution`'s matcher broadened from the
+  same three git-only patterns to catch-all (`""`) — every shell command a
+  Cursor agent runs is now recorded, not just git state-changes. Control-
+  server's own git/PR-detection regex (already compound-command-aware,
+  unaffected by this bug) still decides what's actually a commit/push/PR;
+  broadening this matcher only widens what gets *offered* to that detector
+  and to Code Chain's tool-call record, it does not change what's classified
+  as a git event.
+- `scripts/check-git-event-record.sh`/`.ps1`: extract and forward
+  `generation_id` (when the hook payload carries one) so control-server can
+  attach the command+output to the exact turn it belongs to; added local
+  debug logging (`~/.paradigm-scanner/check-git-event-record.log`) matching
+  the pattern `check-write.sh`/`check-git-event.sh` already use — this
+  script previously had no local log at all.
+- `scripts/lib/codechain-client.sh`/`.ps1`: `pn_record_codechain_shell_event`/
+  `Send-CodechainShellEvent` take a new optional trailing `generation_id`/
+  `-GenerationId` parameter, sent as `GenerationId` in the request body.
+
+Not part of this change: `check-git-event.sh`'s own governance-gating scope
+(still only git push/commit/PR-create, not every command) — broadening that
+too would add up to 240s of scan latency to every shell command a session
+runs, which is a much larger UX tradeoff than was asked for here.
+
+Companion control-server change (same date): shell command tool calls are no
+longer persisted as standalone `chatapi` documents at all — they're folded
+into the current turn's own `RequestPayload` as `tool_use`/`tool_result`
+content blocks, the same shape Claude Code's own tool calls use, instead of
+a plugin-hooks-specific field.
+
+Verified: `bash test/run-all-tests.sh` — 227/228 (same pre-existing
+`check-repo-context.sh` flake, unrelated — confirmed by re-running with this
+change stashed, same single failure). `shellcheck -S warning -x scripts/*.sh
+scripts/lib/*.sh` clean (same pre-existing SC2034 pattern only). PowerShell
+changes were NOT executed/tested — `pwsh` is unavailable in this
+environment; reviewed by hand against the `.sh` twin for structural/logical
+parity.
+
 ## 2026-09-22 — Prefer Cursor's structured model_id over the legacy model slug
 
 Follow-up to the "unknown" placeholder fix below: stripping the placeholder

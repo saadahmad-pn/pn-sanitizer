@@ -85,10 +85,21 @@ http_post_json() {
   echo ""
   echo "204"
 }
-pn_record_codechain_shell_event "https://acme.example.com" "token" 5 "session-1" "/repo" "github.com/org/repo" "main" "git commit -m x" "[main abc1234] x"
+pn_record_codechain_shell_event "https://acme.example.com" "token" 5 "session-1" "/repo" "github.com/org/repo" "main" "git commit -m x" "[main abc1234] x" "gen-1"
 assert_output_equals "\"\$JQ_BIN\" -r '.Command' '$captured_body_file'" "git commit -m x" "Command encoded correctly"
 assert_output_equals "\"\$JQ_BIN\" -r '.Output' '$captured_body_file'" "[main abc1234] x" "Output encoded correctly"
 assert_output_equals "\"\$JQ_BIN\" -r '.Cwd' '$captured_body_file'" "/repo" "Cwd encoded correctly"
+assert_output_equals "\"\$JQ_BIN\" -r '.GenerationId' '$captured_body_file'" "gen-1" "GenerationId encoded correctly"
+
+test_case "pn_record_codechain_shell_event: GenerationId omitted -> defaults to empty"
+captured_body_file_no_gen="$TEST_TEMP_DIR/captured-shell-event-body-no-gen.json"
+http_post_json() {
+  echo -n "$2" > "$captured_body_file_no_gen"
+  echo ""
+  echo "204"
+}
+pn_record_codechain_shell_event "https://acme.example.com" "token" 5 "session-1" "/repo" "" "" "ls -la" "out"
+assert_output_equals "\"\$JQ_BIN\" -r '.GenerationId' '$captured_body_file_no_gen'" "" "GenerationId defaults to empty"
 
 test_case "pn_record_codechain_shell_event: empty command -> no call attempted"
 http_post_json() { echo "SHOULD_NOT_BE_CALLED"; }

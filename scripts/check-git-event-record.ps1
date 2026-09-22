@@ -1,8 +1,12 @@
-# afterShellExecution hook (Windows): records a git push/commit/PR-create
-# command's OUTPUT to Code Chain, once it has actually run. Mirrors
-# scripts/check-git-event-record.sh -- see that file's header for why
-# recording is split out from check-git-event.ps1 (which gates BEFORE
-# execution and cannot see output).
+# afterShellExecution hook (Windows): records EVERY shell command's
+# (command, output) pair to Code Chain, once it has actually run -- not just
+# git push/commit/PR-create (matcher is "" in hooks.json, catch-all).
+# Mirrors scripts/check-git-event-record.sh -- see that file's header for
+# why recording is split out from check-git-event.ps1 (which gates BEFORE
+# execution, only for those three git commands, and cannot see output), and
+# for why sending every command here is still safe (control-server's own
+# git/PR-detection regex decides what's actually worth recording as a
+# commit/push/PR, regardless of what this hook sends).
 # Purely observational: always returns {} regardless of outcome.
 
 Set-StrictMode -Version Latest
@@ -15,10 +19,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $CodechainTimeoutSec = if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) { [int]$env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT } else { 10 }
+$DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-git-event-record.log"
 
 $stdinText = Get-StdinText
 
 try {
+  Write-DebugLog -Message "raw payload received | length=$($stdinText.Length)" -LogPath $DebugLogPath
+
   if ($stdinText) {
     $payload = $stdinText | ConvertFrom-Json -ErrorAction Stop
 
@@ -29,6 +36,9 @@ try {
     if (-not $clientSessionId) {
       $clientSessionId = Get-JsonProperty -InputObject $payload -Name "session_id" -Default ""
     }
+    $generationId = Get-JsonProperty -InputObject $payload -Name "generation_id" -Default ""
+
+    Write-DebugLog -Message "extracted | session=$clientSessionId | generation_id=$generationId | command_len=$($commandText.Length) | output_len=$($output.Length) | cwd=$cwd" -LogPath $DebugLogPath
 
     if ($commandText -and $clientSessionId -and (Test-PnConfigured)) {
       $config = Resolve-PnConfig
@@ -42,7 +52,7 @@ try {
 
       Send-CodechainShellEvent -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
         -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch `
-        -CommandText $commandText -Output $output
+        -CommandText $commandText -Output $output -GenerationId $generationId
     }
   }
 } catch {
