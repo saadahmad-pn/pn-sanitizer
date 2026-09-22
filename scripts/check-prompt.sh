@@ -21,7 +21,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
-source "$SCRIPT_DIR/lib/scan-client.sh"
+source "$SCRIPT_DIR/lib/plugins-client.sh"
+source "$SCRIPT_DIR/lib/repo-context.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
@@ -80,6 +81,17 @@ main() {
   local prompt
   prompt=$(echo "$payload" | "$JQ_BIN" -r '.prompt // ""')
 
+  # Repo/branch context injection (formerly the separate check-repo-context.sh
+  # hook, now folded into this single beforeSubmitPrompt entry -- see
+  # design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md
+  # §5). Backgrounded: it never gates (writes a rule file only, nothing here
+  # calls Paradigm Networks) and must never delay this hook's actual gate.
+  local workspace_roots
+  workspace_roots=$(echo "$payload" | "$JQ_BIN" -r '.workspace_roots[]? // empty')
+  if [[ -n "$workspace_roots" ]]; then
+    write_repo_context_rules "$workspace_roots" &
+  fi
+
   # Extract session id + cwd (for the scan call's chatapi join and context
   # -- see lib/scan-client.sh's header) and derive git context from cwd the
   # same way every other hook here does (check-turn-complete.sh et al).
@@ -118,18 +130,18 @@ main() {
   log_debug "Prompt preview: ${prompt:0:200}$([ ${#prompt} -gt 200 ] && echo '...' || true)" "$DEBUG_LOG_PATH"
   log_debug "Timeout: ${TIMEOUT_SECONDS}s" "$DEBUG_LOG_PATH"
 
-  # pn_scan_text (lib/scan-client.sh) posts to the composite
-  # PromptGuard+PolicyEngine+CodeDefense scan endpoint -- no model
-  # invocation, a real structured action_to_take verdict instead of the old
-  # /v1/messages zero-usage/banner-text heuristic. Called as a plain
-  # statement, not $(...): it sets PN_SCAN_* as globals in this shell, same
-  # contract as http_post_split_status above.
-  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "prompt" "" "$generation_id" "$model"
+  # pn_plugin_before_prompt (lib/plugins-client.sh) posts to the standardized
+  # prompts domain (Action=before_prompt) -- runs the composite
+  # PromptGuard+PolicyEngine+CodeDefense scan, no model invocation, a real
+  # structured action_to_take verdict. Called as a plain statement, not
+  # $(...): it sets PN_PROMPT_* as globals in this shell, same contract as
+  # http_post_split_status above.
+  pn_plugin_before_prompt "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "$generation_id" "$model"
 
   # These four failure states happen only after pn_resolve_config already
   # succeeded (the user is logged in), so it's safe to honor
   # PROMPT_FAILURE_MODE here — no onboarding deadlock risk.
-  case "$PN_SCAN_STATUS" in
+  case "$PN_PROMPT_STATUS" in
     no_session)
       # Every beforeSubmitPrompt payload observed so far has carried
       # conversation_id, so this is not expected in practice -- treated the
@@ -160,9 +172,9 @@ main() {
       ;;
     http_error)
       if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-        json_deny "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). Prompt blocked."
+        json_deny "The scanning service returned an error (HTTP ${PN_PROMPT_HTTP_STATUS}). Prompt blocked."
       else
-        json_allow "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). Allowing prompt."
+        json_allow "The scanning service returned an error (HTTP ${PN_PROMPT_HTTP_STATUS}). Allowing prompt."
       fi
       return 0
       ;;
@@ -176,10 +188,10 @@ main() {
       ;;
   esac
 
-  log_debug "Scan response received | action=$PN_SCAN_ACTION" "$DEBUG_LOG_PATH"
+  log_debug "Scan response received | action=$PN_PROMPT_ACTION" "$DEBUG_LOG_PATH"
 
   # Return verdict
-  case "$PN_SCAN_ACTION" in
+  case "$PN_PROMPT_ACTION" in
     ""|null)
       # A valid JSON response with no recognized action_to_take -- an
       # unexpected response shape, not a confirmed verdict either way. Same
@@ -192,11 +204,11 @@ main() {
       if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
         anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
       fi
-      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
+      if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
         if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-          json_deny "${anomaly_prefix}${PN_SCAN_MESSAGE}"
+          json_deny "${anomaly_prefix}${PN_PROMPT_MESSAGE}"
         else
-          json_allow "${anomaly_prefix}${PN_SCAN_MESSAGE}"
+          json_allow "${anomaly_prefix}${PN_PROMPT_MESSAGE}"
         fi
       else
         if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
@@ -211,7 +223,7 @@ main() {
       # Markdown formatting (**bold**, blank-line breaks, `inline code`,
       # `### heading`, and `> blockquote`) confirmed rendering correctly
       # in Cursor's UI.
-      local reason="$PN_SCAN_MESSAGE"
+      local reason="$PN_PROMPT_MESSAGE"
       [[ -z "$reason" ]] && reason="A policy violation was detected."
 
       # Preview of the actual prompt that got flagged, capped at 60 words
@@ -257,8 +269,8 @@ $concern_section
       # Non-blocking: surface the scan's own explanation as a notice and
       # let the prompt proceed.
       pn_record_successful_scan
-      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
-        json_allow "$PN_SCAN_MESSAGE"
+      if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
+        json_allow "$PN_PROMPT_MESSAGE"
       else
         json_allow
       fi
@@ -266,8 +278,8 @@ $concern_section
     *)
       # "allow"
       pn_record_successful_scan
-      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
-        json_allow "$PN_SCAN_MESSAGE"
+      if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
+        json_allow "$PN_PROMPT_MESSAGE"
       else
         json_allow
       fi

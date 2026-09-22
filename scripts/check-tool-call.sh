@@ -1,7 +1,16 @@
 #!/bin/bash
-# preToolUse hook: scan agent response before Write and Shell tool calls
-# (Cursor has no separate "Edit" tool_name; all file modifications use "Write".)
+# preToolUse hook: scan ANY tool call's input before it runs -- generalized
+# from an earlier version scoped to only Write and Shell (Cursor has no
+# separate "Edit" tool_name; all file modifications use "Write"). Now covers
+# every tool type, including MCP tools (e.g. a Jira-update workflow), via
+# Cursor's generic preToolUse hook (matcher "", catch-all) -- see
+# design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md §5.
 # Returns {permission: "allow"/"deny", user_message: "...", agent_message: "..."}
+#
+# Paired with check-tool-call-record.sh (postToolUse), which records this
+# call's actual result once the tool has run -- the two are correlated by
+# Cursor's own stable .tool_use_id, present on both hook payloads, so no
+# relay between the two separate hook-process invocations is needed.
 
 set -o pipefail
 
@@ -22,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
-source "$SCRIPT_DIR/lib/scan-client.sh"
+source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
@@ -38,7 +47,7 @@ case "$RAW_FAILURE_MODE" in
 esac
 
 AUDIT_LOG_PATH="${HOME}/.paradigm-scanner/audit.jsonl"
-DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-write.log"
+DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-tool-call.log"
 
 # "relay ... in full, exactly as given" is deliberate, not just "report
 # the violation": confirmed directly that a vaguer instruction lets the
@@ -86,41 +95,59 @@ main() {
     return 0
   fi
 
-  # Extract tool name
+  # Extract tool name -- generalized to ANY tool, not just Write/Shell (see
+  # this file's header). MCP tools arrive in the "MCP:<tool_name>" matcher
+  # form when a matcher scopes to them specifically; this hook's own
+  # hooks.json entry uses the catch-all matcher "", so tool_name here is
+  # whatever Cursor reports verbatim (e.g. "Write", "Shell", or an MCP tool's
+  # own name).
   local tool_name
   tool_name=$(echo "$payload" | "$JQ_BIN" -r '.tool_name // ""')
-
-  # Scan Write (file modification) and Shell (command execution) tool calls.
-  if [[ "$tool_name" != "Write" ]] && [[ "$tool_name" != "Shell" ]]; then
+  if [[ -z "$tool_name" ]]; then
     json_permission_allow
     return 0
   fi
 
   # Tool-appropriate wording for user_message/agent_message below -- a
-  # message that says "Write blocked" for a blocked shell command would be
-  # actively misleading about what actually happened.
-  local action_noun="Write"
-  local action_desc="this write"
-  if [[ "$tool_name" == "Shell" ]]; then
-    action_noun="Command"
-    action_desc="this command"
-  fi
+  # message that says "Write blocked" for a blocked shell command (or an MCP
+  # tool call) would be actively misleading about what actually happened.
+  local action_noun="Tool call"
+  local action_desc="this tool call"
+  case "$tool_name" in
+    Write)
+      action_noun="Write"
+      action_desc="this write"
+      ;;
+    Shell)
+      action_noun="Command"
+      action_desc="this command"
+      ;;
+  esac
+
+  # Cursor's own stable correlator, present on both preToolUse and
+  # postToolUse payloads -- see check-tool-call-record.sh, which reads the
+  # SAME field from its own (separate-process) invocation to attach this
+  # call's result with no relay needed between the two.
+  local cursor_tool_use_id
+  cursor_tool_use_id=$(echo "$payload" | "$JQ_BIN" -r '.tool_use_id // ""')
 
   # Extract scan context
   local agent_message
   local transcript_path
   local file_path
-  local file_content
-  local shell_command
+  local tool_input_raw
 
   agent_message=$(echo "$payload" | "$JQ_BIN" -r '.agent_message // ""' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
   transcript_path=$(echo "$payload" | "$JQ_BIN" -r '.transcript_path // ""')
   file_path=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')
-  file_content=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.content // ""')
-  shell_command=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.command // ""')
+  # The tool's actual input, as JSON, verbatim -- this is what gets STORED
+  # as the tool_use block (see lib/plugins-client.sh's pn_plugin_before_tool_call),
+  # so it must be the real input, not a Write/Shell-specific extraction that
+  # would silently drop everything an MCP tool's structured args carry.
+  tool_input_raw=$(echo "$payload" | "$JQ_BIN" -c '.tool_input // {}')
 
   # Session id + cwd/git context for the scan call's chatapi join -- see
-  # lib/scan-client.sh's header. Same extraction pattern as every other
+  # lib/plugins-client.sh's header. Same extraction pattern as every other
   # hook here (check-turn-complete.sh et al).
   local client_session_id cwd git_repo_url="" git_branch="" generation_id model
   client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
@@ -128,7 +155,7 @@ main() {
   # Cursor's own generation_id -- changes per user turn, unlike
   # conversation_id. Lets control-server fold this tool-call scan into the
   # SAME turn document as the prompt it belongs to -- see
-  # lib/scan-client.sh's header.
+  # lib/plugins-client.sh's header.
   generation_id=$(echo "$payload" | "$JQ_BIN" -r '.generation_id // ""')
   # model_id ("Structured ID for the selected model, when available", per
   # Cursor's hooks docs) is preferred over the legacy model slug -- see
@@ -141,49 +168,18 @@ main() {
     git_branch=$(get_current_branch_or_empty "$cwd")
   fi
 
-  # "subject" is what's actually about to happen -- the file content being
-  # written for a Write call, or the command about to run for a Shell call.
-  local subject=""
-  if [[ "$tool_name" == "Write" ]]; then
-    subject="$file_content"
-  else
-    subject="$shell_command"
-  fi
-
   # Determine what to scan
   local turn_text=""
   if [[ -n "$transcript_path" ]]; then
     turn_text=$(get_current_turn_text "$transcript_path" "$TRANSCRIPT_LINES")
   fi
+  [[ -z "$turn_text" ]] && turn_text="$agent_message"
 
-  log_debug "tool_input | tool_name=$tool_name | file_path=$file_path | command_len=${#shell_command} | content_len=${#file_content} | turn_text_len=${#turn_text} | agent_message_len=${#agent_message}" "$DEBUG_LOG_PATH"
+  log_debug "tool_input | tool_name=$tool_name | file_path=$file_path | tool_input_len=${#tool_input_raw} | turn_text_len=${#turn_text} | tool_use_id=$cursor_tool_use_id" "$DEBUG_LOG_PATH"
 
-  # Scan the current turn's conversation together with the write/command
-  # subject -- neither alone is enough. The subject alone can miss malicious
-  # *intent* that doesn't show up in code/commands that look ordinary on
-  # their own. A raw transcript tail on its own can drag in stale context
-  # from an earlier, unrelated turn. get_current_turn_text() scopes to the
-  # most recent user message onward, so combining it with the actual subject
-  # covers both what was asked for and what's actually about to happen.
-  local scan_text=""
-  local scan_source=""
-  if [[ -n "$turn_text" ]] && [[ -n "$subject" ]]; then
-    scan_text="${turn_text}"$'\n\n---\n\n'"${subject}"
-    scan_source="turn+subject"
-  elif [[ -n "$subject" ]]; then
-    scan_text="$subject"
-    scan_source="subject"
-  elif [[ -n "$turn_text" ]]; then
-    scan_text="$turn_text"
-    scan_source="turn"
-  elif [[ -n "$agent_message" ]]; then
-    scan_text="$agent_message"
-    scan_source="agent_message"
-  fi
-  log_debug "Scan source selected | source=$scan_source | length=${#scan_text}" "$DEBUG_LOG_PATH"
-
-  # If nothing to scan, allow
-  if [[ -z "$scan_text" ]]; then
+  # If the tool call has no input at all AND no turn context either, there's
+  # nothing to scan.
+  if [[ -z "$tool_input_raw" || "$tool_input_raw" == "{}" ]] && [[ -z "$turn_text" ]]; then
     json_permission_allow
     return 0
   fi
@@ -195,7 +191,7 @@ main() {
     audit_log_entry=$("$JQ_BIN" -n \
       --arg tool_name "$tool_name" \
       --arg file_path "$file_path" \
-      --arg command "$shell_command" \
+      --arg command "$tool_input_raw" \
       --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
       --arg reason "not_configured" \
       --arg detail "$reason" \
@@ -215,26 +211,27 @@ main() {
   local access_token
   read -r base_url access_token <<<"$config"
 
-  log_debug "Scanning write | base_url=$base_url | scan_text_len=${#scan_text}" "$DEBUG_LOG_PATH"
+  log_debug "Scanning tool call | base_url=$base_url | tool_input_len=${#tool_input_raw} | turn_text_len=${#turn_text}" "$DEBUG_LOG_PATH"
 
-  # pn_scan_text (lib/scan-client.sh) posts to the composite
-  # PromptGuard+PolicyEngine+CodeDefense scan endpoint -- no model
-  # invocation, a real structured action_to_take verdict instead of the old
-  # /v1/messages zero-usage/banner-text heuristic. Called as a plain
-  # statement, not $(...): it sets PN_SCAN_* as globals in this shell.
-  # "tool_call" (with the tool's own name) tells control-server to fold this
-  # scan into the session's currently-open prompt-scan document instead of
-  # persisting its own -- see lib/scan-client.sh's header.
-  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$scan_text" "tool_call" "$tool_name" "$generation_id" "$model"
+  # pn_plugin_before_tool_call (lib/plugins-client.sh) posts to the
+  # standardized tool-calls domain (Action=before_tool_call) -- runs the
+  # composite PromptGuard+PolicyEngine+CodeDefense scan against turn_text
+  # (ScanContext) + tool_input_raw (Input) together, appends a tool_use
+  # block onto the session's open turn, and returns a ToolUseId. Called as a
+  # plain statement, not $(...): it sets PN_TOOLCALL_* as globals in this
+  # shell. cursor_tool_use_id is passed through so control-server uses
+  # Cursor's OWN id rather than minting one -- see this file's header and
+  # lib/plugins-client.sh's doc comment.
+  pn_plugin_before_tool_call "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$tool_name" "$tool_input_raw" "$generation_id" "$model" "$cursor_tool_use_id" "$turn_text"
 
-  case "$PN_SCAN_STATUS" in
+  case "$PN_TOOLCALL_STATUS" in
     no_session)
       # Every preToolUse payload observed so far has carried conversation_id,
       # so this is not expected in practice.
       audit_log_entry=$("$JQ_BIN" -n \
         --arg tool_name "$tool_name" \
         --arg file_path "$file_path" \
-        --arg command "$shell_command" \
+        --arg command "$tool_input_raw" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
         --arg reason "no_session_id" \
         --arg detail "no session id available" \
@@ -252,7 +249,7 @@ main() {
       audit_log_entry=$("$JQ_BIN" -n \
         --arg tool_name "$tool_name" \
         --arg file_path "$file_path" \
-        --arg command "$shell_command" \
+        --arg command "$tool_input_raw" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
         --arg reason "api_timeout" \
         --arg detail "${TIMEOUT_SECONDS}s timeout" \
@@ -270,7 +267,7 @@ main() {
       audit_log_entry=$("$JQ_BIN" -n \
         --arg tool_name "$tool_name" \
         --arg file_path "$file_path" \
-        --arg command "$shell_command" \
+        --arg command "$tool_input_raw" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
         --arg reason "api_unreachable" \
         --arg detail "connection failed" \
@@ -288,17 +285,17 @@ main() {
       audit_log_entry=$("$JQ_BIN" -n \
         --arg tool_name "$tool_name" \
         --arg file_path "$file_path" \
-        --arg command "$shell_command" \
+        --arg command "$tool_input_raw" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
         --arg reason "api_http_error" \
-        --arg detail "HTTP ${PN_SCAN_HTTP_STATUS}" \
+        --arg detail "HTTP ${PN_TOOLCALL_HTTP_STATUS}" \
         '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, reason: $reason, detail: $detail}')
       audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
       if [[ "$FAILURE_MODE" == "open" ]]; then
-        json_permission_allow "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). ${action_noun} allowed WITHOUT a security scan."
+        json_permission_allow "The scanning service returned an error (HTTP ${PN_TOOLCALL_HTTP_STATUS}). ${action_noun} allowed WITHOUT a security scan."
       else
-        json_permission_deny "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). ${action_noun} blocked." "The scanning service returned an error (HTTP ${PN_SCAN_HTTP_STATUS}). Do not retry ${action_desc}."
+        json_permission_deny "The scanning service returned an error (HTTP ${PN_TOOLCALL_HTTP_STATUS}). ${action_noun} blocked." "The scanning service returned an error (HTTP ${PN_TOOLCALL_HTTP_STATUS}). Do not retry ${action_desc}."
       fi
       return 0
       ;;
@@ -306,7 +303,7 @@ main() {
       audit_log_entry=$("$JQ_BIN" -n \
         --arg tool_name "$tool_name" \
         --arg file_path "$file_path" \
-        --arg command "$shell_command" \
+        --arg command "$tool_input_raw" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
         --arg reason "api_invalid_json" \
         --arg detail "scanner returned invalid JSON" \
@@ -326,14 +323,14 @@ main() {
   audit_log_entry=$("$JQ_BIN" -n \
     --arg tool_name "$tool_name" \
     --arg file_path "$file_path" \
-    --arg command "$shell_command" \
-    --arg decision "$PN_SCAN_ACTION" \
-    --arg threat_level "$PN_SCAN_THREAT_LEVEL" \
+    --arg command "$tool_input_raw" \
+    --arg decision "$PN_TOOLCALL_ACTION" \
+    --arg threat_level "$PN_TOOLCALL_THREAT_LEVEL" \
     '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: $decision, threat_level: $threat_level}')
   audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
   # Return verdict
-  case "$PN_SCAN_ACTION" in
+  case "$PN_TOOLCALL_ACTION" in
     ""|null)
       # A valid JSON response with no recognized action_to_take -- an
       # unexpected response shape, not a confirmed verdict either way.
@@ -344,11 +341,11 @@ main() {
       if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
         anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
       fi
-      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
+      if [[ -n "$PN_TOOLCALL_MESSAGE" ]]; then
         if [[ "$FAILURE_MODE" == "open" ]]; then
-          json_permission_allow "${anomaly_prefix}${PN_SCAN_MESSAGE}"
+          json_permission_allow "${anomaly_prefix}${PN_TOOLCALL_MESSAGE}"
         else
-          json_permission_deny "${anomaly_prefix}${PN_SCAN_MESSAGE}" "$PN_SCAN_MESSAGE Do not retry ${action_desc}."
+          json_permission_deny "${anomaly_prefix}${PN_TOOLCALL_MESSAGE}" "$PN_TOOLCALL_MESSAGE Do not retry ${action_desc}."
         fi
       else
         if [[ "$FAILURE_MODE" == "open" ]]; then
@@ -360,15 +357,15 @@ main() {
       ;;
     block)
       pn_record_successful_scan
-      local user_message="$PN_SCAN_MESSAGE"
+      local user_message="$PN_TOOLCALL_MESSAGE"
       [[ -z "$user_message" ]] && user_message="A policy violation was detected."
       json_permission_deny "$user_message" "$user_message $(build_stop_instruction "$action_desc")"
       ;;
     warn)
       # Non-blocking: surface the scan's own explanation and let it proceed.
       pn_record_successful_scan
-      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
-        json_permission_allow "$PN_SCAN_MESSAGE"
+      if [[ -n "$PN_TOOLCALL_MESSAGE" ]]; then
+        json_permission_allow "$PN_TOOLCALL_MESSAGE"
       else
         json_permission_allow
       fi
@@ -376,8 +373,8 @@ main() {
     *)
       # "allow"
       pn_record_successful_scan
-      if [[ -n "$PN_SCAN_MESSAGE" ]]; then
-        json_permission_allow "$PN_SCAN_MESSAGE"
+      if [[ -n "$PN_TOOLCALL_MESSAGE" ]]; then
+        json_permission_allow "$PN_TOOLCALL_MESSAGE"
       else
         json_permission_allow
       fi

@@ -47,7 +47,7 @@ chmod 755 "$readonly_dir"
 test_case "Transcript file doesn't exist"
 payload='{"tool_name": "Write", "agent_message": "", "transcript_path": "/nonexistent/path", "tool_input": {"file_path": "f.txt"}}'
 export PARADIGM_NETWORKS_FAILURE_MODE="open"
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload" 2>/dev/null)
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Allows when transcript missing"
 unset PARADIGM_NETWORKS_FAILURE_MODE
@@ -58,7 +58,7 @@ echo -e "${BLUE}--- Malformed Input Tests ---${NC}"
 test_case "Invalid JSON in hook payload"
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "not json" 2>/dev/null)
 assert_json_valid "$result" "Returns valid JSON"
-# See P0-1: malformed input must fail open (like check-write.sh already
+# See P0-1: malformed input must fail open (like check-tool-call.sh already
 # does), not hard-block every prompt with no PROMPT_FAILURE_MODE escape.
 assert_json_field_equals "$result" "continue" "true" "Allows malformed input (fails open, not closed)"
 
@@ -127,7 +127,7 @@ line2
 line3" > "$test_file"
 payload=$("$JQ_BIN" -n --arg path "$test_file" '{tool_name: "Write", agent_message: "", transcript_path: $path, tool_input: {file_path: "f.txt"}}')
 export PARADIGM_NETWORKS_FAILURE_MODE="open"
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload" 2>/dev/null)
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload" 2>/dev/null)
 assert_json_field_equals "$result" "permission" "allow" "Reads transcript when message empty"
 unset PARADIGM_NETWORKS_FAILURE_MODE
 

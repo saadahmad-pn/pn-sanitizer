@@ -1,20 +1,29 @@
 #!/bin/bash
-# beforeShellExecution hook: evaluate a detected git command (push, commit,
-# or PR creation) against the generic detections API before letting it run.
+# beforeShellExecution hook: evaluate a detected git command (push or
+# commit) against the standardized shell-executions domain
+# (Action=before_shell_execution) before letting it run. git.pr_create is
+# deliberately NOT scanned here -- there is no artifact to scan before a PR
+# exists, and the real PR-create workflow (control-server's
+# RecordPullRequest -> triggerCodeReviewScan) is already fed by
+# check-git-event-record.sh's afterShellExecution call, unconditionally, for
+# every shell command -- see design-ideas/
+# Plugin_API_Standardization_And_Hook_Consolidation_Design.md §2.1. Folds in
+# what used to be a separate call to /api/v1/detections/evaluate
+# (lib/detection-client.sh, now retired) -- git.push AND git.commit both get
+# real enforcement now; previously only git.push did.
 #
 # Does NOT also record to Code Chain here, deliberately: beforeShellExecution
 # fires BEFORE the command runs, so only the command text is available --
-# there is no commit SHA / push confirmation / PR URL yet (those only appear
-# in the command's OUTPUT, which control-server's git/PR detection regex
-# needs). Recording happens from check-git-event-record.sh, a SEPARATE
+# there is no commit SHA / push confirmation yet (that only appears in the
+# command's OUTPUT, which control-server's git/PR detection regex needs).
+# Recording happens from check-git-event-record.sh, a SEPARATE
 # afterShellExecution hook on the same matchers, which sees both command and
-# output. See design-ideas/Codechain_Plugin_Hooks_Design.md.
+# output.
 # One script, parameterized by EventType ($1), rather than one clone per
 # git operation -- push/commit/pr_create are three instances of the same
 # generic contract (design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md,
 # section 0.5), so the submit-and-classify logic is shared here (lib/
-# detection-client.sh) and only each EventType's file-collection step
-# differs.
+# plugins-client.sh) and only each EventType's file-collection step differs.
 # Returns {permission: "allow"/"deny", user_message: "...", agent_message: "..."}
 
 set -o pipefail
@@ -35,12 +44,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
-source "$SCRIPT_DIR/lib/detection-client.sh"
+source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 EVENT_TYPE="${1:-}"
 
-DETECTIONS_URL_OVERRIDE="${PARADIGM_NETWORKS_DETECTIONS_URL_OVERRIDE:-}"
 TIMEOUT_SECONDS="${PARADIGM_NETWORKS_GIT_EVENT_TIMEOUT:-240}"
 # Guardrails from design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md
 # section 10.4: an explicit, user-visible cap rather than silently
@@ -109,6 +117,16 @@ main() {
     return 0
   fi
 
+  # git.pr_create is never scanned pre-execution -- see this file's header.
+  # Short-circuits before any file-collection work (which would otherwise be
+  # entirely wasted: control-server's before_shell_execution ignores this
+  # EventType unconditionally too) and before the cwd/git-repo check below,
+  # since there's nothing here to evaluate either way.
+  if [[ "$EVENT_TYPE" == "git.pr_create" ]]; then
+    json_permission_allow
+    return 0
+  fi
+
   local command_text cwd
   command_text=$(echo "$payload" | "$JQ_BIN" -r '.command // ""')
   cwd=$(echo "$payload" | "$JQ_BIN" -r '.cwd // ""')
@@ -121,11 +139,24 @@ main() {
     return 0
   fi
 
+  # Every preToolUse/beforeShellExecution payload observed so far has NOT
+  # reliably carried a session id in Cursor's own documented schema, but
+  # check-git-event-record.sh (afterShellExecution) already extracts it the
+  # same way -- mirrored here for consistency. If Cursor doesn't send one,
+  # this call has nowhere to be scoped to server-side (the endpoint is
+  # session-scoped, unlike the retired detections/evaluate endpoint), so
+  # allow rather than block on something outside this hook's control.
+  local client_session_id
+  client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
+  if [[ -z "$client_session_id" ]]; then
+    json_permission_allow
+    return 0
+  fi
+
   local action_noun="Push"
   local action_desc="this push"
   case "$EVENT_TYPE" in
-    git.commit)    action_noun="Commit";             action_desc="this commit" ;;
-    git.pr_create) action_noun="Pull request creation"; action_desc="this pull request creation" ;;
+    git.commit) action_noun="Commit"; action_desc="this commit" ;;
   esac
 
   # Collect the file set relevant to this EventType. Each resolver prints
@@ -138,9 +169,6 @@ main() {
       ;;
     git.commit)
       changed_files=$(resolve_staged_changed_files "$cwd")
-      ;;
-    git.pr_create)
-      changed_files=$(resolve_pr_create_changed_files "$cwd" "$command_text")
       ;;
     *)
       # An EventType this script doesn't recognize is a hooks.json wiring
@@ -231,30 +259,23 @@ main() {
   local base_url access_token
   read -r base_url access_token <<<"$config"
 
-  local detections_url="${DETECTIONS_URL_OVERRIDE}"
-  if [[ -z "$detections_url" ]]; then
-    detections_url="${base_url%/}/api/v1/detections/evaluate"
-  fi
+  log_debug "Evaluating $EVENT_TYPE | file_count=${#submit_file_entries[@]} | total_bytes=$total_bytes" "$DEBUG_LOG_PATH"
 
-  log_debug "Evaluating $EVENT_TYPE | url=$detections_url | file_count=${#submit_file_entries[@]} | total_bytes=$total_bytes" "$DEBUG_LOG_PATH"
-
-  # pn_evaluate_detection (lib/detection-client.sh) submits and classifies
-  # the response -- called as a plain statement (not $(...)), same
-  # multi-value-return convention as pn_parse_messages_response/
-  # http_post_split_status elsewhere in this codebase. SessionId is always
-  # empty: this plugin has no Cursor session identity to send (see the
-  # design doc's section 0 -- a legitimate, expected value, not an error).
-  pn_evaluate_detection "$detections_url" "$access_token" "$TIMEOUT_SECONDS" \
-    "$EVENT_TYPE" "cursor-plugin" "$cwd" "" "$git_repo_url" "$git_branch" "$command_text" \
+  # pn_plugin_before_shell_execution (lib/plugins-client.sh) submits and
+  # classifies the response -- called as a plain statement (not $(...)),
+  # same multi-value-return convention as pn_parse_messages_response/
+  # http_post_split_status elsewhere in this codebase.
+  pn_plugin_before_shell_execution "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" \
+    "$EVENT_TYPE" "cursor-plugin" "$cwd" "$git_repo_url" "$git_branch" "" "$command_text" \
     "${submit_file_entries[@]}"
 
-  case "$PN_DETECTION_STATUS" in
+  case "$PN_SHELL_STATUS" in
     timeout)
       audit_log_entry=$("$JQ_BIN" -n \
         --arg event_type "$EVENT_TYPE" --arg command "$command_text" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-        --arg reason "api_timeout" --arg detail "${TIMEOUT_SECONDS}s timeout" --arg url "$detections_url" \
-        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail, url: $url}')
+        --arg reason "api_timeout" --arg detail "${TIMEOUT_SECONDS}s timeout" \
+        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail}')
       audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
       if [[ "$FAILURE_MODE" == "open" ]]; then
         json_permission_allow "The scanning service is unavailable (timed out after ${TIMEOUT_SECONDS}s). ${action_noun} allowed WITHOUT a security scan."
@@ -266,8 +287,8 @@ main() {
       audit_log_entry=$("$JQ_BIN" -n \
         --arg event_type "$EVENT_TYPE" --arg command "$command_text" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-        --arg reason "api_unreachable" --arg detail "connection failed" --arg url "$detections_url" \
-        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail, url: $url}')
+        --arg reason "api_unreachable" --arg detail "connection failed" \
+        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail}')
       audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
       if [[ "$FAILURE_MODE" == "open" ]]; then
         json_permission_allow "The scanning service is unavailable (connection failed). ${action_noun} allowed WITHOUT a security scan."
@@ -279,21 +300,21 @@ main() {
       audit_log_entry=$("$JQ_BIN" -n \
         --arg event_type "$EVENT_TYPE" --arg command "$command_text" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-        --arg reason "api_http_error" --arg detail "HTTP ${PN_DETECTION_HTTP_STATUS}" --arg url "$detections_url" \
-        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail, url: $url}')
+        --arg reason "api_http_error" --arg detail "HTTP ${PN_SHELL_HTTP_STATUS}" \
+        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail}')
       audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
       if [[ "$FAILURE_MODE" == "open" ]]; then
-        json_permission_allow "The scanning service returned an error (HTTP ${PN_DETECTION_HTTP_STATUS}). ${action_noun} allowed WITHOUT a security scan."
+        json_permission_allow "The scanning service returned an error (HTTP ${PN_SHELL_HTTP_STATUS}). ${action_noun} allowed WITHOUT a security scan."
       else
-        json_permission_deny "The scanning service returned an error (HTTP ${PN_DETECTION_HTTP_STATUS}). ${action_noun} blocked." "The scanning service returned an error (HTTP ${PN_DETECTION_HTTP_STATUS}). Do not retry ${action_desc}."
+        json_permission_deny "The scanning service returned an error (HTTP ${PN_SHELL_HTTP_STATUS}). ${action_noun} blocked." "The scanning service returned an error (HTTP ${PN_SHELL_HTTP_STATUS}). Do not retry ${action_desc}."
       fi
       ;;
     invalid_json)
       audit_log_entry=$("$JQ_BIN" -n \
         --arg event_type "$EVENT_TYPE" --arg command "$command_text" \
         --arg decision "$([[ "$FAILURE_MODE" == "closed" ]] && echo "deny" || echo "allow")" \
-        --arg reason "api_invalid_json" --arg detail "scanner returned invalid JSON" --arg url "$detections_url" \
-        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail, url: $url}')
+        --arg reason "api_invalid_json" --arg detail "scanner returned invalid JSON" \
+        '{event_type: $event_type, command: $command, decision: $decision, reason: $reason, detail: $detail}')
       audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
       if [[ "$FAILURE_MODE" == "open" ]]; then
         json_permission_allow "The scanning service returned an invalid response. ${action_noun} allowed WITHOUT a security scan."
@@ -305,24 +326,46 @@ main() {
       pn_record_successful_scan
       audit_log_entry=$("$JQ_BIN" -n \
         --arg event_type "$EVENT_TYPE" --arg command "$command_text" \
-        --arg decision "$PN_DETECTION_DECISION" --arg audit_id "$PN_DETECTION_AUDIT_ID" \
+        --arg decision "$PN_SHELL_ACTION" \
         --argjson file_count "${#submit_file_entries[@]}" \
-        '{event_type: $event_type, command: $command, decision: $decision, audit_id: $audit_id, file_count: $file_count}')
+        '{event_type: $event_type, command: $command, decision: $decision, file_count: $file_count}')
       audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
 
-      case "$PN_DETECTION_DECISION" in
+      case "$PN_SHELL_ACTION" in
+        ""|null)
+          # A valid JSON response with no recognized action_to_take -- an
+          # unexpected response shape, not a confirmed verdict either way.
+          # Matches check-prompt.sh/check-tool-call.sh's identical branch:
+          # don't guess allow or block, respect FAILURE_MODE (closed by
+          # default here, same as check-write.sh's original posture) --
+          # this replaces the retired pn_evaluate_detection's own
+          # unconditional "missing Decision -> block" default with the same
+          # FAILURE_MODE-respecting anomaly handling every other gate uses.
+          if [[ -n "$PN_SHELL_MESSAGE" ]]; then
+            if [[ "$FAILURE_MODE" == "open" ]]; then
+              json_permission_allow "$PN_SHELL_MESSAGE"
+            else
+              json_permission_deny "$PN_SHELL_MESSAGE" "$PN_SHELL_MESSAGE Do not retry ${action_desc}."
+            fi
+          else
+            if [[ "$FAILURE_MODE" == "open" ]]; then
+              json_permission_allow "The scanning service returned an unexpected response. ${action_noun} allowed WITHOUT a security scan."
+            else
+              json_permission_deny "The scanning service returned an unexpected response. ${action_noun} blocked." "The scanning service returned an unexpected response. Do not retry ${action_desc}."
+            fi
+          fi
+          ;;
         block)
-          local user_message="$PN_DETECTION_MESSAGE"
+          local user_message="$PN_SHELL_MESSAGE"
           [[ -z "$user_message" ]] && user_message="A policy violation was detected."
           json_permission_deny "$user_message" "$user_message $(build_stop_instruction "$action_desc")"
           ;;
         *)
           # "warn" and "allow" both let the operation proceed -- "warn"
-          # surfaces PN_DETECTION_MESSAGE as a non-blocking notice, "allow"
-          # surfaces it only if the backend actually sent one (design doc
-          # section 4).
-          if [[ -n "$PN_DETECTION_MESSAGE" ]]; then
-            json_permission_allow "$PN_DETECTION_MESSAGE"
+          # surfaces PN_SHELL_MESSAGE as a non-blocking notice, "allow"
+          # surfaces it only if the backend actually sent one.
+          if [[ -n "$PN_SHELL_MESSAGE" ]]; then
+            json_permission_allow "$PN_SHELL_MESSAGE"
           else
             json_permission_allow
           fi

@@ -4,19 +4,21 @@
 # Modes: allow, block, anomaly, timeout, error500, error401,
 #        detections_allow, detections_warn, detections_block
 #
-# The detections_* modes return the POST /api/v1/detections/evaluate shape
-# (design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md, section
-# 0.5.3 -- Decision/Message/FileAnalyses/LatencyMs/AuditId) for testing
-# check-git-event.sh / lib/detection-client.sh against this endpoint.
+# The detections_* modes return the standardized plugins domain response
+# shape (action_to_take/message/overall_threat_level/triggered_by/ToolUseId
+# -- see control-server's ScanOutcome/ToolCallResult/ShellExecutionResult)
+# for testing check-prompt.sh/check-tool-call.sh/check-git-event.sh against
+# lib/plugins-client.sh. Kept the "detections_*" mode names for minimal
+# test-file churn even though the retired /api/v1/detections/evaluate
+# endpoint no longer exists -- these now stand in for any of the three
+# gating domains' before_* verdict shape, which is identical across all
+# three.
 #
 # The non-detections modes (allow/block/anomaly/timeout/error500/error401)
-# return the /v1/messages (Anthropic-compatible) response shape -- LEGACY:
-# check-write.sh/check-prompt.sh no longer call /v1/messages at all (they
-# now call POST /api/v1/codedefense/scan, see lib/scan-client.sh), and no
-# current test invokes start_mock_server with these modes. Left in place as
-# unused scaffolding rather than removed outright; update or delete them if
-# CDS-shaped mock coverage for check-write.sh/check-prompt.sh is added
-# later.
+# return the /v1/messages (Anthropic-compatible) response shape -- LEGACY,
+# unused scaffolding from before this plugin called control-server's
+# composite scan endpoints at all. Left in place rather than removed
+# outright.
 
 PORT=""
 MODE="allow"
@@ -60,13 +62,13 @@ start_mock_server() {
               send_response "401" '{"error": "Unauthorized"}'
               ;;
             detections_allow)
-              send_response "200" '{"Decision":"allow","Message":"","FileAnalyses":[],"LatencyMs":0,"AuditId":"mock-scan-allow"}'
+              send_response "200" '{"action_to_take":"allow","message":"","overall_threat_level":"","ToolUseId":"mock-tool-use-id"}'
               ;;
             detections_warn)
-              send_response "200" '{"Decision":"warn","Message":"mock policy warning","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"low","ActionToTake":"warn","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-warn"}'
+              send_response "200" '{"action_to_take":"warn","message":"mock policy warning","overall_threat_level":"low","triggered_by":["code_defense"],"ToolUseId":"mock-tool-use-id"}'
               ;;
             detections_block)
-              send_response "200" '{"Decision":"block","Message":"mock policy violation","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"high","ActionToTake":"block","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-block"}'
+              send_response "200" '{"action_to_take":"block","message":"mock policy violation","overall_threat_level":"high","triggered_by":["code_defense"],"ToolUseId":"mock-tool-use-id"}'
               ;;
           esac
         fi

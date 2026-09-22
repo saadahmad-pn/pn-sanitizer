@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
-source "$SCRIPT_DIR/lib/codechain-client.sh"
+source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-10}"
@@ -75,8 +75,8 @@ main() {
     git_branch=$(get_current_branch_or_empty "$cwd")
   fi
 
-  pn_record_codechain_shell_event "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$command_text" "$output" "$generation_id"
+  pn_plugin_after_shell_execution "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
+    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$generation_id" "$command_text" "$output"
 
   return 0
 }

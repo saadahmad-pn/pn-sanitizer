@@ -30,37 +30,22 @@
         "command": "scripts/run-hook.cmd check-prompt",
         "timeout": 250,
         "failClosed": true
-      },
-      {
-        "command": "scripts/run-hook.cmd check-repo-context",
-        "timeout": 10,
-        "failClosed": false
       }
     ],
     "preToolUse": [
       {
-        "matcher": "Write",
-        "command": "bash ./scripts/check-write.sh",
-        "timeout": 250
-      },
-      {
-        "matcher": "Write",
-        "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
-        "timeout": 250
-      },
-      {
         "matcher": "",
-        "command": "bash ./scripts/spike-skill-detection.sh",
-        "failClosed": false,
-        "timeout": 10
+        "command": "scripts/run-hook.cmd check-tool-call",
+        "timeout": 250,
+        "failClosed": true
       }
     ],
-    "beforeReadFile": [
+    "postToolUse": [
       {
         "matcher": "",
-        "command": "bash ./scripts/spike-skill-detection.sh",
+        "command": "scripts/run-hook.cmd check-tool-call-record",
         "failClosed": false,
-        "timeout": 10
+        "timeout": 15
       }
     ],
     "beforeShellExecution": [

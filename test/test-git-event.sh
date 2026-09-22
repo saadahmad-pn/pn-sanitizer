@@ -1,8 +1,11 @@
 #!/bin/bash
-# Unit + integration tests for the generic git-event detection surface:
-# lib/git-utils.sh's new resolvers, lib/detection-client.sh, and
-# check-git-event.sh (design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md,
-# section 0.5).
+# Unit + integration tests for the git-event detection surface:
+# lib/git-utils.sh's resolvers, lib/plugins-client.sh's
+# pn_plugin_before_shell_execution (which folded in the retired
+# lib/detection-client.sh's pn_evaluate_detection), and check-git-event.sh.
+# See design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md
+# §2.1: git.push AND git.commit now both get real enforcement (previously
+# only git.push did); git.pr_create is a deliberate pass-through, not scanned.
 
 set -o pipefail
 
@@ -65,7 +68,7 @@ test_case "resolve_pr_create_changed_files: honors an explicit --base flag"
 git -C "$work_repo" branch -q release main
 assert_output_equals "resolve_pr_create_changed_files '$work_repo' 'gh pr create --base release'" "feature.txt" "diffs against the named base branch"
 
-echo -e "${BLUE}=== Unit Tests: lib/detection-client.sh ===${NC}"
+echo -e "${BLUE}=== Unit Tests: lib/plugins-client.sh (before_shell_execution gating) ===${NC}"
 
 test_case "is_binary_file: plain text file -> false"
 text_file="$TEST_TEMP_DIR/plain.txt"
@@ -77,65 +80,67 @@ bin_file="$TEST_TEMP_DIR/binary.bin"
 printf 'abc\000def' > "$bin_file"
 assert_success "is_binary_file '$bin_file'" "reports true (assert_success = zero/true return)"
 
-# pn_evaluate_detection bundles its own HTTP call (mirroring how check-
-# write.sh's inline curl/status handling is not separately unit-tested
-# either -- only its response-body classifier, pn_parse_messages_response,
-# is). Overriding http_post_multipart_form here is a deliberate, narrow test
-# seam: it lets these cases exercise pn_evaluate_detection's own
-# status/response-shape branching without a real network call, while still
-# calling pn_evaluate_detection itself (not a copy of its logic).
-test_case "pn_evaluate_detection: 2xx + valid JSON -> ok, fields extracted"
+# pn_plugin_before_shell_execution bundles its own HTTP call (mirroring how
+# check-git-event.sh's inline curl/status handling is not separately unit-
+# tested either). Overriding http_post_multipart_form here is a deliberate,
+# narrow test seam: it lets these cases exercise the function's own
+# status/response-shape branching without a real network call.
+test_case "pn_plugin_before_shell_execution: 2xx + valid JSON -> ok, fields extracted"
 http_post_multipart_form() {
-  echo '{"Decision":"warn","Message":"a finding","AuditId":"scan-123"}'
+  echo '{"action_to_take":"warn","message":"a finding"}'
   echo "200"
 }
-pn_evaluate_detection "https://example.invalid/api/v1/detections/evaluate" "tok" "5" \
+pn_plugin_before_shell_execution "https://example.invalid" "tok" "5" "session-1" \
   "git.push" "cursor-plugin" "/repo" "" "" "" "git push origin main"
-assert_output_equals "echo \"\$PN_DETECTION_STATUS\"" "ok" "status is ok"
-assert_output_equals "echo \"\$PN_DETECTION_DECISION\"" "warn" "decision extracted"
-assert_output_equals "echo \"\$PN_DETECTION_MESSAGE\"" "a finding" "message extracted"
-assert_output_equals "echo \"\$PN_DETECTION_AUDIT_ID\"" "scan-123" "audit id extracted"
+assert_output_equals "echo \"\$PN_SHELL_STATUS\"" "ok" "status is ok"
+assert_output_equals "echo \"\$PN_SHELL_ACTION\"" "warn" "action extracted"
+assert_output_equals "echo \"\$PN_SHELL_MESSAGE\"" "a finding" "message extracted"
 
-test_case "pn_evaluate_detection: 2xx + valid JSON but missing Decision -> fails closed to block"
-http_post_multipart_form() {
-  echo '{"Message":"unexpected shape"}'
-  echo "200"
-}
-pn_evaluate_detection "https://example.invalid/api/v1/detections/evaluate" "tok" "5" \
-  "git.push" "cursor-plugin" "/repo" "" "" "" "git push origin main"
-assert_output_equals "echo \"\$PN_DETECTION_STATUS\"" "ok" "status is still ok (valid JSON, valid HTTP)"
-assert_output_equals "echo \"\$PN_DETECTION_DECISION\"" "block" "an unrecognized shape defaults to block, not allow"
-
-test_case "pn_evaluate_detection: non-2xx status -> http_error"
+test_case "pn_plugin_before_shell_execution: non-2xx status -> http_error"
 http_post_multipart_form() {
   echo '{"error":"unauthorized"}'
   echo "401"
 }
-pn_evaluate_detection "https://example.invalid/api/v1/detections/evaluate" "tok" "5" \
+pn_plugin_before_shell_execution "https://example.invalid" "tok" "5" "session-1" \
   "git.push" "cursor-plugin" "/repo" "" "" "" "git push origin main"
-assert_output_equals "echo \"\$PN_DETECTION_STATUS\"" "http_error" "status is http_error"
-assert_output_equals "echo \"\$PN_DETECTION_HTTP_STATUS\"" "401" "http status captured"
+assert_output_equals "echo \"\$PN_SHELL_STATUS\"" "http_error" "status is http_error"
+assert_output_equals "echo \"\$PN_SHELL_HTTP_STATUS\"" "401" "http status captured"
 
-test_case "pn_evaluate_detection: invalid JSON body on 2xx -> invalid_json"
+test_case "pn_plugin_before_shell_execution: invalid JSON body on 2xx -> invalid_json"
 http_post_multipart_form() {
   echo 'not json'
   echo "200"
 }
-pn_evaluate_detection "https://example.invalid/api/v1/detections/evaluate" "tok" "5" \
+pn_plugin_before_shell_execution "https://example.invalid" "tok" "5" "session-1" \
   "git.push" "cursor-plugin" "/repo" "" "" "" "git push origin main"
-assert_output_equals "echo \"\$PN_DETECTION_STATUS\"" "invalid_json" "status is invalid_json"
+assert_output_equals "echo \"\$PN_SHELL_STATUS\"" "invalid_json" "status is invalid_json"
 
-test_case "pn_evaluate_detection: curl timeout (exit 28) -> timeout"
+test_case "pn_plugin_before_shell_execution: curl timeout (exit 28) -> timeout"
 http_post_multipart_form() { return 28; }
-pn_evaluate_detection "https://example.invalid/api/v1/detections/evaluate" "tok" "5" \
+pn_plugin_before_shell_execution "https://example.invalid" "tok" "5" "session-1" \
   "git.push" "cursor-plugin" "/repo" "" "" "" "git push origin main"
-assert_output_equals "echo \"\$PN_DETECTION_STATUS\"" "timeout" "status is timeout"
+assert_output_equals "echo \"\$PN_SHELL_STATUS\"" "timeout" "status is timeout"
 
-test_case "pn_evaluate_detection: curl connection failure -> unreachable"
+test_case "pn_plugin_before_shell_execution: curl connection failure -> unreachable"
 http_post_multipart_form() { return 7; }
-pn_evaluate_detection "https://example.invalid/api/v1/detections/evaluate" "tok" "5" \
+pn_plugin_before_shell_execution "https://example.invalid" "tok" "5" "session-1" \
   "git.push" "cursor-plugin" "/repo" "" "" "" "git push origin main"
-assert_output_equals "echo \"\$PN_DETECTION_STATUS\"" "unreachable" "status is unreachable"
+assert_output_equals "echo \"\$PN_SHELL_STATUS\"" "unreachable" "status is unreachable"
+
+test_case "pn_plugin_before_shell_execution: posts Action=before_shell_execution/EventType/Command as multipart form"
+captured_args_file="$TEST_TEMP_DIR/captured-before-shell-args.txt"
+http_post_multipart_form() {
+  shift 3
+  printf '%s\n' "$@" > "$captured_args_file"
+  echo '{"action_to_take":"allow"}'
+  echo "200"
+}
+pn_plugin_before_shell_execution "https://example.invalid" "tok" "5" "session-1" \
+  "git.commit" "cursor-plugin" "/repo" "github.com/org/repo" "main" "" "git commit -m x"
+assert_output_contains "cat '$captured_args_file'" "Action=before_shell_execution" "Action encoded correctly"
+assert_output_contains "cat '$captured_args_file'" "EventType=git.commit" "EventType encoded correctly"
+assert_output_contains "cat '$captured_args_file'" "Command=git commit -m x" "Command encoded correctly"
+assert_output_contains "cat '$captured_args_file'" "GitRepoUrl=github.com/org/repo" "GitRepoUrl encoded correctly"
 
 unset -f http_post_multipart_form
 source "$SCRIPTS_DIR/lib/common.sh"
@@ -152,6 +157,12 @@ result=$(echo 'not json' | "$SCRIPTS_DIR/check-git-event.sh" git.push)
 assert_json_field_equals "$result" "permission" "allow" "permission is allow"
 assert_json_has_key "$result" "user_message" "has user_message"
 
+test_case "check-git-event.sh: git.pr_create -> allow, short-circuits before any file-collection or network work"
+pr_repo=$(make_test_git_repo "pr-create-shortcircuit")
+payload=$("$JQ_BIN" -n --arg cwd "$pr_repo" --arg command "gh pr create --title x" '{command: $command, cwd: $cwd}')
+result=$(echo "$payload" | "$SCRIPTS_DIR/check-git-event.sh" git.pr_create)
+assert_json_field_equals "$result" "permission" "allow" "permission is allow -- git.pr_create is never scanned pre-execution (design doc §2.1)"
+
 test_case "check-git-event.sh: unrecognized EventType -> allow"
 git_repo=$(make_test_git_repo "unrecognized-event")
 payload=$("$JQ_BIN" -n --arg cwd "$git_repo" --arg command "aws s3 cp x s3://y" '{command: $command, cwd: $cwd}')
@@ -165,9 +176,17 @@ payload=$("$JQ_BIN" -n --arg cwd "$non_repo" --arg command "git push origin main
 result=$(echo "$payload" | "$SCRIPTS_DIR/check-git-event.sh" git.push)
 assert_json_field_equals "$result" "permission" "allow" "permission is allow"
 
-test_case "check-git-event.sh: git.commit with nothing staged -> allow (nothing to scan)"
-commit_repo=$(make_test_git_repo "nothing-staged")
+test_case "check-git-event.sh: no session id on payload -> allow (nothing to scope the call to server-side)"
+commit_repo=$(make_test_git_repo "no-session-commit")
+echo "staged" > "$commit_repo/staged.txt"
+git -C "$commit_repo" add staged.txt
 payload=$("$JQ_BIN" -n --arg cwd "$commit_repo" --arg command "git commit -m x" '{command: $command, cwd: $cwd}')
+result=$(echo "$payload" | "$SCRIPTS_DIR/check-git-event.sh" git.commit)
+assert_json_field_equals "$result" "permission" "allow" "permission is allow"
+
+test_case "check-git-event.sh: git.commit with nothing staged -> allow (nothing to scan)"
+nothing_staged_repo=$(make_test_git_repo "nothing-staged")
+payload=$("$JQ_BIN" -n --arg cwd "$nothing_staged_repo" --arg session "session-1" --arg command "git commit -m x" '{command: $command, cwd: $cwd, conversation_id: $session}')
 result=$(echo "$payload" | "$SCRIPTS_DIR/check-git-event.sh" git.commit)
 assert_json_field_equals "$result" "permission" "allow" "permission is allow"
 
@@ -176,7 +195,7 @@ push_repo=$(make_test_git_repo "not-configured-push")
 echo "change" > "$push_repo/change.txt"
 git -C "$push_repo" add change.txt
 git -C "$push_repo" commit -q -m "change"
-payload=$("$JQ_BIN" -n --arg cwd "$push_repo" --arg command "git push origin main" '{command: $command, cwd: $cwd}')
+payload=$("$JQ_BIN" -n --arg cwd "$push_repo" --arg session "session-1" --arg command "git push origin main" '{command: $command, cwd: $cwd, conversation_id: $session}')
 result=$(echo "$payload" | "$SCRIPTS_DIR/check-git-event.sh" git.push)
 assert_json_field_equals "$result" "permission" "deny" "permission is deny (fail-closed default, matching check-write.sh)"
 assert_json_has_key "$result" "agent_message" "has agent_message"
@@ -185,6 +204,14 @@ test_case "check-git-event.sh: git.push not configured, FAILURE_MODE=open -> all
 result=$(PARADIGM_NETWORKS_FAILURE_MODE=open bash -c "echo '$payload' | '$SCRIPTS_DIR/check-git-event.sh' git.push")
 assert_json_field_equals "$result" "permission" "allow" "permission is allow"
 assert_json_has_key "$result" "user_message" "has user_message"
+
+test_case "check-git-event.sh: git.commit not configured, default FAILURE_MODE -> deny (git.commit is now enforced, not a stub)"
+commit_enforce_repo=$(make_test_git_repo "not-configured-commit")
+echo "change" > "$commit_enforce_repo/change.txt"
+git -C "$commit_enforce_repo" add change.txt
+payload=$("$JQ_BIN" -n --arg cwd "$commit_enforce_repo" --arg session "session-1" --arg command "git commit -m x" '{command: $command, cwd: $cwd, conversation_id: $session}')
+result=$(echo "$payload" | "$SCRIPTS_DIR/check-git-event.sh" git.commit)
+assert_json_field_equals "$result" "permission" "deny" "permission is deny -- git.commit now gets real enforcement, same as git.push (design doc §0/item 8, §2.1)"
 
 test_summary
 exit $?

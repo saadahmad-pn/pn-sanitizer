@@ -67,7 +67,7 @@ fi
 echo ""
 
 # Test Suite 2b: Git Event Detection Tests (lib/git-utils.sh resolvers,
-# lib/detection-client.sh, check-git-event.sh)
+# lib/plugins-client.sh's before_shell_execution gating, check-git-event.sh)
 echo -e "${BLUE}[3/7]${NC} Running Git Event Detection Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-git-event.sh" > /tmp/git-event-test.log 2>&1
@@ -86,8 +86,8 @@ else
 fi
 echo ""
 
-# Test Suite 3b: Code Chain Recording Tests (lib/codechain-client.sh,
-# get_current_turn_messages)
+# Test Suite 3b: Code Chain Recording Tests (lib/plugins-client.sh's
+# session-lifecycle + after_* recording functions, get_current_turn_messages)
 echo -e "${BLUE}[4/7]${NC} Running Code Chain Recording Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-codechain-client.sh" > /tmp/codechain-client-test.log 2>&1
@@ -106,8 +106,8 @@ else
 fi
 echo ""
 
-# Test Suite 4b: Scan Client Tests (lib/scan-client.sh, the
-# POST /api/v1/codedefense/scan client used by check-prompt.sh/check-write.sh)
+# Test Suite 4b: Scan Client Tests (lib/plugins-client.sh's before_prompt/
+# before_tool_call gating, used by check-prompt.sh/check-tool-call.sh)
 echo -e "${BLUE}[5/7]${NC} Running Scan Client Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-scan-client.sh" > /tmp/scan-client-test.log 2>&1
@@ -186,10 +186,10 @@ if [[ $TOTAL_FAILED -eq 0 ]]; then
   echo ""
   echo "Test Coverage:"
   echo "  • Unit Tests:              ${unit_total} assertions (lib/common.sh, lib/git-utils.sh, pn_config.sh)"
-  echo "  • Integration Tests:       ${int_total} tests (check-session.sh, check-prompt.sh, check-write.sh, check-repo-context.sh)"
-  echo "  • Git Event Detection:     ${gitevent_total} tests (git-utils resolvers, detection-client.sh, check-git-event.sh)"
-  echo "  • Code Chain Recording:    ${codechain_total} tests (codechain-client.sh, get_current_turn_messages)"
-  echo "  • Scan Client:             ${scan_total} tests (scan-client.sh, POST /api/v1/codedefense/scan)"
+  echo "  • Integration Tests:       ${int_total} tests (check-session.sh, check-prompt.sh, check-tool-call.sh)"
+  echo "  • Git Event Detection:     ${gitevent_total} tests (git-utils resolvers, lib/plugins-client.sh, check-git-event.sh)"
+  echo "  • Code Chain Recording:    ${codechain_total} tests (lib/plugins-client.sh, get_current_turn_messages)"
+  echo "  • Scan Client:             ${scan_total} tests (lib/plugins-client.sh gating, POST /api/v1/plugins/sessions/{id}/*)"
   echo "  • Error Scenarios:         ${err_total} tests (edge cases, malformed input, file system errors)"
   echo ""
   echo "Dependencies:"

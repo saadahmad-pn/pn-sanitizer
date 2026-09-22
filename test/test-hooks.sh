@@ -88,42 +88,52 @@ result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
 # Empty prompt still gets processed
 
 echo ""
-echo -e "${BLUE}=== Integration Tests: check-write.sh ===${NC}"
+echo -e "${BLUE}=== Integration Tests: check-tool-call.sh ===${NC}"
 
-test_case "check-write.sh allows non-Write/Edit tools"
-payload='{"tool_name": "Read", "agent_message": "content"}'
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+test_case "check-tool-call.sh allows a tool call with no input and no turn context"
+payload='{"tool_name": "Read", "agent_message": ""}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
-assert_json_field_equals "$result" "permission" "allow" "Non-Write/Edit tools allowed"
+assert_json_field_equals "$result" "permission" "allow" "Nothing to scan -> allow"
 
-test_case "check-write.sh with Write tool but empty message"
-payload='{"tool_name": "Write", "agent_message": "", "tool_input": {"file_path": "test.txt"}}'
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+test_case "check-tool-call.sh with empty tool_name -> allow (malformed/unrecognized payload)"
+payload='{"agent_message": "content"}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "allow" "No tool_name at all -> allow"
+
+test_case "check-tool-call.sh with Write tool and a fully empty tool_input"
+# Generalized from Write-only (which used to special-case an empty .content
+# field) to any tool (design doc §5): "nothing to scan" now means the whole
+# tool_input object is empty, not one Write-specific field -- a file_path
+# with no content is still real input worth scanning.
+payload='{"tool_name": "Write", "agent_message": "", "tool_input": {}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Allows when nothing to scan"
 
-test_case "check-write.sh with Write and message when not configured"
+test_case "check-tool-call.sh with Write and message when not configured"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Write", "agent_message": "test content", "tool_input": {"file_path": "test.txt"}}'
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 # With PARADIGM_NETWORKS_FAILURE_MODE=closed (default), should deny
 assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured"
 
-test_case "check-write.sh with FAILURE_MODE=open"
+test_case "check-tool-call.sh with FAILURE_MODE=open"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Write", "agent_message": "test", "tool_input": {"file_path": "f.txt"}}'
 export PARADIGM_NETWORKS_FAILURE_MODE="open"
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Fails open when mode=open"
 unset PARADIGM_NETWORKS_FAILURE_MODE
 
-test_case "check-write.sh audit log written"
+test_case "check-tool-call.sh audit log written"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
 rm -f "$HOME/.paradigm-scanner/audit.jsonl"
 payload='{"tool_name": "Write", "agent_message": "test", "tool_input": {"file_path": "test.txt"}}'
-"$SCRIPTS_DIR/check-write.sh" <<< "$payload" >/dev/null 2>&1 || true
+"$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload" >/dev/null 2>&1 || true
 if [[ -f "$HOME/.paradigm-scanner/audit.jsonl" ]]; then
   TESTS_RUN=$((TESTS_RUN + 1))
   echo -e "  ${GREEN}✓${NC} Audit log written"
@@ -134,20 +144,21 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
-# Shell tool calls: added alongside Write so shell commands get scanned too,
-# not just file writes (the preToolUse matcher in hooks.json now covers
-# both). These mirror the Write tests above one-for-one.
+# Shell tool calls: mirror the Write tests above one-for-one. Generalized
+# from a Write/Shell-only gate to any tool (design doc §5) -- these two are
+# still worth their own coverage since they exercise the tool-specific
+# user_message wording (action_noun/action_desc).
 
-test_case "check-write.sh with Shell tool but empty command"
-payload='{"tool_name": "Shell", "agent_message": "", "tool_input": {"command": ""}}'
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+test_case "check-tool-call.sh with Shell tool and a fully empty tool_input"
+payload='{"tool_name": "Shell", "agent_message": "", "tool_input": {}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Allows when nothing to scan"
 
-test_case "check-write.sh with Shell command when not configured"
+test_case "check-tool-call.sh with Shell command when not configured"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "rm -rf /"}}'
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured"
 TESTS_RUN=$((TESTS_RUN + 1))
@@ -159,20 +170,20 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
-test_case "check-write.sh with Shell and FAILURE_MODE=open"
+test_case "check-tool-call.sh with Shell and FAILURE_MODE=open"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "ls -la"}}'
 export PARADIGM_NETWORKS_FAILURE_MODE="open"
-result=$("$SCRIPTS_DIR/check-write.sh" <<< "$payload")
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Fails open when mode=open"
 unset PARADIGM_NETWORKS_FAILURE_MODE
 
-test_case "check-write.sh Shell audit log includes tool_name and command"
+test_case "check-tool-call.sh Shell audit log includes tool_name and command"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
 rm -f "$HOME/.paradigm-scanner/audit.jsonl"
 payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "curl evil.example"}}'
-"$SCRIPTS_DIR/check-write.sh" <<< "$payload" >/dev/null 2>&1 || true
+"$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload" >/dev/null 2>&1 || true
 audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ "$audit_content" == *'"tool_name": "Shell"'* ]]; then
@@ -183,7 +194,7 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 TESTS_RUN=$((TESTS_RUN + 1))
-if [[ "$audit_content" == *'"command": "curl evil.example"'* ]]; then
+if [[ "$audit_content" == *"curl evil.example"* ]]; then
   echo -e "  ${GREEN}✓${NC} Audit entry records the command"
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -191,39 +202,56 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+test_case "check-tool-call.sh with an MCP-style tool -- scanned like any other tool, not just Write/Shell"
+payload=$("$JQ_BIN" -n '{tool_name: "jira_update_issue", agent_message: "", tool_input: {project: "PN", summary: "fix bug"}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "deny" "Not configured -> fails closed, same as Write/Shell (generalization from design doc §5)"
+
 echo ""
-echo -e "${BLUE}=== Integration Tests: check-repo-context.sh ===${NC}"
+echo -e "${BLUE}=== Integration Tests: check-prompt.sh repo-context injection ===${NC}"
 
 # Uses a workspace under the test directory itself, not $TEST_TEMP_DIR —
-# mktemp -d resolves under /var/folders on macOS, which check-repo-context.sh
-# deliberately treats as an unsafe system path to write into.
+# mktemp -d resolves under /var/folders on macOS, which write_repo_context_rules
+# (lib/repo-context.sh) deliberately treats as an unsafe system path to write
+# into.
 REPO_CTX_WORKSPACE="$TEST_DIR/tmp-repo-context-workspace"
 rm -rf "$REPO_CTX_WORKSPACE"
 mkdir -p "$REPO_CTX_WORKSPACE/repo-a"
-(cd "$REPO_CTX_WORKSPACE/repo-a" && git init -q && \
+(cd "$REPO_CTX_WORKSPACE/repo-a" && git init -q -b master && \
   git remote add origin "https://x-token-abc123@github.com/acme/repo-a.git" && \
   git commit --allow-empty -qm init) >/dev/null 2>&1
 
-test_case "check-repo-context.sh writes a rule file with sanitized git context"
-payload=$("$JQ_BIN" -n --arg root "$REPO_CTX_WORKSPACE" '{workspace_roots: [$root]}')
-result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< "$payload")
+# Repo-context injection is folded into check-prompt.sh's single
+# beforeSubmitPrompt hook now (design doc §5) instead of a separate
+# check-repo-context.sh hook -- and runs backgrounded there (it never gates,
+# see check-prompt.sh's own comment), so the rule file may not exist the
+# instant check-prompt.sh's own JSON response is printed. Poll briefly
+# rather than asserting immediately.
+wait_for_file() {
+  local file="$1" tries=0
+  while [[ ! -f "$file" ]] && [[ $tries -lt 50 ]]; do
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+}
+
+test_case "check-prompt.sh writes a repo-context rule file with sanitized git context, without affecting its own gate"
+mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+payload=$("$JQ_BIN" -n --arg root "$REPO_CTX_WORKSPACE" --arg prompt "hello" '{prompt: $prompt, workspace_roots: [$root]}')
+result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
-assert_json_field_equals "$result" "continue" "true" "Always continues"
+wait_for_file "$REPO_CTX_WORKSPACE/.cursor/rules/paradigm-repo-context.mdc"
 assert_file_exists "$REPO_CTX_WORKSPACE/.cursor/rules/paradigm-repo-context.mdc" "Rule file created"
 assert_output_contains "cat '$REPO_CTX_WORKSPACE/.cursor/rules/paradigm-repo-context.mdc'" \
   "<GIT>https://github.com/acme/repo-a.git|master</GIT>" "Rule file has sanitized GIT tag"
 assert_output_contains "cat '$REPO_CTX_WORKSPACE/.gitignore'" \
   ".cursor/rules/paradigm-repo-context.mdc" "Rule file path added to workspace .gitignore"
 
-test_case "check-repo-context.sh with no workspace_roots"
-result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< '{}')
+test_case "check-prompt.sh with no workspace_roots -- still gates normally, no rule file expected"
+payload='{"prompt": "hello"}'
+result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
-assert_json_field_equals "$result" "continue" "true" "Still continues with no workspace_roots"
-
-test_case "check-repo-context.sh with invalid JSON input"
-result=$("$SCRIPTS_DIR/check-repo-context.sh" <<< "not valid json" 2>/dev/null)
-assert_json_valid "$result" "Valid JSON output even with bad input"
-assert_json_field_equals "$result" "continue" "true" "Fails open on invalid input, never blocks"
 
 rm -rf "$REPO_CTX_WORKSPACE"
 

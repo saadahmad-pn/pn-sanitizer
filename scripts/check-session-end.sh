@@ -18,7 +18,7 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/lib/common.sh"
-source "$SCRIPT_DIR/lib/codechain-client.sh"
+source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-5}"
@@ -43,7 +43,7 @@ main() {
   local base_url access_token
   read -r base_url access_token <<<"$config"
 
-  pn_close_codechain_session "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" "$client_session_id"
+  pn_close_plugin_session "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" "$client_session_id"
   return 0
 }
 
