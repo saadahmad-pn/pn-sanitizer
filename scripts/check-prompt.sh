@@ -83,9 +83,21 @@ main() {
   # Extract session id + cwd (for the scan call's chatapi join and context
   # -- see lib/scan-client.sh's header) and derive git context from cwd the
   # same way every other hook here does (check-turn-complete.sh et al).
-  local client_session_id cwd git_repo_url="" git_branch=""
+  local client_session_id cwd git_repo_url="" git_branch="" generation_id model
   client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
   cwd=$(echo "$payload" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
+  # Cursor's own generation_id -- changes per user turn, unlike
+  # conversation_id. Lets control-server match this prompt scan to the
+  # exact turn it belongs to -- see lib/scan-client.sh's header.
+  generation_id=$(echo "$payload" | "$JQ_BIN" -r '.generation_id // ""')
+  # Cursor's own hook-reported model name -- stored on the chatapi document
+  # so it's known which model this prompt was scanned/sent against.
+  # model_id ("Structured ID for the selected model, when available", per
+  # Cursor's hooks docs) is preferred over the legacy model slug -- see
+  # resolve_hook_model's header comment in lib/common.sh.
+  model_id=$(echo "$payload" | "$JQ_BIN" -r '.model_id // ""')
+  model_legacy=$(echo "$payload" | "$JQ_BIN" -r '.model // ""')
+  model=$(resolve_hook_model "$model_id" "$model_legacy")
   if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
     git_repo_url=$(get_remote_url_or_empty "$cwd")
     git_branch=$(get_current_branch_or_empty "$cwd")
@@ -112,7 +124,7 @@ main() {
   # /v1/messages zero-usage/banner-text heuristic. Called as a plain
   # statement, not $(...): it sets PN_SCAN_* as globals in this shell, same
   # contract as http_post_split_status above.
-  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt"
+  pn_scan_text "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "prompt" "" "$generation_id" "$model"
 
   # These four failure states happen only after pn_resolve_config already
   # succeeded (the user is logged in), so it's safe to honor

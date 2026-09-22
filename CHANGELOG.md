@@ -4,6 +4,196 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-22 — Prefer Cursor's structured model_id over the legacy model slug
+
+Follow-up to the "unknown" placeholder fix below: stripping the placeholder
+left `Model` genuinely empty, which is correct but not as useful as actually
+resolving the model when possible. Cursor's hooks docs (fetched directly)
+document a second, separate base field: `model` is "Legacy model slug
+configured for the composer" while `model_id` is "Structured ID for the
+selected model, when available" — a newer, more reliable field this plugin
+was never extracting at all.
+
+What changed:
+- `lib/common.sh`/`.ps1`: new `resolve_hook_model`/`Resolve-HookModel`
+  helper — prefers `model_id` when present, falls back to the legacy
+  `model` slug when it's absent (older Cursor builds), then passes
+  whichever value was chosen through `normalize_hook_model` (either field
+  could in principle carry the "unknown" placeholder).
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`,
+  `check-turn-complete.sh`/`.ps1`: all three now extract both `.model_id`
+  and `.model` and combine them via the new helper, instead of reading
+  `.model` alone.
+- `test/test-unit.sh`: new assertions for `resolve_hook_model` (prefers
+  model_id, falls back to legacy model, normalizes "unknown" regardless of
+  which field it came from, both-absent stays empty).
+
+Not yet empirically confirmed whether `model_id` actually resolves to a real
+value in the specific case (Auto model mode, apparently) where the legacy
+`model` field sent "unknown" — the server's raw-payload debug logging from
+the prior entry is still in place, so the next live session will show
+whether this closes the gap or whether `model_id` is _also_ absent/unknown
+under Auto mode, in which case there may be no resolvable value to report at
+all for that mode.
+
+Verified: `bash test/run-all-tests.sh` — 225/226 (same pre-existing
+`check-repo-context.sh` flake, unrelated). `shellcheck -S warning -x
+scripts/*.sh scripts/lib/*.sh` clean (same pre-existing SC2034 pattern only).
+PowerShell changes were NOT executed/tested — `pwsh` is unavailable in this
+environment; reviewed by hand against the `.sh` twin for structural/logical
+parity.
+
+## 2026-09-22 — Normalize Cursor's "unknown" model placeholder to empty
+
+`chatapi` documents were showing `RequestPayload.Model`/`ResponsePayload.Model`
+as the literal string `"unknown"` instead of a real model name or a genuinely
+empty field. Confirmed via control-server's temporary raw-payload debug
+logging: Cursor's own `afterAgentResponse` hook payload sends
+`"model":"unknown"` verbatim when the model hasn't resolved yet at hook-fire
+time (e.g. Auto model mode) — not something introduced by this plugin's `.model`
+extraction or by control-server's persistence path (both audited end-to-end,
+no `"unknown"` literal found anywhere in either). Since Cursor is the source
+of the value, the fix belongs here, at the point where we read it.
+
+What changed:
+- `lib/common.sh`/`.ps1`: new `normalize_hook_model`/`ConvertTo-NormalizedHookModel`
+  helper — case-insensitively strips a `"unknown"` model value down to empty
+  string, so it's treated the same as "not reported" rather than persisted as
+  if it were a real model identifier.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`, `check-turn-complete.sh`/`.ps1`:
+  all three now pass the extracted `.model` value through this helper before
+  sending it on.
+- `test/test-unit.sh`: new assertions for `normalize_hook_model` (case
+  insensitivity, real model names pass through unchanged, already-empty stays
+  empty).
+
+Verified: `bash test/run-all-tests.sh` — 220/221 (same pre-existing
+`check-repo-context.sh` flake noted in the entry below, unrelated — confirmed
+by re-running with this change stashed, same single failure). PowerShell
+changes were NOT executed/tested — `pwsh` is unavailable in this environment;
+reviewed by hand against the `.sh` twin for structural/logical parity.
+
+## 2026-09-22 — Send Cursor's hook-reported model name so chatapi records which model ran
+
+`chatapi` documents for plugin-hooks turns were storing prompt/response text
+but not which model produced them — `RequestPayload.Model`/
+`ResponsePayload.Model` were left blank, unlike every other vendor here.
+Cursor's hook payloads carry `.model` (the base envelope confirmed in the
+design doc's hook research), so every hook script now extracts it and sends
+it through alongside the prompt/response.
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`, `lib/codechain-client.sh`/`.ps1`:
+  `pn_scan_text`/`Invoke-PnScanText` and `pn_record_codechain_turn`/
+  `Send-CodechainTurn` take a new optional trailing `model`/`-Model`
+  parameter, sent as `Model` in the request body.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`,
+  `check-turn-complete.sh`/`.ps1`: all extract `.model` from the hook
+  payload (falls back to empty when absent) and pass it through.
+- `test/test-scan-client.sh`, `test/test-codechain-client.sh`: new
+  assertions that `Model` is encoded correctly when passed, and defaults to
+  an empty string when omitted.
+
+Verified: `bash test/run-all-tests.sh` — 215/216 (same pre-existing
+`check-repo-context.sh` flake noted below, unrelated). `shellcheck -S
+warning -x scripts/*.sh scripts/lib/*.sh` clean (same pre-existing SC2034
+pattern only, same files). PowerShell changes were NOT executed/tested —
+`pwsh` is unavailable in this environment; reviewed by hand against the
+`.sh` twin for structural/logical parity.
+
+The control-server side (Model now stamped on both RequestPayload and
+ResponsePayload at every plugin-hooks turn/scan persist point, and
+ResponsePayload.ID now incorporates GenerationId instead of being the same
+literal string for every turn of a session) is covered by control-server's
+own Go test suite; see that repo's history for this same date.
+
+## 2026-09-22 — Send Cursor's generation_id so prompt/response correlation isn't a guess
+
+The scan/turn merge added 2026-09-21 (below) correlates a prompt-scan
+document with its eventual turn response by asking control-server for
+"whichever prompt-scan is most recently open for this session" — correct in
+the overwhelming common case (Cursor runs one turn at a time per
+conversation) but still a guess from insertion order, not a real key. Cursor
+hook payloads carry `generation_id`, which changes per user turn (unlike
+`conversation_id`, stable for the whole chat) — this is exactly the precise
+correlator the earlier design doc research had already flagged as
+"confirmed reliable" but left unused. Every hook script now extracts it and
+sends it through, so control-server can match a scan to its turn exactly
+instead of relying on ordering when a value is present, falling back to the
+old heuristic only when it isn't (older Cursor builds, or a hook type that
+doesn't expose it).
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`: `pn_scan_text`/`Invoke-PnScanText` take a new
+  optional trailing `generation_id`/`-GenerationId` parameter, sent as
+  `GenerationId` in the request body.
+- `lib/codechain-client.sh`/`.ps1`: `pn_record_codechain_turn`/
+  `Send-CodechainTurn` take the same new parameter.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`, `check-turn-complete.sh`/
+  `.ps1`: all extract `.generation_id` from the hook payload (falls back to
+  empty when absent — never assumed present) and pass it through to the
+  scan/turn call.
+- `test/test-scan-client.sh`, `test/test-codechain-client.sh`: new cases
+  asserting `GenerationId` is encoded correctly when passed, and defaults to
+  an empty string when omitted.
+
+Verified: `bash test/run-all-tests.sh` — 211/212 (the same pre-existing
+`check-repo-context.sh` flake noted below, unrelated). `shellcheck -S
+warning -x scripts/*.sh scripts/lib/*.sh` clean (same pre-existing SC2034
+pattern only). PowerShell changes were NOT executed/tested — `pwsh` is
+unavailable in this environment; reviewed by hand against the `.sh` twin for
+structural/logical parity.
+
+The control-server side of this (Model.go's new `GenerationId` field,
+`FindOpenPluginTurn`'s exact-match filter when non-empty, and a new
+LIFECYCLE/PromptGuard/PolicyEngine/CodeDefense observability trace on the
+composite scan endpoint mirroring `/v1/messages`' own OS tracing — so
+plugin-hooks scan verdicts now show up in Threat Landscape/Top Agents) is
+covered by control-server's own Go test suite; see that repo's history for
+this same date.
+
+## 2026-09-21 — Tag scan calls as prompt vs. tool_call so control-server can merge them
+
+`check-prompt.sh`/`check-write.sh` now pass a `Kind` (`"prompt"` or
+`"tool_call"`) and, for tool calls, a `ToolName` (`"Write"`/`"Shell"`) on
+every scan call. This is the client half of a control-server fix for a real
+duplication: a submitted prompt and its eventual response used to persist
+as two separate chatapi documents for the same logical turn (the
+`beforeSubmitPrompt` scan created one, `afterAgentResponse`'s turn recording
+created another), and every Write/Shell tool-call scan created its own
+standalone document too, unrelated to the turn it happened inside. With
+`Kind` now on the wire, control-server folds a tool-call scan into whichever
+prompt-scan document is currently open for the session, and the eventual
+turn recording updates that same document in place (adding the response)
+instead of inserting a sibling one — one chatapi document per turn, prompt
++ response + any tool calls together, matching how every other vendor here
+already records a turn.
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`: `pn_scan_text`/`Invoke-PnScanText` take two
+  new optional trailing parameters (`kind`, `tool_name` / `-Kind`,
+  `-ToolName`), sent as `Kind`/`ToolName` in the request body. Omitting them
+  (existing callers) sends empty strings, which control-server treats as
+  `"prompt"` — fully backward compatible.
+- `check-prompt.sh`/`.ps1`: passes `Kind="prompt"` explicitly.
+- `check-write.sh`/`.ps1`: passes `Kind="tool_call"` and the scanned tool's
+  own name (`Write`/`Shell`) as `ToolName`.
+- `test/test-scan-client.sh`: two new cases asserting `Kind`/`ToolName` are
+  encoded correctly when passed, and default to empty strings when omitted.
+
+Verified: `bash test/run-all-tests.sh` — 207/208 (the same pre-existing
+`check-repo-context.sh` flake noted in the entry below, unrelated to this
+change). `shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` clean
+(same pre-existing SC2034 pattern only). PowerShell changes were NOT
+executed/tested — `pwsh` is unavailable in this environment; reviewed by
+hand against the `.sh` twin for structural/logical parity. The
+control-server merge logic itself (`FindOpenPluginTurn`,
+`persistScanResult`/`mergeScanIntoOpenTurn`, `recordTurnHandler`'s
+update-in-place path) and the `Source` field being populated on every
+plugin-hooks chatapi document (previously left at its zero value) are
+covered by control-server's own Go test suite — see that repo's history for
+this same date.
+
 ## 2026-09-21 — Scan via the composite PromptGuard+PolicyEngine+CDS endpoint
 
 `check-prompt.sh`/`check-write.sh` now scan through control-server's new

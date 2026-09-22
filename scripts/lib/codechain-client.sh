@@ -59,10 +59,22 @@ pn_register_codechain_session() {
 }
 
 # pn_record_codechain_turn <base_url> <access_token> <timeout> <session_id>
-#   <cwd> <git_repo_url> <git_branch> <prompt> <response>
+#   <cwd> <git_repo_url> <git_branch> <prompt> <response> [generation_id] [model]
+#
+# generation_id is Cursor's own generation_id, when the hook payload carried
+# one -- lets control-server match this response to the EXACT prompt-scan
+# document it belongs to (see lib/scan-client.sh's header) instead of
+# guessing from insertion order. Omit for callers that don't have one; the
+# server falls back to its own heuristic.
+#
+# model is Cursor's own hook-reported model name (the hook payload's
+# `.model` field) -- the model that actually produced this response. Stored
+# on both RequestPayload and ResponsePayload server-side. Omit when
+# unavailable.
 pn_record_codechain_turn() {
   local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
   local cwd="$5" git_repo_url="$6" git_branch="$7" prompt="$8" response="$9"
+  local generation_id="${10:-}" model="${11:-}"
 
   [[ -z "$session_id" ]] && return 0
   [[ -z "$base_url" ]] && return 0
@@ -79,7 +91,9 @@ pn_record_codechain_turn() {
     --arg gitBranch "$git_branch" \
     --arg prompt "$prompt" \
     --arg response "$response" \
-    '{Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Prompt: $prompt, Response: $response}')
+    --arg generationId "$generation_id" \
+    --arg model "$model" \
+    '{Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Prompt: $prompt, Response: $response, GenerationId: $generationId, Model: $model}')
 
   local url="${base_url%/}/api/v1/plugin/codechain/sessions/${session_id}/turns"
   local raw

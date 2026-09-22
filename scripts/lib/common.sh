@@ -96,6 +96,45 @@ json_merge() {
   echo "$json1" "$json2" | "$JQ_BIN" -s '.[0] * .[1]'
 }
 
+# normalize_hook_model strips Cursor's own "unknown" placeholder (sent
+# verbatim on its .model hook field when the model hasn't resolved yet at
+# hook-fire time -- e.g. Auto model mode) down to an empty string, so it
+# reads as genuinely absent rather than being sent to control-server and
+# persisted in the chatapi collection as if "unknown" were a real model
+# identifier. Case-insensitive since Cursor's own casing for this value is
+# not documented/guaranteed. Confirmed via control-server's raw-payload debug
+# logging (2026-09-22): a real afterAgentResponse payload carried
+# "model":"unknown" -- this is Cursor's own value, not something introduced
+# by this plugin's extraction, so the fix belongs at the point where we read
+# it, not on the server.
+normalize_hook_model() {
+  local model="$1"
+  case "$model" in
+    [Uu][Nn][Kk][Nn][Oo][Ww][Nn])
+      printf ''
+      ;;
+    *)
+      printf '%s' "$model"
+      ;;
+  esac
+}
+
+# resolve_hook_model picks the best available model identifier from a
+# Cursor hook payload: model_id (Cursor's docs: "Structured ID for the
+# selected model, when available" -- optional, newer) when present, falling
+# back to model (Cursor's docs: "Legacy model slug configured for the
+# composer") when model_id is absent -- e.g. an older Cursor build that
+# doesn't send it yet. Whichever value is chosen is passed through
+# normalize_hook_model, since either field could in principle carry the
+# "unknown" placeholder.
+resolve_hook_model() {
+  local model_id="$1"
+  local legacy_model="$2"
+  local chosen="$model_id"
+  [[ -z "$chosen" ]] && chosen="$legacy_model"
+  normalize_hook_model "$chosen"
+}
+
 # HTTP helpers
 
 http_post() {

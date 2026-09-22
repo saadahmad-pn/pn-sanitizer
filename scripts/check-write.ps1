@@ -110,6 +110,16 @@ try {
     $roots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
     if ($roots.Count -gt 0) { $cwd = $roots[0] }
   }
+  # Cursor's own generation_id -- changes per user turn, unlike
+  # conversation_id. See lib/scan-client.ps1's header.
+  $generationId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "generation_id" -Default "")
+  # Cursor's own hook-reported model name -- see lib/scan-client.ps1's header.
+  # ModelId ("Structured ID for the selected model, when available", per
+  # Cursor's hooks docs) is preferred over the legacy model slug -- see
+  # Resolve-HookModel's header comment in lib/common.ps1.
+  $modelId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "model_id" -Default "")
+  $modelLegacy = [string](Get-JsonProperty -InputObject $parsedPayload -Name "model" -Default "")
+  $model = Resolve-HookModel -ModelId $modelId -LegacyModel $modelLegacy
   $gitRepoUrl = ""
   $gitBranch = ""
   if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
@@ -167,8 +177,11 @@ try {
   Write-DebugLog -Message "Scanning write | base_url=$($config.BaseUrl) | scan_text_len=$($scanText.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
   $callStart = Get-Date
+  # "tool_call" (with the tool's own name) tells control-server to fold this
+  # scan into the session's currently-open prompt-scan document instead of
+  # persisting its own -- see lib/scan-client.ps1's header.
   $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds `
-    -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Text $scanText
+    -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Text $scanText -Kind "tool_call" -ToolName $toolName -GenerationId $generationId -Model $model
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
   Write-DebugLog -Message "Scan returned after ${elapsedMs}ms | Status=$($scanResult.Status) | Action=$($scanResult.Action)" -LogPath $DebugLogPath
 

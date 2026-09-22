@@ -52,19 +52,26 @@ function Send-CodechainTurn {
     [string]$GitRepoUrl = "",
     [string]$GitBranch = "",
     [string]$Prompt = "",
-    [string]$Response = ""
+    [string]$Response = "",
+    # Cursor's own generation_id, when the hook payload carried one -- see
+    # lib/codechain-client.sh's header.
+    [string]$GenerationId = "",
+    # Cursor's own hook-reported model name -- see lib/codechain-client.sh's header.
+    [string]$Model = ""
   )
   if (-not $SessionId) { return }
   if (-not $BaseUrl) { return }
   if (-not $Prompt -and -not $Response) { return }
 
   $bodyObj = [PSCustomObject]@{
-    Platform   = "cursor-hooks"
-    Cwd        = $Cwd
-    GitRepoUrl = $GitRepoUrl
-    GitBranch  = $GitBranch
-    Prompt     = $Prompt
-    Response   = $Response
+    Platform     = "cursor-hooks"
+    Cwd          = $Cwd
+    GitRepoUrl   = $GitRepoUrl
+    GitBranch    = $GitBranch
+    Prompt       = $Prompt
+    Response     = $Response
+    GenerationId = $GenerationId
+    Model        = $Model
   }
   $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-CompactJson -InputObject $bodyObj))
   $url = "$($BaseUrl.TrimEnd('/'))/api/v1/plugin/codechain/sessions/$SessionId/turns"

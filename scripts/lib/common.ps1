@@ -120,6 +120,40 @@ function Get-JsonProperty {
   return $Default
 }
 
+# ConvertTo-NormalizedHookModel -Model <string>
+# Mirrors common.sh's normalize_hook_model: strips Cursor's own "unknown"
+# placeholder (sent verbatim on its .model hook field when the model hasn't
+# resolved yet at hook-fire time -- e.g. Auto model mode) down to an empty
+# string, so it reads as genuinely absent rather than being persisted in the
+# chatapi collection as if "unknown" were a real model identifier.
+# Case-insensitive since Cursor's own casing for this value is not
+# documented/guaranteed. Confirmed via control-server's raw-payload debug
+# logging (2026-09-22): a real afterAgentResponse payload carried
+# "model":"unknown" -- Cursor's own value, not something this plugin's
+# extraction introduces, so the fix belongs at the point where we read it.
+function ConvertTo-NormalizedHookModel {
+  param([string]$Model)
+  if ($Model -and $Model.ToLowerInvariant() -eq "unknown") {
+    return ""
+  }
+  return $Model
+}
+
+# Resolve-HookModel -ModelId <string> -LegacyModel <string>
+# Mirrors common.sh's resolve_hook_model: picks the best available model
+# identifier from a Cursor hook payload -- ModelId (Cursor's docs:
+# "Structured ID for the selected model, when available" -- optional, newer)
+# when present, falling back to LegacyModel (Cursor's docs: "Legacy model
+# slug configured for the composer") when ModelId is absent -- e.g. an older
+# Cursor build that doesn't send it yet. Whichever value is chosen is passed
+# through ConvertTo-NormalizedHookModel, since either field could in
+# principle carry the "unknown" placeholder.
+function Resolve-HookModel {
+  param([string]$ModelId, [string]$LegacyModel)
+  $chosen = if ($ModelId) { $ModelId } else { $LegacyModel }
+  return ConvertTo-NormalizedHookModel -Model $chosen
+}
+
 # Invoke-CurlRequest -CurlArgs <string[]>
 # Shared machinery for Invoke-HttpPostRaw/Invoke-HttpGetRaw below: runs
 # curl.exe with the given arguments (which must already include -s, the

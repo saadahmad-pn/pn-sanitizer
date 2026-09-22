@@ -105,4 +105,30 @@ assert_output_equals "\"\$JQ_BIN\" -r '.Cwd' '$captured_body_file'" "/repo" "Cwd
 assert_output_equals "\"\$JQ_BIN\" -r '.GitRepoUrl' '$captured_body_file'" "github.com/org/repo" "GitRepoUrl encoded correctly"
 assert_output_equals "\"\$JQ_BIN\" -r '.GitBranch' '$captured_body_file'" "main" "GitBranch encoded correctly"
 
+test_case "pn_scan_text: kind/tool_name passed through -> Kind/ToolName encoded in body"
+captured_body_file2="$TEST_TEMP_DIR/captured-scan-body-2.json"
+http_post_json() {
+  echo -n "$2" > "$captured_body_file2"
+  echo '{"action_to_take":"allow"}'
+  echo "200"
+}
+pn_scan_text "https://acme.example.com" "token" 5 "session-1" "/repo" "" "" "file content" "tool_call" "Write" "gen-abc" "claude-sonnet-4-5"
+assert_output_equals "\"\$JQ_BIN\" -r '.Kind' '$captured_body_file2'" "tool_call" "Kind encoded correctly"
+assert_output_equals "\"\$JQ_BIN\" -r '.ToolName' '$captured_body_file2'" "Write" "ToolName encoded correctly"
+assert_output_equals "\"\$JQ_BIN\" -r '.GenerationId' '$captured_body_file2'" "gen-abc" "GenerationId encoded correctly"
+assert_output_equals "\"\$JQ_BIN\" -r '.Model' '$captured_body_file2'" "claude-sonnet-4-5" "Model encoded correctly"
+
+test_case "pn_scan_text: kind/tool_name omitted -> Kind/ToolName encoded as empty strings (server defaults to prompt)"
+captured_body_file3="$TEST_TEMP_DIR/captured-scan-body-3.json"
+http_post_json() {
+  echo -n "$2" > "$captured_body_file3"
+  echo '{"action_to_take":"allow"}'
+  echo "200"
+}
+pn_scan_text "https://acme.example.com" "token" 5 "session-1" "/repo" "" "" "hello"
+assert_output_equals "\"\$JQ_BIN\" -r '.Kind' '$captured_body_file3'" "" "Kind defaults to empty"
+assert_output_equals "\"\$JQ_BIN\" -r '.ToolName' '$captured_body_file3'" "" "ToolName defaults to empty"
+assert_output_equals "\"\$JQ_BIN\" -r '.GenerationId' '$captured_body_file3'" "" "GenerationId defaults to empty"
+assert_output_equals "\"\$JQ_BIN\" -r '.Model' '$captured_body_file3'" "" "Model defaults to empty"
+
 test_summary

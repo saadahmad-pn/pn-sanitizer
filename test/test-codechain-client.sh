@@ -55,11 +55,24 @@ http_post_json() {
   echo ""
   echo "204"
 }
-pn_record_codechain_turn "https://acme.example.com" "token" 5 "session-1" "/repo" "github.com/org/repo" "main" "do the thing" "done"
+pn_record_codechain_turn "https://acme.example.com" "token" 5 "session-1" "/repo" "github.com/org/repo" "main" "do the thing" "done" "gen-abc" "claude-sonnet-4-5"
 assert_output_equals "\"\$JQ_BIN\" -r '.Prompt' '$captured_body_file'" "do the thing" "Prompt encoded correctly"
 assert_output_equals "\"\$JQ_BIN\" -r '.Response' '$captured_body_file'" "done" "Response encoded correctly"
 assert_output_equals "\"\$JQ_BIN\" -r '.Cwd' '$captured_body_file'" "/repo" "Cwd encoded correctly"
 assert_output_equals "\"\$JQ_BIN\" -r '.GitBranch' '$captured_body_file'" "main" "GitBranch encoded correctly"
+assert_output_equals "\"\$JQ_BIN\" -r '.GenerationId' '$captured_body_file'" "gen-abc" "GenerationId encoded correctly"
+assert_output_equals "\"\$JQ_BIN\" -r '.Model' '$captured_body_file'" "claude-sonnet-4-5" "Model encoded correctly"
+
+test_case "pn_record_codechain_turn: generation_id omitted -> GenerationId encoded as empty string"
+captured_body_file_no_gen="$TEST_TEMP_DIR/captured-turn-body-no-gen.json"
+http_post_json() {
+  echo -n "$2" > "$captured_body_file_no_gen"
+  echo ""
+  echo "204"
+}
+pn_record_codechain_turn "https://acme.example.com" "token" 5 "session-1" "/repo" "" "" "do the thing" "done"
+assert_output_equals "\"\$JQ_BIN\" -r '.GenerationId' '$captured_body_file_no_gen'" "" "GenerationId defaults to empty"
+assert_output_equals "\"\$JQ_BIN\" -r '.Model' '$captured_body_file_no_gen'" "" "Model defaults to empty"
 
 test_case "pn_record_codechain_turn: empty SessionId -> no call attempted"
 http_post_json() { echo "SHOULD_NOT_BE_CALLED"; }

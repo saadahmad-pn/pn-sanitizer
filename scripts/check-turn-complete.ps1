@@ -30,6 +30,19 @@ try {
       $clientSessionId = Get-JsonProperty -InputObject $payload -Name "session_id" -Default ""
     }
     $responseText = Get-JsonProperty -InputObject $payload -Name "text" -Default ""
+    # Cursor's own generation_id -- changes per user turn, unlike
+    # conversation_id (stable for the whole chat). See lib/codechain-client.ps1's
+    # header. Not confirmed present on every hook payload in every Cursor
+    # build; the server degrades gracefully when empty.
+    $generationId = Get-JsonProperty -InputObject $payload -Name "generation_id" -Default ""
+    # Cursor's own hook-reported model name -- see lib/codechain-client.ps1's header.
+    # ModelId ("Structured ID for the selected model, when available", per
+    # Cursor's hooks docs) is preferred over the legacy model slug (confirmed
+    # sending the literal "unknown" placeholder on this hook's payload,
+    # 2026-09-22) -- see Resolve-HookModel's header comment in lib/common.ps1.
+    $modelId = Get-JsonProperty -InputObject $payload -Name "model_id" -Default ""
+    $modelLegacy = Get-JsonProperty -InputObject $payload -Name "model" -Default ""
+    $model = Resolve-HookModel -ModelId $modelId -LegacyModel $modelLegacy
 
     if ($clientSessionId) {
       # The prompt has no field of its own on this hook's payload -- only
@@ -59,7 +72,7 @@ try {
 
           Send-CodechainTurn -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
             -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch `
-            -Prompt $promptText -Response $responseText
+            -Prompt $promptText -Response $responseText -GenerationId $generationId -Model $model
         }
       }
     }

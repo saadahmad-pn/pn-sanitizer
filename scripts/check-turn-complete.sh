@@ -54,11 +54,27 @@ main() {
   [[ -z "$payload" ]] && return 0
   echo "$payload" | "$JQ_BIN" empty 2>/dev/null || return 0
 
-  local transcript_path cwd client_session_id response_text
+  local transcript_path cwd client_session_id response_text generation_id model
   transcript_path=$(echo "$payload" | "$JQ_BIN" -r '.transcript_path // ""')
   cwd=$(echo "$payload" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
   client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
   response_text=$(echo "$payload" | "$JQ_BIN" -r '.text // ""')
+  # Cursor's own generation_id -- changes per user turn, unlike
+  # conversation_id (stable for the whole chat). Lets control-server match
+  # this response to the exact prompt-scan it belongs to instead of guessing
+  # from insertion order. Not confirmed present on every hook payload in
+  # every Cursor build; the server degrades gracefully when empty.
+  generation_id=$(echo "$payload" | "$JQ_BIN" -r '.generation_id // ""')
+  # Cursor's own hook-reported model name -- the model that actually
+  # produced this response. Stored on both RequestPayload and
+  # ResponsePayload server-side. model_id ("Structured ID for the selected
+  # model, when available", per Cursor's hooks docs) is preferred over the
+  # legacy model slug (confirmed sending the literal "unknown" placeholder
+  # on this hook's payload, 2026-09-22) -- see resolve_hook_model's header
+  # comment in lib/common.sh.
+  model_id=$(echo "$payload" | "$JQ_BIN" -r '.model_id // ""')
+  model_legacy=$(echo "$payload" | "$JQ_BIN" -r '.model // ""')
+  model=$(resolve_hook_model "$model_id" "$model_legacy")
 
   [[ -z "$client_session_id" ]] && return 0
 
@@ -92,7 +108,7 @@ main() {
   fi
 
   pn_record_codechain_turn "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt_text" "$response_text"
+    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt_text" "$response_text" "$generation_id" "$model"
 
   return 0
 }

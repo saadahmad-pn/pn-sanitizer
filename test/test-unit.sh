@@ -175,6 +175,42 @@ test_case "dedupe_lines removes duplicates, preserving first-seen order"
 result=$(printf 'a\nb\na\nc\nb\n' | dedupe_lines)
 assert_output_equals "echo '$result'" "$(printf 'a\nb\nc')" "Duplicates removed, order preserved"
 
+test_case "normalize_hook_model strips Cursor's literal 'unknown' placeholder"
+result=$(normalize_hook_model "unknown")
+assert_output_equals "echo '$result'" "" "lowercase unknown becomes empty"
+
+test_case "normalize_hook_model is case-insensitive"
+result=$(normalize_hook_model "Unknown")
+assert_output_equals "echo '$result'" "" "capitalized Unknown becomes empty"
+result=$(normalize_hook_model "UNKNOWN")
+assert_output_equals "echo '$result'" "" "uppercase UNKNOWN becomes empty"
+
+test_case "normalize_hook_model passes a real model name through unchanged"
+result=$(normalize_hook_model "claude-sonnet-4-5")
+assert_output_equals "echo '$result'" "claude-sonnet-4-5" "real model name untouched"
+
+test_case "normalize_hook_model passes an empty string through unchanged"
+result=$(normalize_hook_model "")
+assert_output_equals "echo '$result'" "" "already-empty stays empty"
+
+test_case "resolve_hook_model prefers model_id over the legacy model slug"
+result=$(resolve_hook_model "claude-sonnet-4-5-20250929" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "claude-sonnet-4-5-20250929" "structured model_id wins"
+
+test_case "resolve_hook_model falls back to the legacy model slug when model_id is absent"
+result=$(resolve_hook_model "" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "claude-sonnet-4.5" "falls back to legacy model"
+
+test_case "resolve_hook_model normalizes 'unknown' regardless of which field it came from"
+result=$(resolve_hook_model "unknown" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "" "unknown model_id becomes empty, no fallback to legacy"
+result=$(resolve_hook_model "" "unknown")
+assert_output_equals "echo '$result'" "" "unknown legacy model (no model_id) becomes empty"
+
+test_case "resolve_hook_model returns empty when both fields are absent"
+result=$(resolve_hook_model "" "")
+assert_output_equals "echo '$result'" "" "both empty stays empty"
+
 echo ""
 echo -e "${BLUE}=== Unit Tests: pn_config.sh ===${NC}"
 

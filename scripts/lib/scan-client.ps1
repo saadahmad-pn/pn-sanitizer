@@ -29,7 +29,15 @@ function Invoke-PnScanText {
     [string]$Cwd = "",
     [string]$GitRepoUrl = "",
     [string]$GitBranch = "",
-    [Parameter(Mandatory = $true)][string]$Text
+    [Parameter(Mandatory = $true)][string]$Text,
+    # "prompt" (default) | "tool_call" -- see lib/scan-client.sh's header.
+    [string]$Kind = "",
+    [string]$ToolName = "",
+    # Cursor's own generation_id, when the hook payload carried one -- see
+    # lib/scan-client.sh's header.
+    [string]$GenerationId = "",
+    # Cursor's own hook-reported model name -- see lib/scan-client.sh's header.
+    [string]$Model = ""
   )
 
   $result = [PSCustomObject]@{
@@ -47,11 +55,15 @@ function Invoke-PnScanText {
   }
 
   $bodyObj = [PSCustomObject]@{
-    Platform   = "cursor-hooks"
-    Cwd        = $Cwd
-    GitRepoUrl = $GitRepoUrl
-    GitBranch  = $GitBranch
-    Text       = $Text
+    Platform     = "cursor-hooks"
+    Cwd          = $Cwd
+    GitRepoUrl   = $GitRepoUrl
+    GitBranch    = $GitBranch
+    Text         = $Text
+    Kind         = $Kind
+    ToolName     = $ToolName
+    GenerationId = $GenerationId
+    Model        = $Model
   }
   $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes((ConvertTo-CompactJson -InputObject $bodyObj))
   $url = "$($BaseUrl.TrimEnd('/'))/api/v1/plugin/codechain/sessions/$SessionId/scan"

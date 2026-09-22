@@ -20,7 +20,26 @@
 SCAN_DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/scan-client.log"
 
 # pn_scan_text <base_url> <access_token> <timeout> <session_id> <cwd>
-#   <git_repo_url> <git_branch> <text>
+#   <git_repo_url> <git_branch> <text> [kind] [tool_name] [generation_id] [model]
+#
+# kind ("prompt" | "tool_call", default "prompt" when omitted) and tool_name
+# tell control-server whether this is the user's submitted prompt
+# (check-prompt.sh) or a tool call's input (check-write.sh's Write/Shell
+# gating). A tool_call scan gets folded into the session's currently-open
+# prompt-scan document server-side rather than persisting its own -- see
+# control-server's PluginScan.go persistScanResult/mergeScanIntoOpenTurn.
+#
+# generation_id is Cursor's own generation_id, when the hook payload carried
+# one -- changes per user turn (unlike session_id, stable for the whole
+# chat), so it is what control-server uses to match a prompt scan with the
+# turn it belongs to precisely, instead of guessing from insertion order.
+# Omit when the hook payload doesn't carry one; the server falls back to its
+# own heuristic.
+#
+# model is Cursor's own hook-reported model name (the hook payload's
+# `.model` field) -- stored on the resulting chatapi document's
+# RequestPayload so the model that scanned/generated this content is
+# recorded, not just left blank. Omit when unavailable.
 # Sets:
 #   PN_SCAN_STATUS       ok | no_session | timeout | unreachable |
 #                          http_error | invalid_json
@@ -35,6 +54,7 @@ SCAN_DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/scan-client.log"
 pn_scan_text() {
   local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
   local cwd="$5" git_repo_url="$6" git_branch="$7" text="$8"
+  local kind="${9:-}" tool_name="${10:-}" generation_id="${11:-}" model="${12:-}"
 
   PN_SCAN_STATUS=""
   PN_SCAN_HTTP_STATUS=""
@@ -60,7 +80,11 @@ pn_scan_text() {
     --arg gitRepoUrl "$git_repo_url" \
     --arg gitBranch "$git_branch" \
     --arg text "$text" \
-    '{Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Text: $text}')
+    --arg kind "$kind" \
+    --arg toolName "$tool_name" \
+    --arg generationId "$generation_id" \
+    --arg model "$model" \
+    '{Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Text: $text, Kind: $kind, ToolName: $toolName, GenerationId: $generationId, Model: $model}')
 
   local url="${base_url%/}/api/v1/plugin/codechain/sessions/${session_id}/scan"
   local raw
