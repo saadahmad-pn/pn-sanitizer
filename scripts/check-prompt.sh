@@ -178,33 +178,129 @@ main() {
     return 0
   fi
 
-  # HTTP 403 from this endpoint means the org is logged in but has no
-  # models configured on the backend -- a known, deterministic state, not
-  # a transient/ambiguous failure. Always block here regardless of
-  # PROMPT_FAILURE_MODE (same posture as the unconditional-allow branches
-  # above for "not configured"/"jq missing": a known state gets a fixed,
-  # correct outcome rather than being left to the generic failure-mode
-  # setting). This intentionally does not distinguish sub-causes of 403
-  # (e.g. an expired token would also land here) -- if that turns out to
-  # matter, the fix is to inspect the response body for a specific error
-  # code rather than relax this branch.
-  if [[ "$HTTP_POST_STATUS" == "403" ]]; then
-    log_debug "API HTTP 403 | url=$scan_url" "$DEBUG_LOG_PATH"
-    json_deny "### 🛡️ Complete Your Paradigm Networks Setup
+  # Prefer the backend's Anthropic-shaped human message when branding a
+  # non-2xx refuse below (.error.message, with .message as a plain fallback).
+  local api_error_detail=""
+  local api_error_detail_section=""
+  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
+    api_error_detail=$(printf '%s' "$response" | "$JQ_BIN" -r '.error.message // .message // empty' 2>/dev/null)
+    if [[ -n "$api_error_detail" ]]; then
+      api_error_detail_section="
+**Details**
+
+$api_error_detail
+"
+    fi
+  fi
+  local console_url="${base_url%/}"
+
+  # Deterministic refuse statuses (always deny, regardless of
+  # PROMPT_FAILURE_MODE): fail-open would skip a refusal the backend already
+  # decided. Soft "budget is low" is not returned on success responses.
+  # 403 stays the setup copy on purpose — CS overloads 403 for several
+  # causes; splitting those needs body inspection and is a separate change.
+  case "$HTTP_POST_STATUS" in
+    400)
+      log_debug "API HTTP 400 | url=$scan_url" "$DEBUG_LOG_PATH"
+      json_deny "### 🛡️ Request couldn't be processed
+
+Your prompt wasn't sent. Paradigm Networks couldn't accept this request.
+${api_error_detail_section}
+Please try again. If this keeps happening, reach out to customer.support@paradigmnetworks.ai."
+      return 0
+      ;;
+    401)
+      log_debug "API HTTP 401 | url=$scan_url" "$DEBUG_LOG_PATH"
+      json_deny "### 🛡️ Sign in required
+
+Your prompt wasn't sent. Your Paradigm Networks session isn't valid anymore (expired or missing credentials).
+
+Run the \`paradigmnetworks-login\` skill to sign in again, then retry. Console:
+[${console_url}](${console_url})
+
+If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return 0
+      ;;
+    402)
+      log_debug "API HTTP 402 | url=$scan_url" "$DEBUG_LOG_PATH"
+      json_deny "### 🛡️ Budget limit reached
+
+Your prompt wasn't sent. Your organization's Paradigm Networks budget for this period is used up.
+${api_error_detail_section}
+Please contact your administrator, or check your plan in the Paradigm Networks console:
+[${console_url}](${console_url})
+
+If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return 0
+      ;;
+    403)
+      # Known setup state: org logged in but incomplete backend config.
+      # Does not distinguish other 403 sub-causes (policy, spike, agent deny).
+      log_debug "API HTTP 403 | url=$scan_url" "$DEBUG_LOG_PATH"
+      json_deny "### 🛡️ Complete Your Paradigm Networks Setup
 
 You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
 
 Please visit the following link to finish your configuration, and then try again:
-[${base_url%/}](${base_url%/})
+[${console_url}](${console_url})
 
 If you run into any issues during setup, feel free to reach out to customer.support@paradigmnetworks.ai for assistance."
-    return 0
-  fi
+      return 0
+      ;;
+    404)
+      log_debug "API HTTP 404 | url=$scan_url" "$DEBUG_LOG_PATH"
+      json_deny "### 🛡️ Model not available
 
-  # Reject other non-2xx responses (expired/invalid token, server error,
-  # etc.) before treating the body as a real verdict — a valid-JSON error
-  # body (e.g. {"error": "unauthorized"}) would otherwise default to
-  # "allow" via the // fallback below and silently mask the actual failure.
+Your prompt wasn't sent. The model used for this scan isn't available for your organization.
+${api_error_detail_section}
+Ask an administrator to enable the model under Policy → Language Models, or pick a different model. Console:
+[${console_url}](${console_url})
+
+If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return 0
+      ;;
+    413)
+      log_debug "API HTTP 413 | url=$scan_url" "$DEBUG_LOG_PATH"
+      json_deny "### 🛡️ Prompt too large
+
+Your prompt wasn't sent. The content is larger than Paradigm Networks can accept for a scan.
+${api_error_detail_section}
+Try shortening the prompt, then send it again. If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return 0
+      ;;
+    429)
+      log_debug "API HTTP 429 | url=$scan_url" "$DEBUG_LOG_PATH"
+      json_deny "### 🛡️ Rate limit reached
+
+Your prompt wasn't sent. A temporary rate limit is in effect for your account or organization.
+${api_error_detail_section}
+Wait a moment and try again. If this continues, contact your administrator or customer.support@paradigmnetworks.ai."
+      return 0
+      ;;
+    500|502)
+      # Transient server / upstream faults — branded copy, but still honor
+      # PROMPT_FAILURE_MODE (same posture as timeout / unreachable above).
+      log_debug "API HTTP ${HTTP_POST_STATUS} | url=$scan_url" "$DEBUG_LOG_PATH"
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "### 🛡️ Service temporarily unavailable
+
+Your prompt wasn't sent. Paradigm Networks couldn't complete the scan right now (HTTP ${HTTP_POST_STATUS}).
+${api_error_detail_section}
+Please try again shortly. If this keeps happening, reach out to customer.support@paradigmnetworks.ai."
+      else
+        json_allow "### 🛡️ Service temporarily unavailable
+
+Paradigm Networks couldn't complete the scan right now (HTTP ${HTTP_POST_STATUS}). Allowing your prompt without a security scan.
+${api_error_detail_section}
+If this keeps happening, reach out to customer.support@paradigmnetworks.ai."
+      fi
+      return 0
+      ;;
+  esac
+
+  # Reject other non-2xx responses before treating the body as a real
+  # verdict — a valid-JSON error body would otherwise default to "allow"
+  # via the // fallback below and silently mask the actual failure.
   if [[ "$HTTP_POST_STATUS" != 2* ]]; then
     log_debug "API HTTP error | status=$HTTP_POST_STATUS | url=$scan_url" "$DEBUG_LOG_PATH"
     if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then

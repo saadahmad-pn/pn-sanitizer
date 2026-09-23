@@ -1,7 +1,7 @@
 #!/bin/bash
 # Mock Paradigm Networks API server for testing
 # Usage: start_mock_server <port> [mode]
-# Modes: allow, block, anomaly, timeout, error500, error401
+# Modes: allow, block, anomaly, timeout, error500, error401, error402
 #
 # Response bodies match the /v1/messages (Anthropic-compatible) shape, not
 # the old codedefense/scan shape -- see pn_parse_messages_response in
@@ -50,6 +50,12 @@ start_mock_server() {
               ;;
             error401)
               send_response "401" '{"error": "Unauthorized"}'
+              ;;
+            error402)
+              # Anthropic-shaped budget-exhausted body from control-server's
+              # /v1/messages (HTTP 402). check-prompt must deny with branded
+              # customer copy and surface error.message when present.
+              send_response "402" '{"type":"error","error":{"type":"api_error","message":"You have used your token budget of 100,000 tokens for this month. It resets on 1 October."}}'
               ;;
           esac
         fi
@@ -109,6 +115,9 @@ start_simple_mock_server() {
       ;;
     error401)
       echo 'HTTP/1.1 401 Unauthorized\r\n\r\n{"error": "unauthorized"}' >"$response_file"
+      ;;
+    error402)
+      echo 'HTTP/1.1 402 Payment Required\r\nContent-Type: application/json\r\n\r\n{"type":"error","error":{"type":"api_error","message":"You have used your token budget of 100,000 tokens for this month. It resets on 1 October."}}' >"$response_file"
       ;;
   esac
 

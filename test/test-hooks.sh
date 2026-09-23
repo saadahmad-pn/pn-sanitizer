@@ -87,6 +87,107 @@ payload='{"prompt": ""}'
 result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
 # Empty prompt still gets processed
 
+test_case "check-prompt.sh denies with branded budget message on HTTP 402"
+# Always deny on budget exhaustion — even with PROMPT_FAILURE_MODE=open —
+# and surface the backend's human message inside the branded shell.
+# start_simple_mock_server cannot be used under $(...) — the backgrounded
+# python dies with the command-substitution subshell — so drive a one-shot
+# listener inline here.
+MOCK_PORT=19842
+resp_file=$(mktemp)
+budget_body='{"type":"error","error":{"type":"api_error","message":"You have used your token budget of 100,000 tokens for this month. It resets on 1 October."}}'
+printf 'HTTP/1.1 402 Payment Required\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n%s' \
+  "${#budget_body}" "$budget_body" >"$resp_file"
+python3 - "$MOCK_PORT" "$resp_file" <<'PY' &
+import socket, sys
+port, path = int(sys.argv[1]), sys.argv[2]
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port))
+srv.listen(1)
+srv.settimeout(15)
+try:
+    client, _ = srv.accept()
+    client.recv(65536)
+    with open(path, "rb") as f:
+        client.sendall(f.read())
+    client.close()
+finally:
+    srv.close()
+PY
+MOCK_PID=$!
+sleep 0.3
+mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+export PARADIGM_NETWORKS_SCAN_URL_OVERRIDE="http://127.0.0.1:${MOCK_PORT}/v1/messages"
+export PARADIGM_NETWORKS_PROMPT_FAILURE_MODE="open"
+payload='{"prompt": "spend tokens"}'
+result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
+unset PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
+unset PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
+kill "$MOCK_PID" 2>/dev/null || true
+wait "$MOCK_PID" 2>/dev/null || true
+rm -f "$resp_file"
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "continue" "false" "Denies on HTTP 402 even when failure mode is open"
+user_message=$(echo "$result" | "$JQ_BIN" -r '.user_message // empty' 2>/dev/null)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$user_message" == *"Budget limit reached"* ]] && [[ "$user_message" == *"100,000 tokens"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Branded budget deny includes backend detail"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Branded budget deny includes backend detail"
+  echo "    Got user_message: $user_message"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-prompt.sh denies with branded rate-limit message on HTTP 429"
+MOCK_PORT=19843
+resp_file=$(mktemp)
+rate_body='{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded. Try again in 30 seconds."}}'
+printf 'HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: %s\r\n\r\n%s' \
+  "${#rate_body}" "$rate_body" >"$resp_file"
+python3 - "$MOCK_PORT" "$resp_file" <<'PY' &
+import socket, sys
+port, path = int(sys.argv[1]), sys.argv[2]
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port))
+srv.listen(1)
+srv.settimeout(15)
+try:
+    client, _ = srv.accept()
+    client.recv(65536)
+    with open(path, "rb") as f:
+        client.sendall(f.read())
+    client.close()
+finally:
+    srv.close()
+PY
+MOCK_PID=$!
+sleep 0.3
+mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
+export PARADIGM_NETWORKS_SCAN_URL_OVERRIDE="http://127.0.0.1:${MOCK_PORT}/v1/messages"
+export PARADIGM_NETWORKS_PROMPT_FAILURE_MODE="open"
+payload='{"prompt": "retry me"}'
+result=$("$SCRIPTS_DIR/check-prompt.sh" <<< "$payload" 2>/dev/null) || true
+unset PARADIGM_NETWORKS_SCAN_URL_OVERRIDE
+unset PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
+kill "$MOCK_PID" 2>/dev/null || true
+wait "$MOCK_PID" 2>/dev/null || true
+rm -f "$resp_file"
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "continue" "false" "Denies on HTTP 429 even when failure mode is open"
+user_message=$(echo "$result" | "$JQ_BIN" -r '.user_message // empty' 2>/dev/null)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$user_message" == *"Rate limit reached"* ]] && [[ "$user_message" == *"30 seconds"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Branded rate-limit deny includes backend detail"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Branded rate-limit deny includes backend detail"
+  echo "    Got user_message: $user_message"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 echo ""
 echo -e "${BLUE}=== Integration Tests: check-write.sh ===${NC}"
 

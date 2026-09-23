@@ -139,36 +139,139 @@ try {
     return
   }
 
-  # HTTP 403 from this endpoint means the org is logged in but has no
-  # models configured on the backend -- a known, deterministic state, not
-  # a transient/ambiguous failure. Always block here regardless of
-  # $PromptFailureMode (same posture as the unconditional-allow branch
-  # above for "not configured": a known state gets a fixed, correct
-  # outcome rather than being left to the generic failure-mode setting).
-  # Mirrors scripts/check-prompt.sh's identical 403 branch -- see that
-  # file's comment for the full rationale, including why this doesn't try
-  # to distinguish sub-causes of 403 (e.g. an expired token).
-  if ($result.StatusCode -eq 403) {
-    Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
-    # Emoji built via ConvertFromUtf32/[char] escapes, not a literal
-    # character, so this file stays pure ASCII -- Windows PowerShell 5.1
-    # (unlike PS7+/bash) doesn't reliably assume UTF-8 for a .ps1 with no
-    # byte-order mark, and a real UTF-8 multi-byte character here corrupts
-    # the parser's token stream for the rest of the file (confirmed
-    # directly: an em dash elsewhere in this codebase caused "missing
-    # string terminator"/"missing closing brace" errors dozens of lines
-    # away). Pure-ASCII source sidesteps the whole class of bug regardless
-    # of what encoding any future edit saves the file with.
-    $shield = "$([System.Char]::ConvertFromUtf32(0x1F6E1))$([char]0xFE0F)"
-    Write-JsonDeny -Message "### $shield Complete Your Paradigm Networks Setup
+  # Prefer the backend's Anthropic-shaped human message when branding a
+  # non-2xx refuse below. Mirrors scripts/check-prompt.sh.
+  $apiErrorDetail = ""
+  $apiErrorDetailSection = ""
+  if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
+    try {
+      $errObj = $result.Body | ConvertFrom-Json -ErrorAction Stop
+      if ($errObj.error -and $errObj.error.message) {
+        $apiErrorDetail = [string]$errObj.error.message
+      } elseif ($errObj.message) {
+        $apiErrorDetail = [string]$errObj.message
+      }
+    } catch {
+      $apiErrorDetail = ""
+    }
+    if ($apiErrorDetail) {
+      $apiErrorDetailSection = @"
+
+**Details**
+
+$apiErrorDetail
+"@
+    }
+  }
+  $consoleUrl = $config.BaseUrl.TrimEnd('/')
+  # See the shield-emoji comment on the 403 branch below for why this is
+  # built via ConvertFromUtf32/[char] escapes rather than a literal.
+  $shield = "$([System.Char]::ConvertFromUtf32(0x1F6E1))$([char]0xFE0F)"
+
+  # Deterministic refuse statuses (always deny). 403 stays the setup copy
+  # on purpose -- see check-prompt.sh for the full rationale.
+  switch ($result.StatusCode) {
+    400 {
+      Write-DebugLog -Message "API HTTP 400 | url=$scanUrl" -LogPath $DebugLogPath
+      Write-JsonDeny -Message "### $shield Request couldn't be processed
+
+Your prompt wasn't sent. Paradigm Networks couldn't accept this request.
+$apiErrorDetailSection
+Please try again. If this keeps happening, reach out to customer.support@paradigmnetworks.ai."
+      return
+    }
+    401 {
+      Write-DebugLog -Message "API HTTP 401 | url=$scanUrl" -LogPath $DebugLogPath
+      Write-JsonDeny -Message "### $shield Sign in required
+
+Your prompt wasn't sent. Your Paradigm Networks session isn't valid anymore (expired or missing credentials).
+
+Run the ``paradigmnetworks-login`` skill to sign in again, then retry. Console:
+[$consoleUrl]($consoleUrl)
+
+If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return
+    }
+    402 {
+      Write-DebugLog -Message "API HTTP 402 | url=$scanUrl" -LogPath $DebugLogPath
+      Write-JsonDeny -Message "### $shield Budget limit reached
+
+Your prompt wasn't sent. Your organization's Paradigm Networks budget for this period is used up.
+$apiErrorDetailSection
+Please contact your administrator, or check your plan in the Paradigm Networks console:
+[$consoleUrl]($consoleUrl)
+
+If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return
+    }
+    403 {
+      Write-DebugLog -Message "API HTTP 403 | url=$scanUrl" -LogPath $DebugLogPath
+      # Emoji built via ConvertFromUtf32/[char] escapes, not a literal
+      # character, so this file stays pure ASCII -- Windows PowerShell 5.1
+      # (unlike PS7+/bash) doesn't reliably assume UTF-8 for a .ps1 with no
+      # byte-order mark, and a real UTF-8 multi-byte character here corrupts
+      # the parser's token stream for the rest of the file (confirmed
+      # directly: an em dash elsewhere in this codebase caused "missing
+      # string terminator"/"missing closing brace" errors dozens of lines
+      # away). Pure-ASCII source sidesteps the whole class of bug regardless
+      # of what encoding any future edit saves the file with.
+      Write-JsonDeny -Message "### $shield Complete Your Paradigm Networks Setup
 
 You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
 
 Please visit the following link to finish your configuration, and then try again:
-[$($config.BaseUrl.TrimEnd('/'))]($($config.BaseUrl.TrimEnd('/')))
+[$consoleUrl]($consoleUrl)
 
 If you run into any issues during setup, feel free to reach out to customer.support@paradigmnetworks.ai for assistance."
-    return
+      return
+    }
+    404 {
+      Write-DebugLog -Message "API HTTP 404 | url=$scanUrl" -LogPath $DebugLogPath
+      Write-JsonDeny -Message "### $shield Model not available
+
+Your prompt wasn't sent. The model used for this scan isn't available for your organization.
+$apiErrorDetailSection
+Ask an administrator to enable the model under Policy -> Language Models, or pick a different model. Console:
+[$consoleUrl]($consoleUrl)
+
+If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return
+    }
+    413 {
+      Write-DebugLog -Message "API HTTP 413 | url=$scanUrl" -LogPath $DebugLogPath
+      Write-JsonDeny -Message "### $shield Prompt too large
+
+Your prompt wasn't sent. The content is larger than Paradigm Networks can accept for a scan.
+$apiErrorDetailSection
+Try shortening the prompt, then send it again. If you need help, reach out to customer.support@paradigmnetworks.ai."
+      return
+    }
+    429 {
+      Write-DebugLog -Message "API HTTP 429 | url=$scanUrl" -LogPath $DebugLogPath
+      Write-JsonDeny -Message "### $shield Rate limit reached
+
+Your prompt wasn't sent. A temporary rate limit is in effect for your account or organization.
+$apiErrorDetailSection
+Wait a moment and try again. If this continues, contact your administrator or customer.support@paradigmnetworks.ai."
+      return
+    }
+    { $_ -eq 500 -or $_ -eq 502 } {
+      Write-DebugLog -Message "API HTTP $($result.StatusCode) | url=$scanUrl" -LogPath $DebugLogPath
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "### $shield Service temporarily unavailable
+
+Your prompt wasn't sent. Paradigm Networks couldn't complete the scan right now (HTTP $($result.StatusCode)).
+$apiErrorDetailSection
+Please try again shortly. If this keeps happening, reach out to customer.support@paradigmnetworks.ai."
+      } else {
+        Write-JsonAllow -Message "### $shield Service temporarily unavailable
+
+Paradigm Networks couldn't complete the scan right now (HTTP $($result.StatusCode)). Allowing your prompt without a security scan.
+$apiErrorDetailSection
+If this keeps happening, reach out to customer.support@paradigmnetworks.ai."
+      }
+      return
+    }
   }
 
   if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {

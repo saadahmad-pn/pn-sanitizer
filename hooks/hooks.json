@@ -27,18 +27,12 @@
         "command": "scripts/run-hook.cmd check-write",
         "timeout": 250,
         "failClosed": true
-      },
-      {
-        "matcher": "",
-        "command": "bash ./scripts/spike-skill-detection.sh",
-        "failClosed": false,
-        "timeout": 10
       }
     ],
     "beforeReadFile": [
       {
         "matcher": "",
-        "command": "bash ./scripts/spike-skill-detection.sh",
+        "command": "bash ./scripts/check-skill-usage.sh",
         "failClosed": false,
         "timeout": 10
       }

@@ -275,11 +275,14 @@ mock_credentials() {
   local expires_at="${4:-$(($(date +%s) + 3600))}"
 
   mkdir -p "$HOME/.pn"
+  # expires_at must be a JSON number: pn_get_valid_access_token runs
+  # `.expires_at | floor`, which rejects a string and treats the token as
+  # already expired (forcing a refresh against the mock base_url).
   "$JQ_BIN" -n \
     --arg base_url "$base_url" \
     --arg access_token "$access_token" \
     --arg refresh_token "$refresh_token" \
-    --arg expires_at "$expires_at" \
+    --argjson expires_at "$expires_at" \
     '{base_url: $base_url, access_token: $access_token, refresh_token: $refresh_token, expires_at: $expires_at}' > "$HOME/.pn/credentials.json"
 
   chmod 600 "$HOME/.pn/credentials.json"
