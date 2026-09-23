@@ -13,9 +13,16 @@
 # pipeline when tool_name=="Shell", regardless of whether the command was a
 # git command or not (control-server decides that from the command text).
 #
+# Also now feeds tool_output into control-server's own composite policy
+# scan (PromptGuard+PolicyEngine+CodeDefense) -- server-side only, no
+# client change needed for the scan itself; see design-ideas/
+# Tool_Call_Policy_Enforcement_Assessment.md.
+#
 # Purely observational: postToolUse has no blocking "permission" field to
-# honor, so this always returns {}. Best-effort -- a recording failure here
-# must never surface to Cursor.
+# honor, so this always returns {}, and this script does not read the scan
+# verdict back from the response -- even a "block" verdict cannot undo a
+# tool call that has already run. Best-effort -- a recording (or scanning)
+# failure here must never surface to Cursor.
 
 set -o pipefail
 
@@ -34,7 +41,16 @@ source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
-CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-10}"
+# 60s (was 10s) -- control-server's after_tool_call now runs the same
+# PromptGuard+PolicyEngine+CodeDefense composite scan before_tool_call
+# does (see design-ideas/Tool_Call_Policy_Enforcement_Assessment.md),
+# which can take up to ~65s worst case (30s CDS + 30s PromptGuard + 5s
+# PolicyEngine, sequential) -- matches check-tool-call.sh's own
+# TIMEOUT_SECONDS default for the same reason. hooks/hooks.json's
+# postToolUse timeout was raised to 250s to match; this is the script's
+# own HTTP client timeout, which must also be raised or it would cut the
+# call off long before that budget is ever reached.
+CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-60}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-tool-call-record.log"
 
 main() {

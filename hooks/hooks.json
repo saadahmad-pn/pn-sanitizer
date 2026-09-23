@@ -45,7 +45,7 @@
         "matcher": "",
         "command": "scripts/run-hook.cmd check-tool-call-record",
         "failClosed": false,
-        "timeout": 15
+        "timeout": 250
       }
     ]
   }

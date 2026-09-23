@@ -4,6 +4,34 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-23 — Raise postToolUse timeouts for the new tool-result scan
+
+control-server's `after_tool_call` now runs the same PromptGuard+PolicyEngine+
+CodeDefense composite scan `before_tool_call` already runs on a tool's input,
+against the tool's *result* instead — closing a gap where tool results
+reached Code Chain completely unscanned (see design-ideas/
+Tool_Call_Policy_Enforcement_Assessment.md, server-side change only). That
+scan can take up to ~65s worst case, so two timeouts needed raising on this
+side or the call would be cut off long before the scan finishes:
+
+- `hooks/hooks.json`'s `postToolUse` timeout: 15s → 250s, matching
+  `preToolUse`'s existing budget. `failClosed` stays `false` — this hook
+  remains purely observational from Cursor's side (no blocking field exists
+  for `postToolUse`, and the tool has already run by the time it fires).
+- `check-tool-call-record.sh`'s own HTTP client timeout
+  (`CODECHAIN_TIMEOUT_SECONDS`): 10s → 60s default, matching
+  `check-tool-call.sh`'s existing `TIMEOUT_SECONDS` for the same scan on the
+  `before_tool_call` side. This is a *separate* budget from `hooks.json`'s —
+  raising only the hook timeout would not have been enough.
+
+No other client-side change: `check-tool-call-record.sh` already forwards
+`tool_output` generically and doesn't read the verdict back (the scan is
+entirely server-side, and there's nothing for this hook to prevent post
+-execution anyway — see the assessment doc §2.5).
+
+Verified: `bash test/run-all-tests.sh` (259/259, unchanged — no test
+hardcoded the old timeout values).
+
 ## 2026-09-23 — Detect and attach files for MCP git-commit tool calls
 
 Investigated whether Cursor's MCP-based git tools (e.g. `MCP:git_commit`,
