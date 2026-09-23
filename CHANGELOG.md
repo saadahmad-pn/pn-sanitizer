@@ -4,6 +4,64 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-23 — Retire the dedicated shell-execution hooks; fold git push/commit gating into the generic tool-call hook
+
+Investigated whether `beforeShellExecution`/`afterShellExecution` (dedicated
+Cursor hooks for git push/commit/PR-create) were fully redundant with
+`preToolUse`/`postToolUse` (the generic hook that already fires for every
+Shell command). Confirmed from real session logs on this machine that every
+shell command was already being recorded twice — once via each hook family —
+but also confirmed, by reading control-server's actual scan code, that
+`before_shell_execution` was the *only* place changed-file diff content got
+attached to the Code Defense scan ahead of a push/commit; the generic
+tool-call gate never had an equivalent file-attachment path. A bare removal
+would have silently dropped that pre-push/pre-commit content scan. Findings
+recorded in `design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md`
+before any code changed.
+
+What changed:
+- `hooks/hooks.json`: removed the `beforeShellExecution` (3 matchers) and
+  `afterShellExecution` (catch-all) registrations entirely. A git
+  push/commit now reaches the plugin exclusively through the same
+  `preToolUse`/`postToolUse` catch-all every other Shell command already
+  used.
+- `scripts/check-tool-call.sh` (preToolUse): detects a git push/commit
+  directly from the Shell command text (the same unanchored,
+  whitespace-bounded pattern the retired hook's matchers used — catches
+  `cd repo && git push`, not just a bare `git push`), and when detected,
+  collects and attaches the same changed-file diff content the retired
+  `before_shell_execution` gate used to (capped by the same
+  `PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES`/`_MAX_BYTES` env vars). Uses
+  Push/Commit-specific wording in the block message, same as before.
+- `scripts/check-tool-call-record.sh` (postToolUse): now forwards
+  `tool_name`/`tool_input` so control-server can run git/PR detection for
+  Shell calls — the same detection the retired `afterShellExecution` hook
+  fed, now unconditional for every Shell tool call regardless of command
+  content (control-server's own regex still decides what's actually a
+  commit/push/PR, unchanged).
+- `scripts/lib/plugins-client.sh`: removed `pn_plugin_before_shell_execution`/
+  `pn_plugin_after_shell_execution` (multipart, shell-executions domain);
+  extended `pn_plugin_before_tool_call` with an optional `files_json` param
+  and `pn_plugin_after_tool_call` with `tool_name`/`input_json` params; added
+  `pn_build_git_diff_files_json` (the changed-file collection, now
+  base64/JSON instead of multipart, since the tool-calls endpoint is
+  JSON-only).
+- Deleted `scripts/check-git-event.sh`/`.ps1` and
+  `scripts/check-git-event-record.sh`/`.ps1` — fully replaced by the above.
+- Not in scope this round: PowerShell parity for `check-tool-call.ps1`/
+  `check-tool-call-record.ps1` (these already didn't exist — `check-write.ps1`
+  and `check-repo-context.ps1` remain the last-synced PowerShell hooks,
+  stale since the prior bash-side consolidation round).
+
+Control-server side: the shell-executions domain
+(`/api/v1/plugins/sessions/{id}/shell-executions`, `controller/plugins/
+ShellExecutions.go`) is deleted outright. `before_tool_call`/`after_tool_call`
+absorb its two responsibilities: the composite scan now accepts an optional
+file-attachment list (base64-decoded from the request JSON) threaded through
+to Code Defense; `after_tool_call` fires the same git/PR-detection pipeline
+(`ProcessPluginShellEvent`) whenever `ToolName=="Shell"`, extracting the
+command from the stored tool input.
+
 ## 2026-09-22 — Record every shell command to Code Chain; fix a regex bug that silently dropped most real git push/commit events
 
 Confirmed live: real `git push`/`git commit` commands from actual Cursor

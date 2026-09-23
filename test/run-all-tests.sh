@@ -66,22 +66,24 @@ else
 fi
 echo ""
 
-# Test Suite 2b: Git Event Detection Tests (lib/git-utils.sh resolvers,
-# lib/plugins-client.sh's before_shell_execution gating, check-git-event.sh)
-echo -e "${BLUE}[3/7]${NC} Running Git Event Detection Tests..."
+# Test Suite 2b: Git Utils Tests (lib/git-utils.sh resolvers,
+# lib/plugins-client.sh's pn_build_git_diff_files_json -- the changed-file
+# collection folded into check-tool-call.sh's before_tool_call gate; see
+# design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md)
+echo -e "${BLUE}[3/7]${NC} Running Git Utils Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-"$TEST_DIR/test-git-event.sh" > /tmp/git-event-test.log 2>&1
+"$TEST_DIR/test-git-utils.sh" > /tmp/git-utils-test.log 2>&1
 gitevent_status=$?
-gitevent_passed=$(grep "Passed:" /tmp/git-event-test.log | awk '{print $2}')
-gitevent_total=$(grep "Total:" /tmp/git-event-test.log | awk '{print $2}')
-gitevent_failed=$(grep "Failed:" /tmp/git-event-test.log | awk '{print $2}')
+gitevent_passed=$(grep "Passed:" /tmp/git-utils-test.log | awk '{print $2}')
+gitevent_total=$(grep "Total:" /tmp/git-utils-test.log | awk '{print $2}')
+gitevent_failed=$(grep "Failed:" /tmp/git-utils-test.log | awk '{print $2}')
 TOTAL_TESTS=$((TOTAL_TESTS + ${gitevent_total:-0}))
 TOTAL_PASSED=$((TOTAL_PASSED + ${gitevent_passed:-0}))
 TOTAL_FAILED=$((TOTAL_FAILED + ${gitevent_failed:-0}))
 if [[ $gitevent_status -eq 0 ]]; then
-  echo -e "${GREEN}✓ Git Event Detection Tests: $gitevent_passed/$gitevent_total passed${NC}"
+  echo -e "${GREEN}✓ Git Utils Tests: $gitevent_passed/$gitevent_total passed${NC}"
 else
-  echo -e "${RED}✗ Git Event Detection Tests failed ($gitevent_passed/$gitevent_total passed)${NC}"
+  echo -e "${RED}✗ Git Utils Tests failed ($gitevent_passed/$gitevent_total passed)${NC}"
   FAILED_SUITES+=("Git Event Detection Tests")
 fi
 echo ""
@@ -187,7 +189,7 @@ if [[ $TOTAL_FAILED -eq 0 ]]; then
   echo "Test Coverage:"
   echo "  • Unit Tests:              ${unit_total} assertions (lib/common.sh, lib/git-utils.sh, pn_config.sh)"
   echo "  • Integration Tests:       ${int_total} tests (check-session.sh, check-prompt.sh, check-tool-call.sh)"
-  echo "  • Git Event Detection:     ${gitevent_total} tests (git-utils resolvers, lib/plugins-client.sh, check-git-event.sh)"
+  echo "  • Git Utils:               ${gitevent_total} tests (git-utils resolvers, lib/plugins-client.sh pn_build_git_diff_files_json)"
   echo "  • Code Chain Recording:    ${codechain_total} tests (lib/plugins-client.sh, get_current_turn_messages)"
   echo "  • Scan Client:             ${scan_total} tests (lib/plugins-client.sh gating, POST /api/v1/plugins/sessions/{id}/*)"
   echo "  • Error Scenarios:         ${err_total} tests (edge cases, malformed input, file system errors)"
@@ -220,7 +222,7 @@ else
   echo "Check test logs:"
   echo "  /tmp/unit-test.log"
   echo "  /tmp/integration-test.log"
-  echo "  /tmp/git-event-test.log"
+  echo "  /tmp/git-utils-test.log"
   echo "  /tmp/codechain-client-test.log"
   echo "  /tmp/scan-client-test.log"
   echo "  /tmp/error-test.log"

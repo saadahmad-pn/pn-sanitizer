@@ -6,13 +6,14 @@
 #
 # The detections_* modes return the standardized plugins domain response
 # shape (action_to_take/message/overall_threat_level/triggered_by/ToolUseId
-# -- see control-server's ScanOutcome/ToolCallResult/ShellExecutionResult)
-# for testing check-prompt.sh/check-tool-call.sh/check-git-event.sh against
-# lib/plugins-client.sh. Kept the "detections_*" mode names for minimal
-# test-file churn even though the retired /api/v1/detections/evaluate
-# endpoint no longer exists -- these now stand in for any of the three
-# gating domains' before_* verdict shape, which is identical across all
-# three.
+# -- see control-server's ScanOutcome/ToolCallResult) for testing
+# check-prompt.sh/check-tool-call.sh against lib/plugins-client.sh. Kept the
+# "detections_*" mode names for minimal test-file churn even though the
+# retired /api/v1/detections/evaluate endpoint no longer exists -- these now
+# stand in for either gating domain's before_* verdict shape, which is
+# identical across both (prompts, tool-calls -- the former shell-executions
+# domain is retired too, see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md).
 #
 # The non-detections modes (allow/block/anomaly/timeout/error500/error401)
 # return the /v1/messages (Anthropic-compatible) response shape -- LEGACY,

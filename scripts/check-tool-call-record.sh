@@ -1,12 +1,17 @@
 #!/bin/bash
-# postToolUse hook: records a tool call's actual result once it has run --
-# NEW, did not exist in any form before this round. This is the mechanism
-# that makes MCP tool calls (e.g. a Jira-update workflow) and non-git
-# Write/Shell calls visible in Code Chain for the first time. Pairs with
-# check-tool-call.sh's preToolUse gate: correlated by Cursor's own stable
-# .tool_use_id, present on both hook payloads, so no relay between the two
-# separate hook-process invocations is needed -- see
-# design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md §5.
+# postToolUse hook: records a tool call's actual result once it has run.
+# Makes MCP tool calls (e.g. a Jira-update workflow) and non-git Write/Shell
+# calls visible in Code Chain. Pairs with check-tool-call.sh's preToolUse
+# gate: correlated by Cursor's own stable .tool_use_id, present on both hook
+# payloads, so no relay between the two separate hook-process invocations is
+# needed -- see design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md §5.
+#
+# Also now fires git/PR detection for Shell tool calls -- folded in from the
+# retired afterShellExecution hook (see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md): forwards
+# tool_name + tool_input so control-server can run the same detection
+# pipeline when tool_name=="Shell", regardless of whether the command was a
+# git command or not (control-server decides that from the command text).
 #
 # Purely observational: postToolUse has no blocking "permission" field to
 # honor, so this always returns {}. Best-effort -- a recording failure here
@@ -42,11 +47,16 @@ main() {
   [[ -z "$payload" ]] && return 0
   echo "$payload" | "$JQ_BIN" empty 2>/dev/null || return 0
 
-  local tool_use_id client_session_id cwd generation_id
+  local tool_use_id client_session_id cwd generation_id tool_name tool_input_raw
   tool_use_id=$(echo "$payload" | "$JQ_BIN" -r '.tool_use_id // ""')
   client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
   cwd=$(echo "$payload" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
   generation_id=$(echo "$payload" | "$JQ_BIN" -r '.generation_id // ""')
+  # tool_name/tool_input: only used server-side to detect a Shell command and
+  # run git/PR detection against it (see this file's header) -- absent for
+  # any tool call Cursor's postToolUse payload doesn't carry them for.
+  tool_name=$(echo "$payload" | "$JQ_BIN" -r '.tool_name // ""')
+  tool_input_raw=$(echo "$payload" | "$JQ_BIN" -c '.tool_input // {}')
 
   # Nothing to correlate this result to without the id preToolUse's call
   # would have used -- best-effort, not an error.
@@ -76,7 +86,8 @@ main() {
   fi
 
   pn_plugin_after_tool_call "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$tool_use_id" "$tool_output" "false" "$generation_id"
+    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$tool_use_id" "$tool_output" "false" "$generation_id" \
+    "$tool_name" "$tool_input_raw"
 
   return 0
 }

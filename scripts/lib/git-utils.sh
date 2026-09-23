@@ -143,8 +143,8 @@ resolve_unpushed_changed_files() {
 # resolve_staged_changed_files <repo_path>
 # Prints repo-relative paths of every file staged for the next commit
 # (excluding deletions, --diff-filter=d -- nothing to scan for a file being
-# removed). The right file set for a git.commit event: beforeShellExecution
-# fires before `git commit` itself runs, so there is no new commit yet to
+# removed). The right file set for a git.commit event: the gate runs
+# before `git commit` itself runs, so there is no new commit yet to
 # diff against -- the index is the only place "what's about to be
 # committed" already exists.
 resolve_staged_changed_files() {

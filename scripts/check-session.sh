@@ -35,7 +35,7 @@ fi
 # Best-effort Code Chain session-start marker -- see design-ideas/
 # Codechain_Plugin_Hooks_Design.md. Never affects this hook's own JSON
 # output/exit code (sessionStart is fire-and-forget context injection
-# regardless): if this fails, later hooks (check-git-event-record,
+# regardless): if this fails, later hooks (check-tool-call-record,
 # check-turn-complete) still record fine on their own -- they use the same
 # client-supplied session id directly and don't depend on this call.
 register_codechain_session() {

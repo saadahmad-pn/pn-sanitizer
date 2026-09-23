@@ -1,12 +1,17 @@
 #!/bin/bash
 # Unit tests for lib/plugins-client.sh's session-lifecycle and after_*
 # (recording) functions -- pn_register_plugin_session, pn_close_plugin_session,
-# pn_plugin_after_prompt, pn_plugin_after_shell_execution,
-# pn_plugin_after_tool_call -- which replaced lib/codechain-client.sh's
-# pn_register_codechain_session/pn_record_codechain_turn/
+# pn_plugin_after_prompt, pn_plugin_after_tool_call -- which replaced lib/
+# codechain-client.sh's pn_register_codechain_session/pn_record_codechain_turn/
 # pn_record_codechain_shell_event/pn_close_codechain_session. Also covers
 # lib/common.sh's get_current_turn_messages, unaffected by this round. See
 # design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md.
+#
+# pn_plugin_after_shell_execution (and the shell-executions domain generally)
+# is retired -- see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md. Its git/PR
+# detection now fires from pn_plugin_after_tool_call when ToolName=="Shell",
+# tested below.
 
 set -o pipefail
 
@@ -87,32 +92,6 @@ test_case "pn_plugin_after_prompt: both prompt and response empty -> no call att
 http_post_json() { echo "SHOULD_NOT_BE_CALLED"; }
 assert_success "pn_plugin_after_prompt 'https://acme.example.com' 'token' 5 'session-1' '/repo' '' '' '' ''" "nothing to record"
 
-test_case "pn_plugin_after_shell_execution: posts Action/Command/Output/Cwd/GenerationId as multipart form"
-# http_post_multipart_form's form args arrive as repeated --form-string
-# "Key=value" pairs (see lib/common.sh) -- capture the full arg list and
-# grep for the field rather than parsing it as JSON, since it never was one.
-captured_args_file="$TEST_TEMP_DIR/captured-shell-event-args.txt"
-http_post_multipart_form() {
-  shift 3
-  printf '%s\n' "$@" > "$captured_args_file"
-  echo ""
-  echo "204"
-}
-pn_plugin_after_shell_execution "https://acme.example.com" "token" 5 "session-1" "/repo" "github.com/org/repo" "main" "gen-1" "git commit -m x" "[main abc1234] x"
-assert_output_contains "cat '$captured_args_file'" "Action=after_shell_execution" "Action encoded correctly"
-assert_output_contains "cat '$captured_args_file'" "Command=git commit -m x" "Command encoded correctly"
-assert_output_contains "cat '$captured_args_file'" "Output=[main abc1234] x" "Output encoded correctly"
-assert_output_contains "cat '$captured_args_file'" "Cwd=/repo" "Cwd encoded correctly"
-assert_output_contains "cat '$captured_args_file'" "GenerationId=gen-1" "GenerationId encoded correctly"
-
-test_case "pn_plugin_after_shell_execution: empty command -> no call attempted"
-http_post_multipart_form() { echo "SHOULD_NOT_BE_CALLED"; }
-assert_success "pn_plugin_after_shell_execution 'https://acme.example.com' 'token' 5 'session-1' '/repo' '' '' '' '' 'out'" "returns cleanly without calling http_post_multipart_form"
-
-test_case "pn_plugin_after_shell_execution: empty session id -> no call attempted"
-http_post_multipart_form() { echo "SHOULD_NOT_BE_CALLED"; }
-assert_success "pn_plugin_after_shell_execution 'https://acme.example.com' 'token' 5 '' '/repo' '' '' '' 'ls -la' 'out'" "returns cleanly without calling http_post_multipart_form"
-
 test_case "pn_plugin_after_tool_call: posts Action/ToolUseId/Output/IsError as JSON"
 captured_body_file2="$TEST_TEMP_DIR/captured-after-toolcall-body.json"
 http_post_json() {
@@ -139,6 +118,31 @@ assert_output_equals "\"\$JQ_BIN\" '.IsError' '$captured_body_file3'" "true" "Is
 test_case "pn_plugin_after_tool_call: empty tool_use_id -> no call attempted"
 http_post_json() { echo "SHOULD_NOT_BE_CALLED"; }
 assert_success "pn_plugin_after_tool_call 'https://acme.example.com' 'token' 5 'session-1' '' '' '' '' 'out' 'false'" "nothing to correlate the result to"
+
+test_case "pn_plugin_after_tool_call: forwards ToolName/Input so control-server can detect a Shell git command"
+# Folded in from the retired pn_plugin_after_shell_execution -- see
+# design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md.
+captured_body_file4="$TEST_TEMP_DIR/captured-after-toolcall-shell-body.json"
+http_post_json() {
+  echo -n "$2" > "$captured_body_file4"
+  echo ""
+  echo "204"
+}
+pn_plugin_after_tool_call "https://acme.example.com" "token" 5 "session-1" "/repo" "github.com/org/repo" "main" \
+  "toolu_plugin_shell" "[main abc1234] x" "false" "gen-1" "Shell" '{"command":"git commit -m x"}'
+assert_output_equals "\"\$JQ_BIN\" -r '.ToolName' '$captured_body_file4'" "Shell" "ToolName encoded correctly"
+assert_output_equals "\"\$JQ_BIN\" -r '.Input.command' '$captured_body_file4'" "git commit -m x" "Input (raw tool_input JSON) encoded correctly"
+
+test_case "pn_plugin_after_tool_call: tool_name/input omitted -> ToolName empty, Input empty string"
+captured_body_file5="$TEST_TEMP_DIR/captured-after-toolcall-no-tool-body.json"
+http_post_json() {
+  echo -n "$2" > "$captured_body_file5"
+  echo ""
+  echo "204"
+}
+pn_plugin_after_tool_call "https://acme.example.com" "token" 5 "session-1" "" "" "" "toolu_plugin_mcp" "ok" "false"
+assert_output_equals "\"\$JQ_BIN\" -r '.ToolName' '$captured_body_file5'" "" "ToolName defaults to empty for a non-Shell caller that never passes it"
+assert_output_equals "\"\$JQ_BIN\" -r '.Input' '$captured_body_file5'" "" "Input defaults to an empty string, not null"
 
 test_case "pn_close_plugin_session: posts to the given SessionId directly, no lookup"
 http_post_json() {

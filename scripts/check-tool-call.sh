@@ -11,6 +11,15 @@
 # call's actual result once the tool has run -- the two are correlated by
 # Cursor's own stable .tool_use_id, present on both hook payloads, so no
 # relay between the two separate hook-process invocations is needed.
+#
+# Also now absorbs what used to be the separate beforeShellExecution hook
+# (retired, along with afterShellExecution): a git push/commit is detected
+# from a Shell tool call's own command text (see the git_event_type block
+# below) and its changed-file diff content is collected and attached the same
+# way before_shell_execution used to -- see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md for why that
+# domain couldn't simply be deleted (this file/check-tool-call-record.sh are
+# what replace it).
 
 set -o pipefail
 
@@ -124,6 +133,30 @@ main() {
       ;;
   esac
 
+  # Detect a git push/commit inside a Shell command -- folded in from the old
+  # beforeShellExecution hook (retired; see design-ideas/
+  # Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md). Unanchored,
+  # whitespace-bounded rather than \b (not universally supported by bash's
+  # regex engine across BSD/GNU) -- matches "git push", "cd repo && git
+  # commit -m x", etc., mirroring Cursor's own former (also unanchored)
+  # beforeShellExecution matchers. git.pr_create has no equivalent here: it
+  # was never scanned pre-execution (no artifact to scan before a PR exists)
+  # and needs no file attachment.
+  local git_event_type="" files_json="[]"
+  if [[ "$tool_name" == "Shell" ]]; then
+    local shell_command
+    shell_command=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.command // ""')
+    if [[ "$shell_command" =~ (^|[[:space:]])git[[:space:]]+push([[:space:]]|$) ]]; then
+      git_event_type="git.push"
+      action_noun="Push"
+      action_desc="this push"
+    elif [[ "$shell_command" =~ (^|[[:space:]])git[[:space:]]+commit([[:space:]]|$) ]]; then
+      git_event_type="git.commit"
+      action_noun="Commit"
+      action_desc="this commit"
+    fi
+  fi
+
   # Cursor's own stable correlator, present on both preToolUse and
   # postToolUse payloads -- see check-tool-call-record.sh, which reads the
   # SAME field from its own (separate-process) invocation to attach this
@@ -166,6 +199,12 @@ main() {
   if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
     git_repo_url=$(get_remote_url_or_empty "$cwd")
     git_branch=$(get_current_branch_or_empty "$cwd")
+    # A detected git push/commit (see git_event_type above) with no git repo
+    # at cwd has nothing to collect -- files_json stays "[]", same as any
+    # other Shell command.
+    if [[ -n "$git_event_type" ]]; then
+      files_json=$(pn_build_git_diff_files_json "$cwd" "$git_event_type")
+    fi
   fi
 
   # Determine what to scan
@@ -216,13 +255,14 @@ main() {
   # pn_plugin_before_tool_call (lib/plugins-client.sh) posts to the
   # standardized tool-calls domain (Action=before_tool_call) -- runs the
   # composite PromptGuard+PolicyEngine+CodeDefense scan against turn_text
-  # (ScanContext) + tool_input_raw (Input) together, appends a tool_use
-  # block onto the session's open turn, and returns a ToolUseId. Called as a
-  # plain statement, not $(...): it sets PN_TOOLCALL_* as globals in this
-  # shell. cursor_tool_use_id is passed through so control-server uses
-  # Cursor's OWN id rather than minting one -- see this file's header and
-  # lib/plugins-client.sh's doc comment.
-  pn_plugin_before_tool_call "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$tool_name" "$tool_input_raw" "$generation_id" "$model" "$cursor_tool_use_id" "$turn_text"
+  # (ScanContext) + tool_input_raw (Input) together (plus files_json's
+  # changed-file content, when a git push/commit was detected above),
+  # appends a tool_use block onto the session's open turn, and returns a
+  # ToolUseId. Called as a plain statement, not $(...): it sets PN_TOOLCALL_*
+  # as globals in this shell. cursor_tool_use_id is passed through so
+  # control-server uses Cursor's OWN id rather than minting one -- see this
+  # file's header and lib/plugins-client.sh's doc comment.
+  pn_plugin_before_tool_call "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$tool_name" "$tool_input_raw" "$generation_id" "$model" "$cursor_tool_use_id" "$turn_text" "$files_json"
 
   case "$PN_TOOLCALL_STATUS" in
     no_session)

@@ -3,14 +3,18 @@
 # POST /api/v1/plugins/sessions/{id}/*, replacing lib/codechain-client.sh
 # (recording), lib/scan-client.sh (gating), and lib/detection-client.sh
 # (git.push/git.commit/git.pr_create gating) with one consolidated client
-# matching the three standardized domains -- see design-ideas/
+# matching the standardized domains -- see design-ideas/
 # Plugin_API_Standardization_And_Hook_Consolidation_Design.md.
 #
-# Every domain call carries an Action field for its lifecycle stage
-# (before_prompt/after_prompt, before_shell_execution/after_shell_execution,
-# before_tool_call/after_tool_call). This is a DIFFERENT vocabulary from
-# Cursor's own hook event names (preToolUse, beforeShellExecution, ...) --
-# see the design doc §0.4 for why the two are kept distinct.
+# Two domains today, each carrying an Action field for its lifecycle stage
+# (before_prompt/after_prompt, before_tool_call/after_tool_call). A third,
+# before_shell_execution/after_shell_execution, existed briefly but was
+# retired -- git push/commit gating is now handled inside the tool-calls
+# domain instead (see pn_build_git_diff_files_json below and design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md). This vocabulary
+# is DIFFERENT from Cursor's own hook event names (preToolUse,
+# beforeShellExecution, ...) -- see the design doc §0.4 for why the two are
+# kept distinct.
 #
 # session/close and file-events are unchanged in shape from the old
 # codechain-client.sh (still their own resources, not folded into a domain)
@@ -212,7 +216,7 @@ pn_plugin_after_prompt() {
 
 # pn_plugin_before_tool_call <base_url> <access_token> <timeout> <session_id>
 #   <cwd> <git_repo_url> <git_branch> <tool_name> <input_json> [generation_id]
-#   [model] [tool_use_id] [scan_context]
+#   [model] [tool_use_id] [scan_context] [files_json]
 #
 # input_json must already be a valid JSON value (a quoted string for plain
 # text, or an object for structured MCP tool args) -- passed through as-is
@@ -234,12 +238,20 @@ pn_plugin_after_prompt() {
 # result WITHOUT any relay between the two hook invocations: postToolUse's
 # payload carries the SAME .tool_use_id from Cursor directly.
 #
+# files_json, when non-empty, must already be a valid JSON array of
+# {Filename, ContentBase64} objects -- check-tool-call.sh builds this when it
+# detects a git push/commit in a Shell command, attaching the same
+# changed-file diff content the old before_shell_execution gate used to (see
+# design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md).
+# Defaults to an empty array -- every non-git tool call has nothing to attach.
+#
 # Sets PN_TOOLCALL_STATUS/HTTP_STATUS/ACTION/MESSAGE/THREAT_LEVEL/
 # TOOL_USE_ID (the id actually used, echoing tool_use_id when one was given).
 pn_plugin_before_tool_call() {
   local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
   local cwd="$5" git_repo_url="$6" git_branch="$7" tool_name="$8" input_json="$9"
   local generation_id="${10:-}" model="${11:-}" tool_use_id="${12:-}" scan_context="${13:-}"
+  local files_json="${14:-[]}"
 
   _pn_reset_plugin_result TOOLCALL
   if [[ -z "$session_id" || -z "$JQ_BIN" ]]; then
@@ -247,6 +259,7 @@ pn_plugin_before_tool_call() {
     return 0
   fi
   [[ -z "$input_json" ]] && input_json='""'
+  [[ -z "$files_json" ]] && files_json='[]'
 
   local body
   body=$("$JQ_BIN" -n \
@@ -255,8 +268,8 @@ pn_plugin_before_tool_call() {
     --arg cwd "$cwd" --arg gitRepoUrl "$git_repo_url" --arg gitBranch "$git_branch" \
     --arg toolName "$tool_name" --argjson input "$input_json" \
     --arg generationId "$generation_id" --arg model "$model" --arg toolUseId "$tool_use_id" \
-    --arg scanContext "$scan_context" \
-    '{Action: $action, Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, ToolName: $toolName, Input: $input, GenerationId: $generationId, Model: $model, ToolUseId: $toolUseId, ScanContext: $scanContext}')
+    --arg scanContext "$scan_context" --argjson files "$files_json" \
+    '{Action: $action, Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, ToolName: $toolName, Input: $input, GenerationId: $generationId, Model: $model, ToolUseId: $toolUseId, ScanContext: $scanContext, Files: $files}')
 
   local url="${base_url%/}/api/v1/plugins/sessions/${session_id}/tool-calls"
   local raw
@@ -268,19 +281,27 @@ pn_plugin_before_tool_call() {
 
 # pn_plugin_after_tool_call <base_url> <access_token> <timeout> <session_id>
 #   <cwd> <git_repo_url> <git_branch> <tool_use_id> <output> <is_error>
-#   [generation_id]
+#   [generation_id] [tool_name] [input_json]
 #
 # tool_use_id MUST be the value pn_plugin_before_tool_call returned in
 # PN_TOOLCALL_TOOL_USE_ID for the matching call -- this is what lets
 # control-server (and, downstream, the webapp's existing transcript
 # tool_use_id pairing) attach this result to the right tool_use block.
+#
+# tool_name/input_json, when the caller has them (see
+# check-tool-call-record.sh), let control-server run git/PR detection when
+# tool_name=="Shell" -- the same detection the old after_shell_execution hook
+# used to fire, now folded into this domain (see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md). Omit for any
+# tool call this isn't relevant to; control-server only acts on ToolName=="Shell".
 pn_plugin_after_tool_call() {
   local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
   local cwd="$5" git_repo_url="$6" git_branch="$7" tool_use_id="$8" output="$9"
-  local is_error="${10:-false}" generation_id="${11:-}"
+  local is_error="${10:-false}" generation_id="${11:-}" tool_name="${12:-}" input_json="${13:-}"
 
   [[ -z "$session_id" || -z "$base_url" || -z "$JQ_BIN" ]] && return 0
   [[ -z "$tool_use_id" ]] && return 0
+  [[ -z "$input_json" ]] && input_json='""'
 
   local body
   body=$("$JQ_BIN" -n \
@@ -289,8 +310,8 @@ pn_plugin_after_tool_call() {
     --arg cwd "$cwd" --arg gitRepoUrl "$git_repo_url" --arg gitBranch "$git_branch" \
     --arg toolUseId "$tool_use_id" --arg output "$output" \
     --argjson isError "$([[ "$is_error" == "true" ]] && echo true || echo false)" \
-    --arg generationId "$generation_id" \
-    '{Action: $action, Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, ToolUseId: $toolUseId, Output: $output, IsError: $isError, GenerationId: $generationId}')
+    --arg generationId "$generation_id" --arg toolName "$tool_name" --argjson input "$input_json" \
+    '{Action: $action, Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, ToolUseId: $toolUseId, Output: $output, IsError: $isError, GenerationId: $generationId, ToolName: $toolName, Input: $input}')
 
   local url="${base_url%/}/api/v1/plugins/sessions/${session_id}/tool-calls"
   local raw
@@ -304,82 +325,63 @@ pn_plugin_after_tool_call() {
 }
 
 # ---------------------------------------------------------------------------
-# Shell-executions domain (multipart/form-data -- can attach changed-file
-# content for before_shell_execution; see routes_v1_plugins/ShellExecutions.go)
+# Git-diff file collection for a before_tool_call gating a git push/commit
+# (folded in from the old before_shell_execution gate -- see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md; this is the
+# capability that made a bare removal of the shell-execution domain unsafe).
 # ---------------------------------------------------------------------------
 
-# pn_plugin_before_shell_execution <base_url> <access_token> <timeout>
-#   <session_id> <event_type> <tool> <cwd> <git_repo_url> <git_branch>
-#   <generation_id> <command> [file_form_entry ...]
-#
-# Each file_form_entry is a pre-formatted curl -F value, e.g.
-# "Files=@/abs/path/to/file;filename=relative/path" -- only the caller knows
-# which absolute path each repo-relative display name maps to (see
-# check-git-event.sh's changed-file resolvers).
-#
-# Sets PN_SHELL_STATUS/HTTP_STATUS/ACTION/MESSAGE -- same contract every
-# other gating domain uses (see _pn_parse_plugin_response), NOT the old
-# detection-client.sh's Decision/AuditId shape.
-pn_plugin_before_shell_execution() {
-  local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
-  local event_type="$5" tool="$6" cwd="$7" git_repo_url="$8" git_branch="$9"
-  local generation_id="${10}" command_text="${11}"
-  shift 11
-
-  _pn_reset_plugin_result SHELL
-  local url="${base_url%/}/api/v1/plugins/sessions/${session_id}/shell-executions"
-  local -a form_args=(
-    --form-string "Action=before_shell_execution"
-    --form-string "EventType=${event_type}"
-    --form-string "Tool=${tool}"
-    --form-string "Cwd=${cwd}"
-    --form-string "GitRepoUrl=${git_repo_url}"
-    --form-string "GitBranch=${git_branch}"
-    --form-string "GenerationId=${generation_id}"
-    --form-string "Command=${command_text}"
-  )
-  local file_entry
-  for file_entry in "$@"; do
-    form_args+=(-F "$file_entry")
-  done
-
-  local raw
-  raw=$(http_post_multipart_form "$url" "$access_token" "$timeout" "${form_args[@]}")
-  local curl_exit=$?
-  http_post_split_status "$raw"
-  _pn_parse_plugin_response SHELL "$curl_exit" "$url"
-}
-
-# pn_plugin_after_shell_execution <base_url> <access_token> <timeout>
-#   <session_id> <cwd> <git_repo_url> <git_branch> <generation_id> <command>
-#   <output> [exit_code]
-pn_plugin_after_shell_execution() {
-  local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
-  local cwd="$5" git_repo_url="$6" git_branch="$7" generation_id="$8"
-  local command_text="$9" output="${10}" exit_code="${11:-}"
-
-  [[ -z "$session_id" || -z "$base_url" ]] && return 0
-  [[ -z "$command_text" ]] && return 0
-
-  local url="${base_url%/}/api/v1/plugins/sessions/${session_id}/shell-executions"
-  local -a form_args=(
-    --form-string "Action=after_shell_execution"
-    --form-string "Tool=cursor-plugin"
-    --form-string "Cwd=${cwd}"
-    --form-string "GitRepoUrl=${git_repo_url}"
-    --form-string "GitBranch=${git_branch}"
-    --form-string "GenerationId=${generation_id}"
-    --form-string "Command=${command_text}"
-    --form-string "Output=${output}"
-  )
-  [[ -n "$exit_code" ]] && form_args+=(--form-string "ExitCode=${exit_code}")
-
-  local raw
-  raw=$(http_post_multipart_form "$url" "$access_token" "$timeout" "${form_args[@]}")
-  http_post_split_status "$raw"
-  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
-    log_debug "plugins: after_shell_execution failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$PLUGINS_DEBUG_LOG_PATH"
-  else
-    log_debug "plugins: after_shell_execution recorded (session=$session_id, command=${command_text:0:80})" "$PLUGINS_DEBUG_LOG_PATH"
+# pn_build_git_diff_files_json <cwd> <git_event_type>
+# Prints a JSON array of {Filename, ContentBase64} for the file set relevant
+# to git_event_type ("git.push" -> resolve_unpushed_changed_files,
+# "git.commit" -> resolve_staged_changed_files; see lib/git-utils.sh),
+# skipping binary files and anything missing from the working tree, and
+# capped by PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES/_MAX_BYTES (same env vars
+# and defaults the old check-git-event.sh guardrail used). Prints "[]" when
+# there's nothing to attach -- never fails the caller's gate on its own.
+pn_build_git_diff_files_json() {
+  local cwd="$1" git_event_type="$2"
+  local changed_files=""
+  case "$git_event_type" in
+    git.push)   changed_files=$(resolve_unpushed_changed_files "$cwd") ;;
+    git.commit) changed_files=$(resolve_staged_changed_files "$cwd") ;;
+    *) echo "[]"; return 0 ;;
+  esac
+  if [[ -z "$changed_files" ]]; then
+    echo "[]"
+    return 0
   fi
+
+  local max_files="${PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES:-60}"
+  local max_total_bytes="${PARADIGM_NETWORKS_GIT_EVENT_MAX_BYTES:-8388608}" # 8 MB
+  local total_bytes=0 count=0 capped=0
+  local entries="[]"
+  local rel_path abs_path file_size b64
+
+  while IFS= read -r rel_path; do
+    [[ -z "$rel_path" ]] && continue
+    abs_path="$cwd/$rel_path"
+    [[ -f "$abs_path" ]] || continue
+    is_binary_file "$abs_path" && continue
+
+    if [[ "$count" -ge "$max_files" ]]; then
+      capped=1
+      continue
+    fi
+    file_size=$(stat -f%z "$abs_path" 2>/dev/null || stat -c%s "$abs_path" 2>/dev/null || echo 0)
+    if [[ $((total_bytes + file_size)) -gt "$max_total_bytes" ]]; then
+      capped=1
+      continue
+    fi
+    total_bytes=$((total_bytes + file_size))
+    count=$((count + 1))
+
+    b64=$(base64 < "$abs_path" 2>/dev/null | tr -d '\n')
+    entries=$(echo "$entries" | "$JQ_BIN" --arg fn "$rel_path" --arg c "$b64" '. + [{Filename: $fn, ContentBase64: $c}]')
+  done <<< "$changed_files"
+
+  if [[ "$capped" -eq 1 ]]; then
+    log_debug "git-diff file set for $git_event_type exceeded the ${max_files}-file/${max_total_bytes}-byte guardrail; remaining files were not attached" "$PLUGINS_DEBUG_LOG_PATH"
+  fi
+  echo "$entries"
 }

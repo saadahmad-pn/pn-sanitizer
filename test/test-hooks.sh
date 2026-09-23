@@ -208,6 +208,72 @@ result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "deny" "Not configured -> fails closed, same as Write/Shell (generalization from design doc §5)"
 
+# --- Folded in from the retired beforeShellExecution/afterShellExecution
+# hooks -- see design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md.
+# A git push/commit reaches this SAME preToolUse gate as any other Shell
+# command; check-tool-call.sh detects it from the command text itself and
+# attaches changed-file diff content, rather than relying on a separate
+# Cursor hook family.
+
+test_case "check-tool-call.sh with a git push command -- Push-specific wording, not generic 'Command'"
+rm -f "$HOME/.pn/credentials.json"
+payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "git push origin main"}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured, same as any Shell command"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$result" == *"Push blocked"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Uses Push-specific wording (folded in from the retired check-git-event.sh)"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Uses Push-specific wording (got: $result)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call.sh with a git commit command (unrelated cd prefix) -- Commit-specific wording"
+payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "cd /repo && git commit -m x"}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$result" == *"Commit blocked"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Detects git commit even with a leading 'cd repo &&' prefix (unanchored match)"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Detects git commit even with a leading 'cd repo &&' prefix (got: $result)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call.sh with a git push command and FAILURE_MODE=open -> allow"
+export PARADIGM_NETWORKS_FAILURE_MODE="open"
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "allow" "Fails open when mode=open, same as any Shell command"
+unset PARADIGM_NETWORKS_FAILURE_MODE
+
+test_case "check-tool-call.sh with git push inside a real git repo -- still returns valid JSON (file-collection path exercised, not just the regex match)"
+git_cwd=$(mktemp -d "${TMPDIR:-/tmp}/pn-tool-call-git-XXXXXX")
+git -C "$git_cwd" init -q -b main
+git -C "$git_cwd" config user.email "test@example.com"
+git -C "$git_cwd" config user.name "Test"
+echo "content" > "$git_cwd/f.txt"
+git -C "$git_cwd" add f.txt
+git -C "$git_cwd" commit -q -m "init"
+payload=$("$JQ_BIN" -n --arg cwd "$git_cwd" '{tool_name: "Shell", agent_message: "test", cwd: $cwd, tool_input: {command: "git push origin main"}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output even when collecting real changed-file content"
+assert_json_field_equals "$result" "permission" "deny" "Still fails closed (not configured) -- file collection doesn't change the gate outcome"
+rm -rf "$git_cwd"
+
+test_case "check-tool-call.sh with a non-git Shell command -- no git wording, unaffected by the detection above"
+payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "npm test"}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$result" == *"Command blocked"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Falls back to generic Shell wording for a non-git command"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Falls back to generic Shell wording for a non-git command (got: $result)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 echo ""
 echo -e "${BLUE}=== Integration Tests: check-prompt.sh repo-context injection ===${NC}"
 

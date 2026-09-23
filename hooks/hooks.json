@@ -47,34 +47,6 @@
         "failClosed": false,
         "timeout": 15
       }
-    ],
-    "beforeShellExecution": [
-      {
-        "matcher": "\\bgit\\s+push\\b",
-        "command": "scripts/run-hook.cmd check-git-event git.push",
-        "timeout": 240,
-        "failClosed": true
-      },
-      {
-        "matcher": "\\bgit\\s+commit\\b",
-        "command": "scripts/run-hook.cmd check-git-event git.commit",
-        "timeout": 240,
-        "failClosed": true
-      },
-      {
-        "matcher": "\\bgh\\s+pr\\s+create\\b",
-        "command": "scripts/run-hook.cmd check-git-event git.pr_create",
-        "timeout": 240,
-        "failClosed": true
-      }
-    ],
-    "afterShellExecution": [
-      {
-        "matcher": "",
-        "command": "scripts/run-hook.cmd check-git-event-record",
-        "timeout": 15,
-        "failClosed": false
-      }
     ]
   }
 }
