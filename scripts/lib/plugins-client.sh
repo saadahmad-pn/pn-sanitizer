@@ -6,24 +6,37 @@
 # matching the standardized domains -- see design-ideas/
 # Plugin_API_Standardization_And_Hook_Consolidation_Design.md.
 #
-# Two domains today, each carrying an Action field for its lifecycle stage
-# (before_prompt/after_prompt, before_tool_call/after_tool_call). A third,
-# before_shell_execution/after_shell_execution, existed briefly but was
-# retired -- git push/commit gating is now handled inside the tool-calls
-# domain instead (see pn_build_git_diff_files_json below and design-ideas/
+# Two domains, each carrying an Action field for its lifecycle stage
+# (before_prompt/after_agent_response, before_tool_call/after_tool_call).
+# after_agent_response is a rename (was after_prompt) matching Cursor's own
+# afterAgentResponse hook name. A third domain, before_shell_execution/
+# after_shell_execution, existed briefly but was retired -- git push/commit
+# gating is now handled inside the tool-calls domain instead (see
+# pn_build_git_diff_files_json below and design-ideas/
 # Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md). This vocabulary
 # is DIFFERENT from Cursor's own hook event names (preToolUse,
 # beforeShellExecution, ...) -- see the design doc §0.4 for why the two are
 # kept distinct.
 #
-# session/close and file-events are unchanged in shape from the old
-# codechain-client.sh (still their own resources, not folded into a domain)
-# -- see design doc §0/item 3 on file-events staying deferred.
+# Session lifecycle (sessionStart/sessionEnd) no longer calls this API --
+# session_start/session_end markers were found to have no consumer (no
+# processing/governance/observability/reporting use) and were removed from
+# control-server. The sessionStart/sessionEnd hooks are retained
+# client-side, repurposed to write/remove local session metadata instead --
+# see lib/session-metadata.sh. file-events likewise had no caller and was
+# removed entirely, both sides. See design-ideas/
+# Session_Lifecycle_Simplification_And_Contract_Updates.md.
 #
 # Multi-value returns are globals, not $(...) captures, matching every other
 # helper in this codebase (see CLAUDE.md) -- call these as plain statements.
 
 PLUGINS_DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/plugins-client.log"
+
+# PN_PLUGIN_PLATFORM is this plugin's own Platform identifier, sent on every
+# domain call below. Renamed "cursor-hooks" -> "cursor-plugin" (2026-09-23)
+# to match the plugin's "Cursor Plugin" naming -- see design-ideas/
+# Session_Lifecycle_Simplification_And_Contract_Updates.md.
+PN_PLUGIN_PLATFORM="cursor-plugin"
 
 # is_binary_file <path>
 # An empty file is never binary. Relies on grep's own binary-file detection
@@ -42,55 +55,6 @@ is_binary_file() {
   ! grep -Iq '' "$path" 2>/dev/null
 }
 
-# ---------------------------------------------------------------------------
-# Session lifecycle
-# ---------------------------------------------------------------------------
-
-# pn_register_plugin_session <base_url> <access_token> <timeout> <session_id>
-#   <cwd> <git_repo_url> <git_branch>
-# Fire-and-forget session-start marker.
-pn_register_plugin_session() {
-  local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
-  local cwd="$5" git_repo_url="$6" git_branch="$7"
-
-  [[ -z "$session_id" || -z "$base_url" || -z "$JQ_BIN" ]] && return 0
-
-  local body
-  body=$("$JQ_BIN" -n \
-    --arg platform "cursor-hooks" \
-    --arg sessionId "$session_id" \
-    --arg cwd "$cwd" \
-    --arg gitRepoUrl "$git_repo_url" \
-    --arg gitBranch "$git_branch" \
-    '{Platform: $platform, SessionId: $sessionId, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch}')
-
-  local url="${base_url%/}/api/v1/plugins/sessions"
-  local raw
-  raw=$(http_post_json "$url" "$body" "$access_token" "$timeout")
-  http_post_split_status "$raw"
-  if [[ "$HTTP_POST_STATUS" != "200" ]]; then
-    log_debug "plugins: session-start recording failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$PLUGINS_DEBUG_LOG_PATH"
-  else
-    log_debug "plugins: session-start recorded successfully (session=$session_id)" "$PLUGINS_DEBUG_LOG_PATH"
-  fi
-}
-
-# pn_close_plugin_session <base_url> <access_token> <timeout> <session_id>
-pn_close_plugin_session() {
-  local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
-  [[ -z "$session_id" || -z "$base_url" ]] && return 0
-
-  local url="${base_url%/}/api/v1/plugins/sessions/${session_id}/close"
-  local raw
-  raw=$(http_post_json "$url" "{}" "$access_token" "$timeout")
-  http_post_split_status "$raw"
-  if [[ "$HTTP_POST_STATUS" != "204" ]]; then
-    log_debug "plugins: session close failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$PLUGINS_DEBUG_LOG_PATH"
-  else
-    log_debug "plugins: session closed successfully (session=$session_id)" "$PLUGINS_DEBUG_LOG_PATH"
-  fi
-}
-
 # _pn_reset_plugin_result <prefix>
 # Clears the PN_<PREFIX>_* globals every domain call below sets, so a
 # caller never accidentally reads a stale value from a previous call.
@@ -100,9 +64,9 @@ _pn_reset_plugin_result() {
 }
 
 # _pn_parse_plugin_response <prefix>
-# Shared response-parsing tail for the gating domains (prompts, tool-calls,
-# shell-executions): all three return the same {action_to_take, message,
-# overall_threat_level, triggered_by, ToolUseId?} shape. Reads
+# Shared response-parsing tail for the gating domains (prompts, tool-calls):
+# both return the same {action_to_take, message, overall_threat_level,
+# triggered_by, ToolUseId?} shape. Reads
 # $HTTP_POST_STATUS/$HTTP_POST_BODY (already split) and $curl_exit, $url.
 _pn_parse_plugin_response() {
   local p="$1" curl_exit="$2" url="$3"
@@ -162,7 +126,7 @@ pn_plugin_before_prompt() {
   local body
   body=$("$JQ_BIN" -n \
     --arg action "before_prompt" \
-    --arg platform "cursor-hooks" \
+    --arg platform "$PN_PLUGIN_PLATFORM" \
     --arg cwd "$cwd" --arg gitRepoUrl "$git_repo_url" --arg gitBranch "$git_branch" \
     --arg text "$text" --arg generationId "$generation_id" --arg model "$model" \
     '{Action: $action, Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Text: $text, GenerationId: $generationId, Model: $model}')
@@ -175,15 +139,19 @@ pn_plugin_before_prompt() {
   _pn_parse_plugin_response PROMPT "$curl_exit" "$url"
 }
 
-# pn_plugin_after_prompt <base_url> <access_token> <timeout> <session_id>
+# pn_plugin_after_agent_response <base_url> <access_token> <timeout> <session_id>
 #   <cwd> <git_repo_url> <git_branch> <prompt> <response> [generation_id] [model]
+#
+# Renamed from pn_plugin_after_prompt -- Action is now after_agent_response,
+# matching Cursor's own afterAgentResponse hook name (the only hook that
+# ever calls this).
 #
 # prompt is only used server-side when there's no open before_prompt turn to
 # merge into (scanning disabled, or this call arrived before any before_prompt
 # call for this turn) -- a fresh, self-contained turn document needs both
 # halves. When an open turn IS found, only the response is applied; the
 # already-persisted prompt is left untouched.
-pn_plugin_after_prompt() {
+pn_plugin_after_agent_response() {
   local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
   local cwd="$5" git_repo_url="$6" git_branch="$7" prompt_text="$8" response_text="$9"
   local generation_id="${10:-}" model="${11:-}"
@@ -193,8 +161,8 @@ pn_plugin_after_prompt() {
 
   local body
   body=$("$JQ_BIN" -n \
-    --arg action "after_prompt" \
-    --arg platform "cursor-hooks" \
+    --arg action "after_agent_response" \
+    --arg platform "$PN_PLUGIN_PLATFORM" \
     --arg cwd "$cwd" --arg gitRepoUrl "$git_repo_url" --arg gitBranch "$git_branch" \
     --arg text "$prompt_text" --arg response "$response_text" --arg generationId "$generation_id" --arg model "$model" \
     '{Action: $action, Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, Text: $text, Response: $response, GenerationId: $generationId, Model: $model}')
@@ -204,9 +172,9 @@ pn_plugin_after_prompt() {
   raw=$(http_post_json "$url" "$body" "$access_token" "$timeout")
   http_post_split_status "$raw"
   if [[ "$HTTP_POST_STATUS" != 2* ]]; then
-    log_debug "plugins: after_prompt failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$PLUGINS_DEBUG_LOG_PATH"
+    log_debug "plugins: after_agent_response failed (HTTP ${HTTP_POST_STATUS:-none}) session=$session_id" "$PLUGINS_DEBUG_LOG_PATH"
   else
-    log_debug "plugins: after_prompt recorded (session=$session_id, response_len=${#response_text})" "$PLUGINS_DEBUG_LOG_PATH"
+    log_debug "plugins: after_agent_response recorded (session=$session_id, response_len=${#response_text})" "$PLUGINS_DEBUG_LOG_PATH"
   fi
 }
 
@@ -264,7 +232,7 @@ pn_plugin_before_tool_call() {
   local body
   body=$("$JQ_BIN" -n \
     --arg action "before_tool_call" \
-    --arg platform "cursor-hooks" \
+    --arg platform "$PN_PLUGIN_PLATFORM" \
     --arg cwd "$cwd" --arg gitRepoUrl "$git_repo_url" --arg gitBranch "$git_branch" \
     --arg toolName "$tool_name" --argjson input "$input_json" \
     --arg generationId "$generation_id" --arg model "$model" --arg toolUseId "$tool_use_id" \
@@ -306,7 +274,7 @@ pn_plugin_after_tool_call() {
   local body
   body=$("$JQ_BIN" -n \
     --arg action "after_tool_call" \
-    --arg platform "cursor-hooks" \
+    --arg platform "$PN_PLUGIN_PLATFORM" \
     --arg cwd "$cwd" --arg gitRepoUrl "$git_repo_url" --arg gitBranch "$git_branch" \
     --arg toolUseId "$tool_use_id" --arg output "$output" \
     --argjson isError "$([[ "$is_error" == "true" ]] && echo true || echo false)" \

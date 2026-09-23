@@ -1,9 +1,13 @@
 #!/bin/bash
-# sessionEnd hook: records a session-end marker for this conversation's Code
-# Chain session. SessionId is Cursor's own conversation_id, used as-is -- no
-# prior registration is required for this to be meaningful. Per Cursor's
-# hooks contract this is fire-and-forget; it cannot affect session teardown.
-# See design-ideas/Codechain_Plugin_Hooks_Design.md.
+# sessionEnd hook: removes this conversation's local session-metadata file
+# (see lib/session-metadata.sh). SessionId is Cursor's own conversation_id,
+# used as-is. Per Cursor's hooks contract this is fire-and-forget; it cannot
+# affect session teardown.
+#
+# Previously this recorded a session-end marker with control-server via the
+# plugins API; that call was removed -- the marker had no processing/
+# governance/observability/reporting consumer. See design-ideas/
+# Session_Lifecycle_Simplification_And_Contract_Updates.md.
 
 set -o pipefail
 
@@ -18,10 +22,7 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/lib/common.sh"
-source "$SCRIPT_DIR/lib/plugins-client.sh"
-source "$SCRIPT_DIR/pn_config.sh"
-
-CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-5}"
+source "$SCRIPT_DIR/lib/session-metadata.sh"
 
 main() {
   local payload=""
@@ -37,13 +38,7 @@ main() {
   client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
   [[ -z "$client_session_id" ]] && return 0
 
-  pn_is_configured || return 0
-  local config
-  config=$(pn_resolve_config) || return 0
-  local base_url access_token
-  read -r base_url access_token <<<"$config"
-
-  pn_close_plugin_session "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" "$client_session_id"
+  pn_remove_session_metadata "$client_session_id"
   return 0
 }
 

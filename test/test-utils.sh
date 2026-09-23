@@ -291,6 +291,7 @@ source_scripts() {
   source "$SCRIPTS_DIR/lib/git-utils.sh"
   source "$SCRIPTS_DIR/lib/plugins-client.sh"
   source "$SCRIPTS_DIR/lib/repo-context.sh"
+  source "$SCRIPTS_DIR/lib/session-metadata.sh"
   source "$SCRIPTS_DIR/pn_config.sh"
 }
 

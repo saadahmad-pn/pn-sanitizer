@@ -4,6 +4,53 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-23 — Session lifecycle simplification: retire session-start/end API calls, rename Platform and after_prompt
+
+Investigated whether `sessionStart`/`sessionEnd`'s control-server calls
+(session-start/session-end markers) contributed to any processing,
+governance, observability, or reporting path. Confirmed they did not: these
+markers were explicitly excluded from user-facing interaction
+classification server-side, produced no observability trace, and had no
+consumer anywhere in control-server or webapp. Findings recorded in
+`design-ideas/Session_Lifecycle_Simplification_And_Contract_Updates.md`
+before any code changed.
+
+What changed:
+- `scripts/check-session.sh`/`check-session-end.sh`: no longer call the
+  plugins API. The hooks are retained (still wired in `hooks/hooks.json`,
+  still fire on every session start/end) but now write/remove a local JSON
+  metadata file instead (`~/.paradigm-scanner/sessions/<session_id>.json` —
+  SessionId/Cwd/GitRepoUrl/GitBranch/StartedAt), via new
+  `scripts/lib/session-metadata.sh`. This needs no login/config, unlike the
+  API call it replaces, and self-prunes files older than 24h so a session
+  that never gets a matching sessionEnd (crash, force-quit) doesn't
+  accumulate forever. Not currently read by anything else in the plugin —
+  evaluated as a potential lookup mechanism for a future consumer (a skill,
+  a standalone CLI helper) that has no Cursor hook payload of its own to
+  read session context from; `pn_read_session_metadata` exists for that,
+  unused for now.
+- `scripts/lib/plugins-client.sh`: removed `pn_register_plugin_session`/
+  `pn_close_plugin_session` (the retired API-calling functions).
+- Renamed `pn_plugin_after_prompt` to `pn_plugin_after_agent_response` —
+  the `Action` field it sends is now `after_agent_response` instead of
+  `after_prompt`, matching Cursor's own `afterAgentResponse` hook name
+  (the only hook that ever calls it). `before_prompt` is unchanged.
+- Renamed the `Platform` value this plugin sends from `"cursor-hooks"` to
+  `"cursor-plugin"` on every request. No migration touches
+  already-persisted control-server documents — see the design doc for the
+  (display-only, non-functional) consequence for historical rows.
+- File-events (`POST /file-events`) removed from control-server entirely —
+  this plugin never had a caller for it in the first place (confirmed, not
+  assumed); nothing to remove client-side.
+
+Also renamed throughout: "Cursor Hooks" → "Cursor Plugin" in prose/comments
+(control-server), and the Top Agents display label for this platform
+("Cursor" → "Cursor-Plugin") — deliberately distinct from the real Cursor
+IDE-as-gateway integration's own "Cursor" label, to stop conflating the two
+in Threat Landscape (this plugin only ever sees a side-channel copy of
+prompts/writes and never sees the model's real delivered response, unlike
+the gateway path).
+
 ## 2026-09-23 — Retire the dedicated shell-execution hooks; fold git push/commit gating into the generic tool-call hook
 
 Investigated whether `beforeShellExecution`/`afterShellExecution` (dedicated

@@ -22,23 +22,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
-source "$SCRIPT_DIR/lib/plugins-client.sh"
+source "$SCRIPT_DIR/lib/session-metadata.sh"
 source "$SCRIPT_DIR/pn_config.sh"
-
-CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-5}"
 
 # Drain stdin (hook may send payload)
 if [[ ! -t 0 ]]; then
   stdin_data=$(cat 2>/dev/null)
 fi
 
-# Best-effort Code Chain session-start marker -- see design-ideas/
-# Codechain_Plugin_Hooks_Design.md. Never affects this hook's own JSON
-# output/exit code (sessionStart is fire-and-forget context injection
-# regardless): if this fails, later hooks (check-tool-call-record,
-# check-turn-complete) still record fine on their own -- they use the same
-# client-supplied session id directly and don't depend on this call.
-register_codechain_session() {
+# Writes this session's local metadata file (SessionId/Cwd/GitRepoUrl/
+# GitBranch) -- see lib/session-metadata.sh. Previously this recorded a
+# Code Chain session-start marker via the plugins API instead; that call
+# was removed (see this file's header note in git history and design-ideas/
+# Session_Lifecycle_Simplification_And_Contract_Updates.md — the marker had
+# no processing/governance/observability/reporting consumer). This write is
+# purely local -- no login/config needed, unlike the API call it replaces.
+# Never affects this hook's own JSON output/exit code (sessionStart is
+# fire-and-forget context injection regardless).
+write_session_metadata() {
   [[ -z "$JQ_BIN" ]] && return 0
   [[ -z "$stdin_data" ]] && return 0
   echo "$stdin_data" | "$JQ_BIN" empty 2>/dev/null || return 0
@@ -48,27 +49,17 @@ register_codechain_session() {
   cwd=$(echo "$stdin_data" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
   [[ -z "$client_session_id" ]] && return 0
 
-  pn_is_configured || return 0
-  local config
-  config=$(pn_resolve_config) || return 0
-  local base_url access_token
-  read -r base_url access_token <<<"$config"
-
   local git_repo_url="" git_branch=""
   if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
     git_repo_url=$(get_remote_url_or_empty "$cwd")
     git_branch=$(get_current_branch_or_empty "$cwd")
   fi
 
-  pn_register_plugin_session "$base_url" "$access_token" "$CODECHAIN_TIMEOUT_SECONDS" \
-    "$client_session_id" "$cwd" "$git_repo_url" "$git_branch"
+  pn_write_session_metadata "$client_session_id" "$cwd" "$git_repo_url" "$git_branch"
 }
 # Backgrounded, not called inline: this must never delay the login-check
-# message below, which is this hook's actual job. Genuinely best-effort — if
-# the hook's process group is torn down at hooks.json's own timeout before
-# this finishes, that is an acceptable, expected loss (later hooks retry
-# registration idempotently), not a bug to work around here.
-register_codechain_session &
+# message below, which is this hook's actual job.
+write_session_metadata &
 
 # Fail open: any error just returns empty context
 main() {

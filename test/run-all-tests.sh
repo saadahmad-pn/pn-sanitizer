@@ -25,7 +25,7 @@ TOTAL_FAILED=0
 FAILED_SUITES=()
 
 # Test Suite 1: Unit Tests
-echo -e "${BLUE}[1/7]${NC} Running Unit Tests..."
+echo -e "${BLUE}[1/8]${NC} Running Unit Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-unit.sh" > /tmp/unit-test.log 2>&1
 unit_status=$?
@@ -48,7 +48,7 @@ fi
 echo ""
 
 # Test Suite 2: Integration Tests
-echo -e "${BLUE}[2/7]${NC} Running Integration Tests..."
+echo -e "${BLUE}[2/8]${NC} Running Integration Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-hooks.sh" > /tmp/integration-test.log 2>&1
 int_status=$?
@@ -70,7 +70,7 @@ echo ""
 # lib/plugins-client.sh's pn_build_git_diff_files_json -- the changed-file
 # collection folded into check-tool-call.sh's before_tool_call gate; see
 # design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md)
-echo -e "${BLUE}[3/7]${NC} Running Git Utils Tests..."
+echo -e "${BLUE}[3/8]${NC} Running Git Utils Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-git-utils.sh" > /tmp/git-utils-test.log 2>&1
 gitevent_status=$?
@@ -90,7 +90,7 @@ echo ""
 
 # Test Suite 3b: Code Chain Recording Tests (lib/plugins-client.sh's
 # session-lifecycle + after_* recording functions, get_current_turn_messages)
-echo -e "${BLUE}[4/7]${NC} Running Code Chain Recording Tests..."
+echo -e "${BLUE}[4/8]${NC} Running Code Chain Recording Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-codechain-client.sh" > /tmp/codechain-client-test.log 2>&1
 codechain_status=$?
@@ -108,9 +108,31 @@ else
 fi
 echo ""
 
+# Test Suite 4c: Session Metadata Tests (lib/session-metadata.sh -- the
+# local, purely-client-side session-lifecycle mechanism that replaced the
+# session-start/session-end plugins API calls; see design-ideas/
+# Session_Lifecycle_Simplification_And_Contract_Updates.md)
+echo -e "${BLUE}[5/8]${NC} Running Session Metadata Tests..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+"$TEST_DIR/test-session-metadata.sh" > /tmp/session-metadata-test.log 2>&1
+sessmeta_status=$?
+sessmeta_passed=$(grep "Passed:" /tmp/session-metadata-test.log | awk '{print $2}')
+sessmeta_total=$(grep "Total:" /tmp/session-metadata-test.log | awk '{print $2}')
+sessmeta_failed=$(grep "Failed:" /tmp/session-metadata-test.log | awk '{print $2}')
+TOTAL_TESTS=$((TOTAL_TESTS + ${sessmeta_total:-0}))
+TOTAL_PASSED=$((TOTAL_PASSED + ${sessmeta_passed:-0}))
+TOTAL_FAILED=$((TOTAL_FAILED + ${sessmeta_failed:-0}))
+if [[ $sessmeta_status -eq 0 ]]; then
+  echo -e "${GREEN}✓ Session Metadata Tests: $sessmeta_passed/$sessmeta_total passed${NC}"
+else
+  echo -e "${RED}✗ Session Metadata Tests failed ($sessmeta_passed/$sessmeta_total passed)${NC}"
+  FAILED_SUITES+=("Session Metadata Tests")
+fi
+echo ""
+
 # Test Suite 4b: Scan Client Tests (lib/plugins-client.sh's before_prompt/
 # before_tool_call gating, used by check-prompt.sh/check-tool-call.sh)
-echo -e "${BLUE}[5/7]${NC} Running Scan Client Tests..."
+echo -e "${BLUE}[6/8]${NC} Running Scan Client Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-scan-client.sh" > /tmp/scan-client-test.log 2>&1
 scan_status=$?
@@ -129,7 +151,7 @@ fi
 echo ""
 
 # Test Suite 5: Error Scenario Tests
-echo -e "${BLUE}[6/7]${NC} Running Error Scenario Tests..."
+echo -e "${BLUE}[7/8]${NC} Running Error Scenario Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-errors.sh" > /tmp/error-test.log 2>&1
 err_status=$?
@@ -148,7 +170,7 @@ fi
 echo ""
 
 # Suite 6: Dependency Check
-echo -e "${BLUE}[7/7]${NC} Checking Dependencies..."
+echo -e "${BLUE}[8/8]${NC} Checking Dependencies..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 DEPS_OK=true
 DEPS_FOUND=()
@@ -191,6 +213,7 @@ if [[ $TOTAL_FAILED -eq 0 ]]; then
   echo "  • Integration Tests:       ${int_total} tests (check-session.sh, check-prompt.sh, check-tool-call.sh)"
   echo "  • Git Utils:               ${gitevent_total} tests (git-utils resolvers, lib/plugins-client.sh pn_build_git_diff_files_json)"
   echo "  • Code Chain Recording:    ${codechain_total} tests (lib/plugins-client.sh, get_current_turn_messages)"
+  echo "  • Session Metadata:        ${sessmeta_total} tests (lib/session-metadata.sh, check-session.sh/check-session-end.sh)"
   echo "  • Scan Client:             ${scan_total} tests (lib/plugins-client.sh gating, POST /api/v1/plugins/sessions/{id}/*)"
   echo "  • Error Scenarios:         ${err_total} tests (edge cases, malformed input, file system errors)"
   echo ""
@@ -224,6 +247,7 @@ else
   echo "  /tmp/integration-test.log"
   echo "  /tmp/git-utils-test.log"
   echo "  /tmp/codechain-client-test.log"
+  echo "  /tmp/session-metadata-test.log"
   echo "  /tmp/scan-client-test.log"
   echo "  /tmp/error-test.log"
   echo ""
