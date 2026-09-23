@@ -4,6 +4,45 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-23 — Detect and attach files for MCP git-commit tool calls
+
+Investigated whether Cursor's MCP-based git tools (e.g. `MCP:git_commit`,
+`MCP:git_push` — confirmed from live logs) were reaching Code Chain's
+git-detection pipeline the same way a Shell-driven `git commit`/`git push`
+does. They were not: `check-tool-call.sh`'s file-attachment logic and
+control-server's `afterToolCall` git/PR-detection dispatch were both keyed
+on `tool_name == "Shell"` specifically, so an MCP git tool call — forwarded
+generically like any other tool call, just never recognized as a git event
+— produced no commit/push record in Code Chain and never got its changed
+files attached to the CDS scan. Findings recorded in
+`design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md` before any code
+changed.
+
+What changed:
+- `scripts/check-tool-call.sh`: added an `MCP:git_commit` branch to the
+  `git_event_type` detection block — the tool name itself names the action,
+  no command-text regex needed the way Shell requires. The changed-file list
+  is sourced from the MCP tool's own `tool_input.files` (it already names
+  exactly what it committed) rather than a local git-plumbing walk, avoiding
+  picking up unrelated staged-but-uncommitted changes that might coexist in
+  the same working tree.
+- `scripts/lib/plugins-client.sh`: refactored `pn_build_git_diff_files_json`'s
+  encode/cap/attach body into a shared `_pn_build_files_json_from_list`
+  helper, and added `pn_build_files_json_from_paths` (cwd + a caller-supplied
+  file list) on top of it for the MCP path above. No behavior change to the
+  existing Shell-driven `pn_build_git_diff_files_json` callers.
+- No client-side change for `MCP:git_push` — push has never attached file
+  content in either path (a push moves already-committed content, nothing
+  new to scan). Server-side MCP push detection (control-server) is a
+  separate change, built from `SessionContext`'s `GitRepoUrl`/`GitBranch`
+  rather than anything this plugin sends, since the observed MCP push tool's
+  captured output carries no parseable ref-update summary.
+
+Verified: `bash test/run-all-tests.sh` (259/259, up from 248 — 3 new Git
+Utils unit tests for `pn_build_files_json_from_paths`, 3 new Integration
+tests for `check-tool-call.sh`'s MCP:git_commit path), `shellcheck -S
+warning -x` clean on all touched files.
+
 ## 2026-09-23 — Session lifecycle simplification: retire session-start/end API calls, rename Platform and after_prompt
 
 Investigated whether `sessionStart`/`sessionEnd`'s control-server calls

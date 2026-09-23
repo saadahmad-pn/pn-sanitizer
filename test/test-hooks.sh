@@ -274,6 +274,55 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+# --- MCP git-commit tool call -- see design-ideas/
+# MCP_Git_Tool_Call_Detection_Gap_Analysis.md. Unlike Shell, the tool_name
+# itself ("MCP:git_commit") names the action -- no command-text regex needed
+# -- and the file list to attach comes from the tool's own tool_input.files.
+
+test_case "check-tool-call.sh with an MCP:git_commit tool call -- Commit-specific wording, no command-text regex needed"
+payload='{"tool_name": "MCP:git_commit", "agent_message": "test", "tool_input": {"directory": "/repo", "message": "fix bug", "files": ["a.txt"]}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "Fails closed (default) when not configured, same as Shell git commit"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$result" == *"Commit blocked"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Uses Commit-specific wording for an MCP:git_commit tool call"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Uses Commit-specific wording for an MCP:git_commit tool call (got: $result)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call.sh with MCP:git_commit inside a real git repo -- attaches the tool's own reported files, not a git-plumbing walk"
+mcp_git_cwd=$(mktemp -d "${TMPDIR:-/tmp}/pn-tool-call-mcp-git-XXXXXX")
+git -C "$mcp_git_cwd" init -q -b main
+git -C "$mcp_git_cwd" config user.email "test@example.com"
+git -C "$mcp_git_cwd" config user.name "Test"
+echo "committed via mcp" > "$mcp_git_cwd/mcp-file.txt"
+git -C "$mcp_git_cwd" add mcp-file.txt
+git -C "$mcp_git_cwd" commit -q -m "mcp commit"
+# A second, still-staged file that the MCP tool's own file list does NOT
+# name -- must not be picked up (unlike the Shell path's git-plumbing walk,
+# which would include it as a staged change).
+echo "unrelated staged change" > "$mcp_git_cwd/unrelated.txt"
+git -C "$mcp_git_cwd" add unrelated.txt
+payload=$("$JQ_BIN" -n --arg cwd "$mcp_git_cwd" '{tool_name: "MCP:git_commit", agent_message: "test", cwd: $cwd, tool_input: {directory: $cwd, message: "mcp commit", files: ["mcp-file.txt"]}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output even when collecting real changed-file content"
+assert_json_field_equals "$result" "permission" "deny" "Still fails closed (not configured) -- file collection doesn't change the gate outcome"
+rm -rf "$mcp_git_cwd"
+
+test_case "check-tool-call.sh with an MCP tool call unrelated to git -- no git wording (only MCP:git_commit is special-cased)"
+payload='{"tool_name": "MCP:jira_update_issue", "agent_message": "test", "tool_input": {"project": "PN", "summary": "fix bug"}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$result" != *"Commit blocked"* && "$result" != *"Push blocked"* ]]; then
+  echo -e "  ${GREEN}✓${NC} No git-specific wording for an unrelated MCP tool"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} No git-specific wording for an unrelated MCP tool (got: $result)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 echo ""
 echo -e "${BLUE}=== Integration Tests: check-prompt.sh repo-context injection ===${NC}"
 

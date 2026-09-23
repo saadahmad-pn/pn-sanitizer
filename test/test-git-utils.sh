@@ -112,5 +112,30 @@ assert_output_equals "echo \"\$files_json\"" "[]" "binary file never attached"
 test_case "pn_build_git_diff_files_json: unrecognized event type -> empty array, no resolver called"
 assert_output_equals "pn_build_git_diff_files_json '$push_repo' 'git.pr_create'" "[]" "git.pr_create has no file-collection resolver"
 
+echo -e "${BLUE}=== Unit Tests: lib/plugins-client.sh (pn_build_files_json_from_paths, MCP git-commit file attachment) ===${NC}"
+
+test_case "pn_build_files_json_from_paths: caller-supplied file list -> one entry, base64 content matches"
+mcp_repo=$(make_test_git_repo "build-files-from-paths")
+echo "committed via mcp" > "$mcp_repo/mcp-file.txt"
+git -C "$mcp_repo" add mcp-file.txt
+git -C "$mcp_repo" commit -q -m "mcp commit"
+files_json=$(pn_build_files_json_from_paths "$mcp_repo" "mcp-file.txt")
+assert_output_equals "echo \"\$files_json\" | \"\$JQ_BIN\" 'length'" "1" "one file entry"
+assert_output_equals "echo \"\$files_json\" | \"\$JQ_BIN\" -r '.[0].Filename'" "mcp-file.txt" "Filename is the caller-supplied path"
+decoded=$(echo "$files_json" | "$JQ_BIN" -r '.[0].ContentBase64' | base64 -d 2>/dev/null)
+assert_output_equals "cat '$mcp_repo/mcp-file.txt'" "$decoded" "base64 content decodes back to the file's real content"
+
+test_case "pn_build_files_json_from_paths: empty file list -> empty array"
+assert_output_equals "pn_build_files_json_from_paths '$mcp_repo' ''" "[]" "nothing to attach"
+
+test_case "pn_build_files_json_from_paths: a path missing from the working tree is skipped, not fatal"
+files_json=$(pn_build_files_json_from_paths "$mcp_repo" "$(printf 'mcp-file.txt\nnot-on-disk.txt')")
+assert_output_equals "echo \"\$files_json\" | \"\$JQ_BIN\" 'length'" "1" "only the real file is attached"
+
+test_case "pn_build_files_json_from_paths: binary file is skipped"
+printf 'abc\000def' > "$mcp_repo/image.bin"
+files_json=$(pn_build_files_json_from_paths "$mcp_repo" "image.bin")
+assert_output_equals "echo \"\$files_json\"" "[]" "binary file never attached"
+
 test_summary
 exit $?

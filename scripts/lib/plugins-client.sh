@@ -302,11 +302,10 @@ pn_plugin_after_tool_call() {
 # pn_build_git_diff_files_json <cwd> <git_event_type>
 # Prints a JSON array of {Filename, ContentBase64} for the file set relevant
 # to git_event_type ("git.push" -> resolve_unpushed_changed_files,
-# "git.commit" -> resolve_staged_changed_files; see lib/git-utils.sh),
-# skipping binary files and anything missing from the working tree, and
-# capped by PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES/_MAX_BYTES (same env vars
-# and defaults the old check-git-event.sh guardrail used). Prints "[]" when
-# there's nothing to attach -- never fails the caller's gate on its own.
+# "git.commit" -> resolve_staged_changed_files; see lib/git-utils.sh). Prints
+# "[]" when there's nothing to attach -- never fails the caller's gate on its
+# own. Shares its encode/cap pipeline with pn_build_files_json_from_paths
+# (below) via _pn_build_files_json_from_list -- see that function's doc.
 pn_build_git_diff_files_json() {
   local cwd="$1" git_event_type="$2"
   local changed_files=""
@@ -315,6 +314,30 @@ pn_build_git_diff_files_json() {
     git.commit) changed_files=$(resolve_staged_changed_files "$cwd") ;;
     *) echo "[]"; return 0 ;;
   esac
+  _pn_build_files_json_from_list "$cwd" "$changed_files" "$git_event_type"
+}
+
+# pn_build_files_json_from_paths <cwd> <newline-separated relative paths>
+# Same encode/cap/attach pipeline as pn_build_git_diff_files_json, but sourced
+# from a caller-supplied file list rather than local git-plumbing discovery.
+# Used for an MCP git-commit tool call, whose own tool_input already names
+# the exact files it committed -- there is nothing to discover locally, and
+# using the tool's own reported list avoids pulling in unrelated
+# staged-but-not-yet-committed changes that may coexist in the same working
+# tree. See design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md §4.2.
+pn_build_files_json_from_paths() {
+  local cwd="$1" changed_files="$2"
+  _pn_build_files_json_from_list "$cwd" "$changed_files" "mcp git commit"
+}
+
+# _pn_build_files_json_from_list <cwd> <newline-separated relative paths> <label>
+# Shared encode/cap/attach body for both callers above: skips binary files
+# and anything missing from the working tree, capped by
+# PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES/_MAX_BYTES (same env vars and
+# defaults the old check-git-event.sh guardrail used). label is only used in
+# the capped-guardrail debug log line, to say which caller hit it.
+_pn_build_files_json_from_list() {
+  local cwd="$1" changed_files="$2" label="$3"
   if [[ -z "$changed_files" ]]; then
     echo "[]"
     return 0
@@ -349,7 +372,7 @@ pn_build_git_diff_files_json() {
   done <<< "$changed_files"
 
   if [[ "$capped" -eq 1 ]]; then
-    log_debug "git-diff file set for $git_event_type exceeded the ${max_files}-file/${max_total_bytes}-byte guardrail; remaining files were not attached" "$PLUGINS_DEBUG_LOG_PATH"
+    log_debug "git-diff file set for $label exceeded the ${max_files}-file/${max_total_bytes}-byte guardrail; remaining files were not attached" "$PLUGINS_DEBUG_LOG_PATH"
   fi
   echo "$entries"
 }

@@ -20,6 +20,11 @@
 # Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md for why that
 # domain couldn't simply be deleted (this file/check-tool-call-record.sh are
 # what replace it).
+#
+# A git MCP server's own commit tool (tool_name "MCP:git_commit") is detected
+# the same way and gets the same file-attachment treatment, sourced from the
+# tool's own tool_input.files rather than local git-plumbing discovery -- see
+# design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md.
 
 set -o pipefail
 
@@ -142,6 +147,15 @@ main() {
   # beforeShellExecution matchers. git.pr_create has no equivalent here: it
   # was never scanned pre-execution (no artifact to scan before a PR exists)
   # and needs no file attachment.
+  #
+  # An MCP git server's own commit tool names the action directly via
+  # tool_name -- no command-string regex needed the way Shell requires (see
+  # design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md). No MCP push
+  # equivalent is handled here: unlike commit, push never attaches file
+  # content in either path (nothing new to scan -- a push moves
+  # already-committed content). control-server's after_tool_call handles MCP
+  # push detection separately, from SessionContext, not from anything this
+  # script sends.
   local git_event_type="" files_json="[]"
   if [[ "$tool_name" == "Shell" ]]; then
     local shell_command
@@ -155,6 +169,10 @@ main() {
       action_noun="Commit"
       action_desc="this commit"
     fi
+  elif [[ "$tool_name" == "MCP:git_commit" ]]; then
+    git_event_type="git.commit"
+    action_noun="Commit"
+    action_desc="this commit"
   fi
 
   # Cursor's own stable correlator, present on both preToolUse and
@@ -203,7 +221,15 @@ main() {
     # at cwd has nothing to collect -- files_json stays "[]", same as any
     # other Shell command.
     if [[ -n "$git_event_type" ]]; then
-      files_json=$(pn_build_git_diff_files_json "$cwd" "$git_event_type")
+      if [[ "$tool_name" == "MCP:git_commit" ]]; then
+        # tool_input_raw (extracted above) already names exactly which files
+        # the MCP tool committed -- see pn_build_files_json_from_paths's doc.
+        local mcp_commit_files
+        mcp_commit_files=$(echo "$tool_input_raw" | "$JQ_BIN" -r '.files // [] | .[]' 2>/dev/null)
+        files_json=$(pn_build_files_json_from_paths "$cwd" "$mcp_commit_files")
+      else
+        files_json=$(pn_build_git_diff_files_json "$cwd" "$git_event_type")
+      fi
     fi
   fi
 
