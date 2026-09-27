@@ -226,6 +226,15 @@ main() {
       local reason="$PN_PROMPT_MESSAGE"
       [[ -z "$reason" ]] && reason="A policy violation was detected."
 
+      # A blocked prompt never reaches the agent, so Cursor's
+      # afterAgentResponse hook -- the only thing that normally calls
+      # pn_plugin_after_agent_response -- never fires for this turn. Left
+      # alone, the turn this before_prompt call opened would stay open on
+      # the server forever, with no outcome ever attached, even though we
+      # already know it: it was blocked, for this reason. Close it out here
+      # instead of waiting for a response that will never come.
+      pn_plugin_after_agent_response "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "[BLOCKED] $reason" "$generation_id" "$model"
+
       # Preview of the actual prompt that got flagged, capped at 60 words
       # so a long prompt doesn't blow up the message. Collapsed to a
       # single line first: markdown's ">" blockquote syntax only quotes

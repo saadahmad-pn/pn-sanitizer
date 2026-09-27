@@ -425,6 +425,16 @@ main() {
       pn_record_successful_scan
       local user_message="$PN_TOOLCALL_MESSAGE"
       [[ -z "$user_message" ]] && user_message="A policy violation was detected."
+
+      # A blocked tool call never runs, so Cursor's postToolUse hook -- the
+      # only thing that normally calls pn_plugin_after_tool_call (see
+      # check-tool-call-record.sh) -- never fires for it. Left alone, the
+      # tool_use block this before_tool_call call opened would stay open on
+      # the server forever, with no outcome ever attached, even though we
+      # already know it: it was blocked, for this reason. Close it out here
+      # instead of waiting for a result that will never come.
+      pn_plugin_after_tool_call "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$PN_TOOLCALL_TOOL_USE_ID" "[BLOCKED] $user_message" "true" "$generation_id" "$tool_name" "$tool_input_raw"
+
       json_permission_deny "$user_message" "$user_message $(build_stop_instruction "$action_desc")"
       ;;
     warn)
