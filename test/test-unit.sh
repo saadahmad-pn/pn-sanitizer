@@ -288,56 +288,6 @@ result=$(pn_resolve_config)
 assert_output_contains "echo '$result'" "https://file.example.com" "Uses file base_url"
 assert_output_contains "echo '$result'" "file-token" "Uses file token"
 
-test_case "pn_get_preferred_model returns empty when never set"
-rm -f "$HOME/.pn/credentials.json"
-future_expiry=$(($(date +%s) + 7200))
-pn_save_credentials "https://model-test.example.com" "token" "refresh" "$future_expiry"
-result=$(pn_get_preferred_model)
-assert_output_equals "echo '$result'" "" "Empty string, not an error, when unset"
-
-test_case "pn_save_preferred_model then pn_get_preferred_model round-trips"
-pn_save_preferred_model "anthropic/claude-opus-4-7"
-result=$(pn_get_preferred_model)
-assert_output_equals "echo '$result'" "anthropic/claude-opus-4-7" "Round-trips the saved model id"
-
-test_case "pn_save_credentials (simulating a token refresh) does not wipe a saved preferred_model"
-new_expiry=$(($(date +%s) + 3600))
-pn_save_credentials "https://model-test.example.com" "refreshed-token" "refreshed-refresh" "$new_expiry"
-result=$(pn_get_preferred_model)
-assert_output_equals "echo '$result'" "anthropic/claude-opus-4-7" "Survives a credentials refresh unchanged"
-result=$(pn_load_credentials | "$JQ_BIN" -r '.access_token')
-assert_output_equals "echo '$result'" "refreshed-token" "The refreshed fields themselves still updated correctly"
-
-test_case "pn_save_preferred_model fails when not configured"
-rm -f "$HOME/.pn/credentials.json"
-assert_failure "pn_save_preferred_model 'some-model'" "Returns failure with no credentials file to merge into"
-
-# Regression coverage for P2-3: pn_resolve_model is the shared
-# precedence chain (env var > saved preference > default) that used to
-# be duplicated by hand across six files -- covering every tier here is
-# what actually catches a future drift, not just that the function
-# exists.
-test_case "pn_resolve_model: tier 3, nothing set, falls back to the default"
-rm -f "$HOME/.pn/credentials.json"
-unset PARADIGM_NETWORKS_MODEL
-pn_resolve_model
-assert_output_equals "echo '$PN_RESOLVED_MODEL'" "$PN_DEFAULT_MODEL" "Resolves to PN_DEFAULT_MODEL"
-assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "true" "Flags it as the default"
-
-test_case "pn_resolve_model: tier 2, saved preference wins over the default"
-pn_save_credentials "https://model-resolve-test.example.com" "tok" "reftok" "$(($(date +%s) + 3600))"
-pn_save_preferred_model "anthropic/claude-opus-4-7"
-pn_resolve_model
-assert_output_equals "echo '$PN_RESOLVED_MODEL'" "anthropic/claude-opus-4-7" "Resolves to the saved preference"
-assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "false" "Not flagged as the default"
-
-test_case "pn_resolve_model: tier 1, env var wins over the saved preference"
-export PARADIGM_NETWORKS_MODEL="anthropic/claude-sonnet-4-6"
-pn_resolve_model
-assert_output_equals "echo '$PN_RESOLVED_MODEL'" "anthropic/claude-sonnet-4-6" "Resolves to the env var, not the saved preference"
-assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "false" "Not flagged as the default"
-unset PARADIGM_NETWORKS_MODEL
-
 echo ""
 echo -e "${BLUE}=== Unit Tests: login.sh ===${NC}"
 

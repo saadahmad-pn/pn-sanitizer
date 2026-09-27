@@ -206,12 +206,18 @@ main() {
       fi
       if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
         if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+          # Same reasoning as the block) case below: before_prompt already
+          # opened a real record on the server, and afterAgentResponse will
+          # never fire for a denied prompt -- close it out here instead of
+          # leaving it open.
+          pn_plugin_after_agent_response "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "[BLOCKED] ${anomaly_prefix}${PN_PROMPT_MESSAGE}" "$generation_id" "$model"
           json_deny "${anomaly_prefix}${PN_PROMPT_MESSAGE}"
         else
           json_allow "${anomaly_prefix}${PN_PROMPT_MESSAGE}"
         fi
       else
         if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+          pn_plugin_after_agent_response "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "[BLOCKED] ${anomaly_prefix}The scanning service returned an unexpected response. Prompt blocked." "$generation_id" "$model"
           json_deny "${anomaly_prefix}The scanning service returned an unexpected response. Prompt blocked."
         else
           json_allow "${anomaly_prefix}The scanning service returned an unexpected response. Allowing prompt."

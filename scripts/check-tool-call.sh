@@ -411,12 +411,18 @@ main() {
         if [[ "$FAILURE_MODE" == "open" ]]; then
           json_permission_allow "${anomaly_prefix}${PN_TOOLCALL_MESSAGE}"
         else
+          # Same reasoning as the block) case below: before_tool_call
+          # already opened a real record on the server, and postToolUse
+          # will never fire for a denied tool call -- close it out here
+          # instead of leaving it open.
+          pn_plugin_after_tool_call "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$PN_TOOLCALL_TOOL_USE_ID" "[BLOCKED] ${anomaly_prefix}${PN_TOOLCALL_MESSAGE}" "true" "$generation_id" "$tool_name" "$tool_input_raw"
           json_permission_deny "${anomaly_prefix}${PN_TOOLCALL_MESSAGE}" "$PN_TOOLCALL_MESSAGE Do not retry ${action_desc}."
         fi
       else
         if [[ "$FAILURE_MODE" == "open" ]]; then
           json_permission_allow "${anomaly_prefix}The scanning service returned an unexpected response. ${action_noun} allowed WITHOUT a security scan."
         else
+          pn_plugin_after_tool_call "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$PN_TOOLCALL_TOOL_USE_ID" "[BLOCKED] ${anomaly_prefix}The scanning service returned an unexpected response. ${action_noun} blocked." "true" "$generation_id" "$tool_name" "$tool_input_raw"
           json_permission_deny "${anomaly_prefix}The scanning service returned an unexpected response. ${action_noun} blocked." "The scanning service returned an unexpected response. Do not retry ${action_desc}."
         fi
       fi

@@ -155,7 +155,7 @@ function Resolve-HookModel {
 }
 
 # Invoke-CurlRequest -CurlArgs <string[]>
-# Shared machinery for Invoke-HttpPostRaw/Invoke-HttpGetRaw below: runs
+# Shared machinery for Invoke-HttpPostRaw below: runs
 # curl.exe with the given arguments (which must already include -s, the
 # URL/method/headers, and a trailing "-w `n%{http_code}"), splits the
 # status-code line curl appends off of the response body, and maps
@@ -170,7 +170,7 @@ function Resolve-HookModel {
 # ran ~22s anyway), forcing a manual Task.Wait(timeout) workaround just to
 # get a hard deadline. curl's own --max-time is mature and already proven
 # reliable here -- it's exactly what the bash side has used from day one
-# (see http_post/http_get in common.sh) with no equivalent problem. This
+# (see http_post in common.sh) with no equivalent problem. This
 # also collapses two parallel HTTP implementations (bash's curl calls,
 # PowerShell's HttpClient calls) that had to be kept behaviorally
 # identical by hand into one real implementation, mirrored.
@@ -268,27 +268,6 @@ function Invoke-HttpPostRaw {
   } finally {
     Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
   }
-}
-
-# Invoke-HttpGetRaw -Url ... -AuthToken ... -TimeoutSec ...
-# Same contract as Invoke-HttpPostRaw above -- used for GET /v1/models.
-function Invoke-HttpGetRaw {
-  param(
-    [Parameter(Mandatory = $true)][string]$Url,
-    [string]$AuthToken = "",
-    [int]$TimeoutSec = 5
-  )
-
-  $curlArgs = @(
-    "-s", "-X", "GET", $Url,
-    "--max-time", "$TimeoutSec",
-    "-w", "`n%{http_code}"
-  )
-  if ($AuthToken) {
-    $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
-  }
-
-  return Invoke-CurlRequest -CurlArgs $curlArgs
 }
 
 # Invoke-HttpPostMultipart -Url ... -FormArgs <string[]> -AuthToken ... -TimeoutSec ...

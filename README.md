@@ -44,13 +44,6 @@ To switch organizations later, just ask to log in again — it replaces the
 old login. To remove your login from this machine entirely, ask to log
 out — the **paradigmnetworks-logout** skill handles it.
 
-### Changing the scanning model
-
-Prompts and writes are scanned using a default model out of the box.
-Ask "what models are available" any time to see which models your
-organization can use and which one is currently active, or to switch to
-a different one — the **paradigmnetworks-models** skill handles both.
-
 ## Try it
 
 1. Install the plugin and log in (see above).
