@@ -38,15 +38,22 @@ function Write-AllowAndExit {
   exit 0
 }
 
-# Get-Sha256OfFile: the digest control-server matches against the published
-# SKILL.md. Returns "" when the file cannot be read -- that downgrades the
-# report to "unmatched" rather than dropping it, since the server re-hashes
-# the content it receives anyway.
-function Get-Sha256OfFile {
-  param([Parameter(Mandatory = $true)][string]$Path)
+# Get-Sha256OfString: the digest control-server matches against the published
+# SKILL.md. Hashes the EXACT STRING being sent, never the file on disk -- the
+# two are not the same thing, and the bash twin's earlier file-based version
+# was rejected by the server on every single call (see its own comment).
+# Returns "" on failure, which downgrades the report to "unmatched" rather
+# than dropping it, since the server re-hashes what it receives anyway.
+function Get-Sha256OfString {
+  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
   try {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Value))
+      return [System.BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
+    } finally {
+      $sha.Dispose()
+    }
   } catch {
     return ""
   }
@@ -110,7 +117,13 @@ if (-not $content) {
     $content = ""
   }
 }
-$contentSha = Get-Sha256OfFile -Path $filePath
+# Hashed from $content itself, so the digest and the body can never disagree
+# -- whatever we send is what we hashed, whether it came from the payload or
+# off disk.
+$contentSha = ""
+if ($content) {
+  $contentSha = Get-Sha256OfString -Value $content
+}
 
 $config = Resolve-PnConfig
 if (-not $config -or -not $config.BaseUrl -or -not $config.AccessToken) { Write-AllowAndExit }

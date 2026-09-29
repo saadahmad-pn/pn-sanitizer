@@ -62,22 +62,50 @@ respond_allow() {
   exit 0
 }
 
-# sha256_of_file: the digest control-server matches against the published
-# SKILL.md. Tried in order because no single tool is present everywhere --
-# shasum ships with macOS, sha256sum with most Linux distributions, and
-# openssl is the fallback when a minimal image has neither. Prints nothing
-# when none is available, which downgrades the report to "unmatched" rather
-# than dropping it: the server re-hashes the content it receives anyway, so a
-# missing client-side digest costs nothing but the mismatch check.
-sha256_of_file() {
-  local path="$1"
+# sha256_of_string: the digest control-server matches against the published
+# SKILL.md. Hashes the EXACT STRING being sent, never the file on disk -- the
+# two are not the same thing, and an earlier version that hashed the file was
+# rejected by the server on every single call. Tried in order because no
+# single tool is present everywhere: shasum ships with macOS, sha256sum with
+# most Linux distributions, openssl is the fallback when a minimal image has
+# neither. Prints nothing when none is available, which downgrades the report
+# to "unmatched" rather than dropping it -- the server re-hashes what it
+# receives anyway, so a missing client digest costs only the mismatch check.
+sha256_of_string() {
   if command_exists shasum; then
-    shasum -a 256 "$path" 2>/dev/null | awk '{print $1}'
+    printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{print $1}'
   elif command_exists sha256sum; then
-    sha256sum "$path" 2>/dev/null | awk '{print $1}'
+    printf '%s' "$1" | sha256sum 2>/dev/null | awk '{print $1}'
   elif command_exists openssl; then
-    openssl dgst -sha256 "$path" 2>/dev/null | awk '{print $NF}'
+    printf '%s' "$1" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}'
   fi
+}
+
+# read_preserving_trailing_newline: runs a command and captures its output
+# WITHOUT losing trailing newlines.
+#
+# $(...) strips EVERY trailing newline, and a SKILL.md almost always ends in
+# one. That one missing byte is not cosmetic here: the whole match is an exact
+# SHA-256 against the published file, so a body one byte short can never match
+# anything, ever. Measured against a real skill (2026-09-29): the file was
+# 2141 bytes and plain $() produced 2140, whose hash shares no prefix with the
+# file's.
+#
+# The sentinel is the standard fix -- append a byte the stripping cannot
+# remove, then remove it by hand.
+#
+# The caller must use `jq -j`, never `jq -r`, for the same measurement's other
+# half: -r appends its OWN newline to the value, so the same file came back as
+# 2142 bytes and preserving that faithfully is just as wrong in the other
+# direction. -j emits the value raw, which makes it byte-identical to `cat`.
+# Sets the global PN_READ_RESULT rather than printing. It HAS to: a caller
+# writing `x=$(read_preserving_trailing_newline ...)` would strip the newline
+# right back off in that outer substitution, which is precisely the bug this
+# function exists to avoid, and it fails silently.
+read_preserving_trailing_newline() {
+  local out
+  out=$("$@"; printf 'x')
+  PN_READ_RESULT="${out%x}"
 }
 
 payload=""
@@ -130,14 +158,20 @@ generation_id=$(printf '%s' "$payload" | "$JQ_BIN" -r '.generation_id // ""' 2>/
 # The payload carries the file's full content. Falling back to reading it off
 # disk keeps this working if a future Cursor version drops the field -- the
 # path is right there, and an unreadable file just means an unmatched use.
-content=$(printf '%s' "$payload" | "$JQ_BIN" -r '.content // ""' 2>/dev/null)
+extract_content() { printf '%s' "$payload" | "$JQ_BIN" -j '.content // ""' 2>/dev/null; }
+read_preserving_trailing_newline extract_content
+content="$PN_READ_RESULT"
 if [[ -z "$content" && -r "$file_path" ]]; then
-  content=$(cat "$file_path" 2>/dev/null)
+  read_preserving_trailing_newline cat "$file_path"
+  content="$PN_READ_RESULT"
 fi
 
+# Hashed from $content itself, so the digest and the body can never disagree
+# -- whatever we send is what we hashed, whether it came from the payload or
+# off disk.
 content_sha=""
-if [[ -r "$file_path" ]]; then
-  content_sha=$(sha256_of_file "$file_path")
+if [[ -n "$content" ]]; then
+  content_sha=$(sha256_of_string "$content")
 fi
 
 config=$(pn_resolve_config) || {
