@@ -4,6 +4,89 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-29 — Extend the PN-12153 scan exemption to the logout skill's logout.sh command
+
+Widened the exemption below to also cover the `paradigmnetworks-logout`
+skill's `bash <path>/logout.sh` Shell tool call (no arguments at all —
+even less content than login.sh's base-URL argument). Same reasoning:
+system-generated control message, not user-authored content, no security
+purpose served by scanning it.
+
+`scripts/lib/login-detection.sh` gained `pn_is_logout_command` (identical
+anchoring discipline to `pn_is_login_initiation_command`, but simpler —
+no `--base-url` argument to also validate) and a combined
+`pn_login_logout_exempt_reason` wrapper that both `check-tool-call.sh` and
+`check-tool-call-record.sh` now call instead of the login-only function
+directly; it sets `PN_LOGIN_EXEMPT_REASON` to `login_initiation_exempt` or
+`logout_exempt` (multi-value-return-via-global, the same convention this
+codebase already uses for `PN_PROMPT_STATUS`/`PN_TOOLCALL_STATUS` etc.) so
+the audit-log entry and debug-log line correctly distinguish which of the
+two fired. `pn_is_login_initiation_command`'s own path-suffix check was
+factored out into a shared `_pn_resolve_own_script` helper reused by both
+functions, rather than duplicating the resolve-and-compare logic.
+
+Also tightened `skills/paradigmnetworks-logout/SKILL.md` step 3 the same
+way step 4 of the login skill was tightened below: run standalone, no
+`cd`/`&&`/`;`/extra flags/arguments.
+
+Verified: `bash test/run-all-tests.sh` (296/296, up from 271 — 18 new unit
+tests for `pn_is_logout_command`/`pn_login_logout_exempt_reason` plus 5 new
+integration tests covering the exempted logout case, an unexpected-argument
+bypass attempt, and a same-named `logout.sh` outside this installation).
+`shellcheck -S warning -x` clean (the one `PN_LOGIN_EXEMPT_REASON` SC2034 hit
+in `login-detection.sh` is the same pre-existing, accepted
+cross-file-global pattern already present for `PN_PROMPT_STATUS`/
+`PN_TOOLCALL_STATUS` in `lib/plugins-client.sh`, not a new issue).
+
+## 2026-09-29 — Skip scanning for the login skill's own login-initiation command (PN-12153)
+
+The `paradigmnetworks-login` skill's `bash <path>/login.sh --base-url <url>`
+Shell tool call was being scanned by `check-tool-call.sh`/
+`check-tool-call-record.sh` (PromptGuard+PolicyEngine+CodeDefense) like any
+other command, even though it carries no user-authored content beyond the
+org's own base URL. This currently "worked" only by accident: the moment the
+tool call runs, the user is by definition not yet logged in, so
+`pn_resolve_config` fails and the existing "not configured -> always allow"
+branch happens to let it through. That accident disappears for a re-login/
+switch-org flow, where the exact same command would go through full scanning
+under `check-tool-call.sh`'s fail-closed default — with real risk of the
+scan's own latency or a false-positive block getting in the way of the one
+command a stuck user depends on to get unblocked.
+
+Added `scripts/lib/login-detection.sh`'s `pn_is_login_initiation_command`:
+a fully end-to-end anchored grammar match (not a substring/keyword check —
+`command` merely containing "login.sh" would be trivially smugglable via
+`; rm -rf` or similar), requiring the entire command to be exactly an
+optional interpreter + a path resolving to *this plugin installation's own*
+`login.sh` + `--base-url <scheme://host(:port)>` and nothing else. Wired into
+both `check-tool-call.sh` (skip the scan call outright, before even checking
+whether the user is configured) and `check-tool-call-record.sh` (skip the
+matching `after_tool_call` recording, since no `before_tool_call` record
+was ever opened for it) — both re-run the identical check independently
+rather than threading state between the two separate hook-process
+invocations. Everything else the login skill does (the `find` for the
+script path, the `AskQuestion` for the base URL) is deliberately left
+scanned exactly as before — this exemption covers only the login-initiation
+command itself, per the ticket's scope. (`logout.sh` was scanned as normal
+at the time of this entry; see the 2026-09-29 entry above for its own,
+later exemption.)
+
+Also tightened `skills/paradigmnetworks-login/SKILL.md` step 4 to require
+running this command standalone (no `cd`/`&&`/`;`/extra flags), since the
+exemption's grammar only matches that exact shape.
+
+Verified: `bash test/run-all-tests.sh` (271/271, up from 253 — 14 new unit
+tests in `test/test-login-detection.sh` plus 6 new integration tests in
+`test/test-hooks.sh` covering the exempted case, a chained-command bypass
+attempt, and a same-named `login.sh` outside this installation, none of
+which qualify for the exemption). `shellcheck -S warning -x` clean on the
+new and modified scripts.
+
+Windows (`check-tool-call.ps1`/`check-tool-call-record.ps1`) intentionally
+untouched: neither file exists yet on this branch, so `preToolUse`/
+`postToolUse` scanning isn't wired for Windows at all today — a pre-existing
+gap, not something this change needed to close.
+
 ## 2026-09-23 — Raise postToolUse timeouts for the new tool-result scan
 
 control-server's `after_tool_call` now runs the same PromptGuard+PolicyEngine+

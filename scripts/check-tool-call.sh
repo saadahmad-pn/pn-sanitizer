@@ -46,6 +46,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/plugins-client.sh"
+source "$SCRIPT_DIR/lib/login-detection.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
@@ -118,6 +119,31 @@ main() {
   local tool_name
   tool_name=$(echo "$payload" | "$JQ_BIN" -r '.tool_name // ""')
   if [[ -z "$tool_name" ]]; then
+    json_permission_allow
+    return 0
+  fi
+
+  # PN-12153: the login/logout skills' own `bash <path>/login.sh --base-url
+  # <url>` / `bash <path>/logout.sh` tool calls are system-generated control
+  # messages, not user-authored content -- exempt them from the scan entirely
+  # (never call pn_plugin_before_tool_call for either) rather than
+  # scanning-then-allowing, so they never show up as noise in Code Chain
+  # either. See lib/login-detection.sh for why this is a fully-anchored
+  # grammar match, not a substring check, and why it's checked before
+  # pn_resolve_config (the exemption must apply whether or not the user
+  # happens to already be logged in -- e.g. a switch-org re-login).
+  # check-tool-call-record.sh runs the identical check independently so the
+  # postToolUse side skips recording too, without needing any state handed
+  # between the two.
+  local login_check_command
+  login_check_command=$(echo "$payload" | "$JQ_BIN" -r '.tool_input.command // ""')
+  if pn_login_logout_exempt_reason "$tool_name" "$login_check_command" "$SCRIPT_DIR"; then
+    audit_log_entry=$("$JQ_BIN" -n \
+      --arg tool_name "$tool_name" \
+      --arg command "$login_check_command" \
+      --arg reason "$PN_LOGIN_EXEMPT_REASON" \
+      '{tool_name: $tool_name, command: $command, decision: "allow", reason: $reason}')
+    audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
     json_permission_allow
     return 0
   fi

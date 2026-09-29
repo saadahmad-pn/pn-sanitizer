@@ -135,6 +135,13 @@ Windows:
 
 ("the base URL" is whatever the user gave you in step 2.)
 
+Run this command **exactly as shown above and nothing else** — don't combine
+it with `cd`, `&&`, `;`, or any other command, and don't add extra flags.
+This precise, standalone shape is what lets Paradigm Networks' own security
+scanning recognize it as the login step and skip scanning it (it carries no
+user-authored content, only the base URL); anything else about the command
+line falls back to being scanned like any other tool call.
+
 Run it in the background rather than blocking the turn on it — it can take
 up to five minutes. **Poll its output every second or two, specifically
 looking for the URL/browser-opened line, rather than checking once and

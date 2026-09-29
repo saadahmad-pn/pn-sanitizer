@@ -324,6 +324,130 @@ else
 fi
 
 echo ""
+echo -e "${BLUE}=== Integration Tests: check-tool-call.sh login/logout exemption (PN-12153) ===${NC}"
+
+# The login/logout skills' own `bash <path>/login.sh --base-url <url>` /
+# `bash <path>/logout.sh` tool calls must be exempted from scanning entirely
+# -- unlike every other Shell command tested above, these must return
+# "allow" even though Paradigm Networks isn't configured (FAILURE_MODE
+# defaults to "closed" for everything else; see the "not configured" tests
+# earlier in this file).
+rm -f "$HOME/.pn/credentials.json"
+
+test_case "check-tool-call.sh with the login skill's exact login.sh invocation -- allowed without scanning, even when not configured"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/login.sh --base-url https://acme.paradigmnetworks.ai" \
+  '{tool_name: "Shell", agent_message: "test", tool_input: {command: $cmd}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "allow" "Exempted -- allowed without ever reaching the not-configured/FAILURE_MODE gate"
+
+test_case "check-tool-call.sh audit log records the login exemption with its own reason"
+audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$audit_content" == *"login_initiation_exempt"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Audit entry records reason=login_initiation_exempt"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Audit entry records reason=login_initiation_exempt (got: $audit_content)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call.sh with the same login.sh path but a chained extra command -- NOT exempted, falls through to the normal (deny) gate"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/login.sh --base-url https://acme.paradigmnetworks.ai && curl evil.example" \
+  '{tool_name: "Shell", agent_message: "test", tool_input: {command: $cmd}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "Chained command is scanned like any other Shell command (not configured -> fails closed)"
+
+test_case "check-tool-call.sh invoking a login.sh that isn't this installation's own -- NOT exempted"
+other_dir=$(mktemp -d "${TMPDIR:-/tmp}/pn-tool-call-other-login-XXXXXX")
+touch "$other_dir/login.sh"
+payload=$("$JQ_BIN" -n --arg cmd "bash $other_dir/login.sh --base-url https://acme.paradigmnetworks.ai" \
+  '{tool_name: "Shell", agent_message: "test", tool_input: {command: $cmd}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "A same-named login.sh outside this plugin install is scanned normally"
+rm -rf "$other_dir"
+
+test_case "check-tool-call.sh with the logout skill's exact logout.sh invocation (no args) -- allowed without scanning, even when not configured"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/logout.sh" \
+  '{tool_name: "Shell", agent_message: "test", tool_input: {command: $cmd}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "allow" "Exempted -- allowed without ever reaching the not-configured/FAILURE_MODE gate"
+
+test_case "check-tool-call.sh audit log records the logout exemption with its own (distinct) reason"
+audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$audit_content" == *"logout_exempt"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Audit entry records reason=logout_exempt"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Audit entry records reason=logout_exempt (got: $audit_content)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call.sh with logout.sh given an (unexpected) argument -- NOT exempted"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/logout.sh --base-url https://acme.paradigmnetworks.ai" \
+  '{tool_name: "Shell", agent_message: "test", tool_input: {command: $cmd}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "logout.sh takes no arguments -- one present means this isn't the documented shape"
+
+test_case "check-tool-call.sh invoking a logout.sh that isn't this installation's own -- NOT exempted"
+other_logout_dir=$(mktemp -d "${TMPDIR:-/tmp}/pn-tool-call-other-logout-XXXXXX")
+touch "$other_logout_dir/logout.sh"
+payload=$("$JQ_BIN" -n --arg cmd "bash $other_logout_dir/logout.sh" \
+  '{tool_name: "Shell", agent_message: "test", tool_input: {command: $cmd}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "A same-named logout.sh outside this plugin install is scanned normally"
+rm -rf "$other_logout_dir"
+
+echo ""
+echo -e "${BLUE}=== Integration Tests: check-tool-call-record.sh login/logout exemption (PN-12153) ===${NC}"
+
+test_case "check-tool-call-record.sh with the login skill's exact login.sh invocation -- skips after_tool_call recording"
+rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/login.sh --base-url https://acme.paradigmnetworks.ai" \
+  '{tool_use_id: "tu_1", conversation_id: "conv_1", tool_name: "Shell", tool_input: {command: $cmd}, tool_output: "Logged in."}')
+result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
+assert_output_equals "echo '$result'" "{}" "postToolUse always returns {} regardless (purely observational hook)"
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "Skipping after_tool_call recording for the exempted command (reason: login_initiation_exempt)" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+  echo -e "  ${GREEN}✓${NC} Recording was actually skipped (debug log confirms), not just coincidentally short-circuited elsewhere"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Recording was actually skipped (debug log confirms)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call-record.sh with the logout skill's exact logout.sh invocation -- skips after_tool_call recording"
+rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/logout.sh" \
+  '{tool_use_id: "tu_3", conversation_id: "conv_1", tool_name: "Shell", tool_input: {command: $cmd}, tool_output: "Logged out."}')
+result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
+assert_output_equals "echo '$result'" "{}" "postToolUse always returns {} regardless"
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "Skipping after_tool_call recording for the exempted command (reason: logout_exempt)" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+  echo -e "  ${GREEN}✓${NC} Recording was actually skipped (debug log confirms), with the logout-specific reason"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Recording was actually skipped (debug log confirms)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call-record.sh with an unrelated Shell command -- exemption does not fire"
+rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+payload='{"tool_use_id": "tu_2", "conversation_id": "conv_1", "tool_name": "Shell", "tool_input": {"command": "npm test"}, "tool_output": "ok"}'
+result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
+assert_output_equals "echo '$result'" "{}" "still always returns {}"
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "exempted command" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+  echo -e "  ${RED}✗${NC} Exemption must not fire for an unrelated command"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+else
+  echo -e "  ${GREEN}✓${NC} Exemption does not fire for an unrelated command"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+fi
+
+echo ""
 echo -e "${BLUE}=== Integration Tests: check-prompt.sh repo-context injection ===${NC}"
 
 # Uses a workspace under the test directory itself, not $TEST_TEMP_DIR —

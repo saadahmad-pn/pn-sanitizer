@@ -39,6 +39,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/plugins-client.sh"
+source "$SCRIPT_DIR/lib/login-detection.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # 60s (was 10s) -- control-server's after_tool_call now runs the same
@@ -73,6 +74,19 @@ main() {
   # any tool call Cursor's postToolUse payload doesn't carry them for.
   tool_name=$(echo "$payload" | "$JQ_BIN" -r '.tool_name // ""')
   tool_input_raw=$(echo "$payload" | "$JQ_BIN" -c '.tool_input // {}')
+
+  # PN-12153: mirrors check-tool-call.sh's own exemption for the login/logout
+  # skills' `bash <path>/login.sh --base-url <url>` / `bash <path>/logout.sh`
+  # calls. before_tool_call never ran for either (see that file), so there is
+  # no tool_use block open on the server to close out here -- calling
+  # pn_plugin_after_tool_call would just be a wasted round-trip against an id
+  # the server never opened. Re-runs the identical, independently-anchored
+  # check on this hook's own copy of the payload rather than threading any
+  # state between the two separate hook-process invocations.
+  if pn_login_logout_exempt_reason "$tool_name" "$(echo "$tool_input_raw" | "$JQ_BIN" -r '.command // ""')" "$SCRIPT_DIR"; then
+    log_debug "Skipping after_tool_call recording for the exempted command (reason: ${PN_LOGIN_EXEMPT_REASON})." "$DEBUG_LOG_PATH"
+    return 0
+  fi
 
   # Nothing to correlate this result to without the id preToolUse's call
   # would have used -- best-effort, not an error.
