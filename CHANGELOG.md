@@ -4,6 +4,45 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-29 — Add check-configured.sh/.ps1 and route the config check through it (PN-12151 investigation)
+
+The login skill's own "is Paradigm Networks configured" check
+(`test -f ~/.pn/credentials.json && ...`) was being flagged by Code Defense
+Service as an OWASP ASVS V14.2 finding ("Credentials file path exposed in
+command") and blocked outright — on a benign, read-only local file check,
+sometimes on literally the first message of a session.
+
+Added `scripts/check-configured.sh`/`.ps1`: a dedicated, argument-free
+script (same shape as `logout.sh`) wrapping the existing `pn_is_configured`/
+`Test-PnConfigured` + `PARADIGM_NETWORKS_URL`/`PARADIGM_NETWORKS_TOKEN`
+env-var-pair logic. Since the agent's command string is now just `bash
+<path>/check-configured.sh` with no path embedded in it, there's nothing
+for that finding to point at. `lib/login-detection.sh` gained
+`pn_is_check_configured_command` (built on a new shared
+`_pn_is_bare_script_invocation` helper, factored out of
+`pn_is_logout_command`) and `pn_login_logout_exempt_reason` now also
+recognizes it (`reason: check_configured_exempt`) so it isn't scanned at
+all, consistent with login.sh/logout.sh.
+
+Updated `skills/paradigmnetworks-login/SKILL.md` (step 1 now locates both
+`check-configured.sh` and `login.sh` together; step 2 runs the script
+instead of hand-writing the check) **and, critically,
+`rules/pn-login-check.mdc`** — an always-applied rule, separate from the
+skill, that runs on every session's first message and had its own
+independent copy of the same raw check. The first attempt at this fix only
+touched `SKILL.md` and missed this rule entirely, which is why the raw,
+scannable command kept showing up in production logs even after that
+change shipped — the always-apply rule fires far more often than the
+skill's own step ever does, so it was almost certainly the dominant source.
+Both agent-facing docs now point at the same dedicated script.
+
+Verified: `bash test/run-all-tests.sh` (312/312 — 10 new unit tests for
+`pn_is_check_configured_command`, 5 new integration tests including one
+confirming a hand-written equivalent is deliberately still scanned
+normally, not silently widened into a bypass). `shellcheck -S warning -x`
+clean (one pre-existing, accepted `PN_LOGIN_EXEMPT_REASON` SC2034 hit, same
+cross-file-global pattern as `PN_PROMPT_STATUS`/`PN_TOOLCALL_STATUS`).
+
 ## 2026-09-29 — Extend the PN-12153 scan exemption to the logout skill's logout.sh command
 
 Widened the exemption below to also cover the `paradigmnetworks-logout`

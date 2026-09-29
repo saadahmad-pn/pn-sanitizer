@@ -138,6 +138,43 @@ test_case "Ordinary unrelated Shell command -> does not match"
 assert_failure "pn_is_logout_command Shell 'npm test' '$FIXTURE_SCRIPT_DIR'" \
   "unrelated commands are unaffected"
 
+echo -e "${BLUE}=== Unit Tests: lib/login-detection.sh (pn_is_check_configured_command) ===${NC}"
+
+touch "$FIXTURE_SCRIPT_DIR/check-configured.sh"
+CHECK_CONFIGURED_PATH="$FIXTURE_SCRIPT_DIR/check-configured.sh"
+
+test_case "Exact skill-documented shape (no arguments) -> matches"
+assert_success "pn_is_check_configured_command Shell 'bash $CHECK_CONFIGURED_PATH' '$FIXTURE_SCRIPT_DIR'" \
+  "bash <path>/check-configured.sh"
+
+test_case "No interpreter prefix (direct execution) -> matches"
+assert_success "pn_is_check_configured_command Shell '$CHECK_CONFIGURED_PATH' '$FIXTURE_SCRIPT_DIR'" \
+  "<path>/check-configured.sh"
+
+test_case "tool_name is not Shell -> does not match"
+assert_failure "pn_is_check_configured_command MCP:git_commit 'bash $CHECK_CONFIGURED_PATH' '$FIXTURE_SCRIPT_DIR'" \
+  "non-Shell tool_name never qualifies"
+
+test_case "check-configured.sh given an argument -> does not match (it takes none)"
+assert_failure "pn_is_check_configured_command Shell 'bash $CHECK_CONFIGURED_PATH --base-url https://acme.paradigmnetworks.ai' '$FIXTURE_SCRIPT_DIR'" \
+  "check-configured.sh's documented invocation takes no arguments at all"
+
+test_case "Command chaining a second statement (semicolon) -> does not match"
+assert_failure "pn_is_check_configured_command Shell 'bash $CHECK_CONFIGURED_PATH; cat ~/.pn/credentials.json' '$FIXTURE_SCRIPT_DIR'" \
+  "chained command via ; is rejected, not silently exempted"
+
+test_case "A file named check-configured.sh outside this installation's own scripts dir -> does not match"
+assert_failure "pn_is_check_configured_command Shell 'bash $OTHER_DIR/check-configured.sh' '$FIXTURE_SCRIPT_DIR'" \
+  "path must resolve to THIS installation's own check-configured.sh, not a same-named file elsewhere"
+
+test_case "login.sh -- out of scope for pn_is_check_configured_command specifically"
+assert_failure "pn_is_check_configured_command Shell 'bash $LOGIN_PATH' '$FIXTURE_SCRIPT_DIR'" \
+  "the check-configured-shaped matcher never accepts a login.sh path"
+
+test_case "Ordinary unrelated Shell command -> does not match"
+assert_failure "pn_is_check_configured_command Shell 'npm test' '$FIXTURE_SCRIPT_DIR'" \
+  "unrelated commands are unaffected"
+
 echo -e "${BLUE}=== Unit Tests: lib/login-detection.sh (pn_login_logout_exempt_reason) ===${NC}"
 
 test_case "Combined check: login.sh invocation -> matches, reason=login_initiation_exempt"
@@ -164,6 +201,19 @@ if [[ "$PN_LOGIN_EXEMPT_REASON" == "logout_exempt" ]]; then
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
   echo -e "  ${RED}✗${NC} PN_LOGIN_EXEMPT_REASON=logout_exempt (got: $PN_LOGIN_EXEMPT_REASON)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "Combined check: check-configured.sh invocation -> matches, reason=check_configured_exempt"
+assert_success "pn_login_logout_exempt_reason Shell 'bash $CHECK_CONFIGURED_PATH' '$FIXTURE_SCRIPT_DIR'" \
+  "wrapper matches the check-configured shape"
+pn_login_logout_exempt_reason Shell "bash $CHECK_CONFIGURED_PATH" "$FIXTURE_SCRIPT_DIR"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$PN_LOGIN_EXEMPT_REASON" == "check_configured_exempt" ]]; then
+  echo -e "  ${GREEN}✓${NC} PN_LOGIN_EXEMPT_REASON=check_configured_exempt"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} PN_LOGIN_EXEMPT_REASON=check_configured_exempt (got: $PN_LOGIN_EXEMPT_REASON)"
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 

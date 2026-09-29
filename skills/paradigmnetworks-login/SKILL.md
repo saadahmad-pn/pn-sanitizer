@@ -24,44 +24,77 @@ description: Log this workspace in to Paradigm Networks so Paradigm Networks sec
 - Don't ask for or accept an access token directly — this is a browser login,
   not manual token entry.
 - Don't loop the base-URL question more than once. Validate, correct at most
-  one mistake, then move on (see step 2).
+  one mistake, then move on (see step 3).
 
 ## Workflow
 
-### 1. Check whether login is actually needed
+### 1. Locate the plugin's scripts directory
 
-Skip this if you already know login is missing (e.g. from a hook message).
-Otherwise, confirm with a plain shell check — don't try to locate this
-plugin's own `scripts/` directory for this, there's no environment variable
-that tells you where the plugin is installed, so path-guessing isn't
-reliable:
+Needed for both the configuration check (step 2) and running the login
+script (step 4) — there's no environment variable that tells you where the
+plugin is installed, so path-guessing isn't reliable; locate it once here
+and reuse the result. Use whichever command matches the shell you're
+actually running in — a Windows machine without WSL/Git Bash can't run the
+bash `find` command, and vice versa:
 
 macOS/Linux:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; }; then
-  echo CONFIGURED
-else
-  echo NOT_CONFIGURED
-fi
+find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/check-configured.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
 ```
 
 Windows (PowerShell):
 
 ```powershell
-if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN)) {
-  Write-Output "CONFIGURED"
-} else {
-  Write-Output "NOT_CONFIGURED"
-}
+Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\check-configured.ps1" -or $_.FullName -like "*\paradigm-scanner\scripts\login.ps1" } |
+  Select-Object -ExpandProperty FullName
 ```
 
-- `CONFIGURED` → tell the user they're already logged in and stop here.
-- `NOT_CONFIGURED` → no base URL is known at all; continue to step 2. There
-  is no Cursor Settings field or other admin-preconfiguration path for the
-  base URL — the user is always the source of it, every time, via step 2.
+This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
+installs (`~/.cursor/plugins/local/`). If both come back for a platform,
+prefer `local/`.
 
-### 2. Get the base URL
+### 2. Check whether login is actually needed
+
+Skip this if you already know login is missing (e.g. from a hook message).
+Otherwise, run `check-configured.sh`/`check-configured.ps1` (located in step
+1) — **don't hand-write your own file-existence check** (e.g. `test -f
+~/.pn/credentials.json`) as a raw Shell tool call instead of running this
+script: doing so puts the credentials file's path directly in the tool
+call's command text, which security scanning flags as a credential-path
+exposure finding and can block the check outright. This script takes no
+arguments and its own invocation names no path, so there's nothing for that
+finding to point at:
+
+macOS/Linux:
+
+```bash
+bash <path-to-check-configured.sh>
+```
+
+Windows:
+
+```
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\check-configured.ps1"
+```
+
+Run this command **exactly as shown above and nothing else** — don't
+combine it with `cd`, `&&`, `;`, or any other command, and don't add any
+arguments. This precise, standalone, argument-free shape is what lets
+Paradigm Networks' own security scanning recognize it as this check and
+skip scanning it, the same way `login.sh` is recognized in step 4 below
+(and `logout.sh` in the separate `paradigmnetworks-logout` skill).
+
+- Output `CONFIGURED` → tell the user they're already logged in and stop
+  here.
+- Output `NOT_CONFIGURED` → no base URL is known at all; continue to step 3.
+  There is no Cursor Settings field or other admin-preconfiguration path for
+  the base URL — the user is always the source of it, every time, via
+  step 3.
+
+### 3. Get the base URL
 
 **Actually invoke the `AskQuestion` tool for this — do not ask in a plain
 chat message.** Typing the prompt and options into your reply as text (even
@@ -91,35 +124,9 @@ after that, proceed with it anyway — `login.sh` validates the URL itself and
 will report a clear error if it's truly malformed. Don't keep re-asking past
 that point.
 
-### 3. Locate the login script
-
-Running the script (unlike the check in step 1) needs its real path, since
-it needs `pn_config.sh`/`pn_config.ps1` next to it. On macOS/Linux you need
-`login.sh`; on Windows you need `login.ps1`.
-Use whichever command matches the shell you're actually running in — a
-Windows machine without WSL/Git Bash can't run the bash `find` command,
-and vice versa:
-
-macOS/Linux:
-
-```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.ps1" 2>/dev/null
-```
-
-Windows (PowerShell):
-
-```powershell
-Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\login.ps1" } |
-  Select-Object -ExpandProperty FullName
-```
-
-This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
-installs (`~/.cursor/plugins/local/`). If both come back for a platform,
-prefer `local/`.
-
 ### 4. Run the login script
+
+Uses the `login.sh`/`login.ps1` path already located in step 1.
 
 macOS/Linux:
 
@@ -133,7 +140,7 @@ Windows:
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\login.ps1" -BaseUrl <the-base-url>
 ```
 
-("the base URL" is whatever the user gave you in step 2.)
+("the base URL" is whatever the user gave you in step 3.)
 
 Run this command **exactly as shown above and nothing else** — don't combine
 it with `cd`, `&&`, `;`, or any other command, and don't add extra flags.

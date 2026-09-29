@@ -1,15 +1,26 @@
 #!/bin/bash
 # Detects the Shell tool calls that drive the Paradigm Networks OAuth PKCE
-# login/logout flows (skills/paradigmnetworks-login/SKILL.md step 4: `bash
-# <path-to-login.sh> --base-url <the-base-url>`; skills/paradigmnetworks-
-# logout/SKILL.md step 3: `bash <path-to-logout.sh>`), so check-tool-call.sh/
-# check-tool-call-record.sh can exempt just those commands from the
-# PromptGuard+PolicyEngine+CodeDefense scan (PN-12153). Neither carries
-# user-authored content -- login only the org base URL (not
-# security-relevant), logout no arguments at all -- so scanning them serves
-# no security purpose while adding latency, noise, and false-positive-block
-# risk to the exact commands a not-yet-authenticated (or trying to switch
-# accounts) user depends on to get unblocked in the first place.
+# login/logout flows and the login skill's own configuration check
+# (skills/paradigmnetworks-login/SKILL.md step 4: `bash <path-to-login.sh>
+# --base-url <the-base-url>`; step 2: `bash <path-to-check-configured.sh>`;
+# skills/paradigmnetworks-logout/SKILL.md step 3: `bash <path-to-logout.sh>`),
+# so check-tool-call.sh/check-tool-call-record.sh can exempt just those
+# commands from the PromptGuard+PolicyEngine+CodeDefense scan (PN-12153).
+# None carries user-authored content -- login only the org base URL (not
+# security-relevant), logout and the configuration check no arguments at all
+# -- so scanning them serves no security purpose while adding latency,
+# noise, and false-positive-block risk to the exact commands a
+# not-yet-authenticated (or trying to switch accounts) user depends on to
+# get unblocked in the first place.
+#
+# check-configured.sh exists specifically because a security scan flagged
+# the configuration check's own hand-written raw form (`test -f
+# ~/.pn/credentials.json`) as an OWASP ASVS V14.2 finding -- the literal
+# path in the command text "exposes" the credentials file's location and
+# naming convention. Moving the check into a dedicated, argument-free script
+# means the agent's command string never contains that path at all, and
+# (like logout.sh) it's exempted here as well so it isn't scanned needlessly
+# either.
 #
 # Matching is a fully end-to-end anchored grammar, not a substring/keyword
 # check: `command` containing "login.sh" would be trivially smugglable
@@ -80,15 +91,16 @@ pn_is_login_initiation_command() {
   _pn_resolve_own_script "$path_match" "$script_dir" "login.sh"
 }
 
-# pn_is_logout_command <tool_name> <command> <script_dir>
-# Same reasoning and anchoring discipline as pn_is_login_initiation_command,
-# but logout.sh takes no arguments at all (see skills/paradigmnetworks-logout/
-# SKILL.md step 3: `bash <path-to-logout.sh>`) -- so the grammar here is
-# simpler: (interpreter)? (path ending /logout.sh), and NOTHING else.
-pn_is_logout_command() {
+# _pn_is_bare_script_invocation <tool_name> <command> <script_dir> <basename>
+# Shared by pn_is_logout_command/pn_is_check_configured_command: both target
+# scripts take no arguments at all, so the grammar is simply (interpreter)?
+# (path ending /<basename>), and NOTHING else -- anchored ^...$ over the
+# entire command, same discipline as pn_is_login_initiation_command.
+_pn_is_bare_script_invocation() {
   local tool_name="$1"
   local command="$2"
   local script_dir="$3"
+  local basename_want="$4"
 
   [[ "$tool_name" == "Shell" ]] || return 1
   [[ -z "$command" ]] && return 1
@@ -101,16 +113,29 @@ pn_is_logout_command() {
     return 1
   fi
 
-  _pn_resolve_own_script "$path_match" "$script_dir" "logout.sh"
+  _pn_resolve_own_script "$path_match" "$script_dir" "$basename_want"
+}
+
+# pn_is_logout_command <tool_name> <command> <script_dir>
+# See skills/paradigmnetworks-logout/SKILL.md step 3: `bash <path-to-logout.sh>`.
+pn_is_logout_command() {
+  _pn_is_bare_script_invocation "$1" "$2" "$3" "logout.sh"
+}
+
+# pn_is_check_configured_command <tool_name> <command> <script_dir>
+# See skills/paradigmnetworks-login/SKILL.md step 2: `bash
+# <path-to-check-configured.sh>`.
+pn_is_check_configured_command() {
+  _pn_is_bare_script_invocation "$1" "$2" "$3" "check-configured.sh"
 }
 
 # pn_login_logout_exempt_reason <tool_name> <command> <script_dir>
 # Combined check for both call sites (check-tool-call.sh/
-# check-tool-call-record.sh each need to test for either exemption, then
-# label whichever matched). Sets PN_LOGIN_EXEMPT_REASON as a global and must
-# be called as a plain statement, not via $(...) -- same convention as every
-# other multi-value-return function in this codebase (see lib/common.sh's
-# header comment).
+# check-tool-call-record.sh each need to test for any of these exemptions,
+# then label whichever matched). Sets PN_LOGIN_EXEMPT_REASON as a global and
+# must be called as a plain statement, not via $(...) -- same convention as
+# every other multi-value-return function in this codebase (see
+# lib/common.sh's header comment).
 PN_LOGIN_EXEMPT_REASON=""
 pn_login_logout_exempt_reason() {
   local tool_name="$1"
@@ -126,6 +151,11 @@ pn_login_logout_exempt_reason() {
 
   if pn_is_logout_command "$tool_name" "$command" "$script_dir"; then
     PN_LOGIN_EXEMPT_REASON="logout_exempt"
+    return 0
+  fi
+
+  if pn_is_check_configured_command "$tool_name" "$command" "$script_dir"; then
+    PN_LOGIN_EXEMPT_REASON="check_configured_exempt"
     return 0
   fi
 

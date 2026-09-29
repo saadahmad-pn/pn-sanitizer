@@ -400,8 +400,31 @@ result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_field_equals "$result" "permission" "deny" "A same-named logout.sh outside this plugin install is scanned normally"
 rm -rf "$other_logout_dir"
 
+test_case "check-tool-call.sh with the login skill's exact check-configured.sh invocation -- allowed without scanning"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/check-configured.sh" \
+  '{tool_name: "Shell", agent_message: "test", tool_input: {command: $cmd}}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_valid "$result" "Valid JSON output"
+assert_json_field_equals "$result" "permission" "allow" "Exempted -- avoids the same credentials-path-in-command finding this script exists to route around"
+
+test_case "check-tool-call.sh audit log records the check-configured exemption with its own (distinct) reason"
+audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$audit_content" == *"check_configured_exempt"* ]]; then
+  echo -e "  ${GREEN}✓${NC} Audit entry records reason=check_configured_exempt"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Audit entry records reason=check_configured_exempt (got: $audit_content)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call.sh with a hand-written raw credentials-path check instead of check-configured.sh -- NOT exempted"
+payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "test -f ~/.pn/credentials.json && echo \"CONFIGURED\" || echo \"NOT_CONFIGURED\""}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "The exemption only covers the dedicated script, not a hand-written equivalent -- scanned normally, same as before this fix"
+
 echo ""
-echo -e "${BLUE}=== Integration Tests: check-tool-call-record.sh login/logout exemption (PN-12153) ===${NC}"
+echo -e "${BLUE}=== Integration Tests: check-tool-call-record.sh login/logout/check-configured exemption (PN-12153) ===${NC}"
 
 test_case "check-tool-call-record.sh with the login skill's exact login.sh invocation -- skips after_tool_call recording"
 rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
@@ -427,6 +450,21 @@ assert_output_equals "echo '$result'" "{}" "postToolUse always returns {} regard
 TESTS_RUN=$((TESTS_RUN + 1))
 if grep -q "Skipping after_tool_call recording for the exempted command (reason: logout_exempt)" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
   echo -e "  ${GREEN}✓${NC} Recording was actually skipped (debug log confirms), with the logout-specific reason"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} Recording was actually skipped (debug log confirms)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "check-tool-call-record.sh with the login skill's exact check-configured.sh invocation -- skips after_tool_call recording"
+rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/check-configured.sh" \
+  '{tool_use_id: "tu_4", conversation_id: "conv_1", tool_name: "Shell", tool_input: {command: $cmd}, tool_output: "NOT_CONFIGURED"}')
+result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
+assert_output_equals "echo '$result'" "{}" "postToolUse always returns {} regardless"
+TESTS_RUN=$((TESTS_RUN + 1))
+if grep -q "Skipping after_tool_call recording for the exempted command (reason: check_configured_exempt)" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+  echo -e "  ${GREEN}✓${NC} Recording was actually skipped (debug log confirms), with the check-configured-specific reason"
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
   echo -e "  ${RED}✗${NC} Recording was actually skipped (debug log confirms)"
