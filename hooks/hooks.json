@@ -32,7 +32,7 @@
     "beforeReadFile": [
       {
         "matcher": "",
-        "command": "bash ./scripts/check-skill-usage.sh",
+        "command": "scripts/run-hook.cmd check-skill-usage",
         "failClosed": false,
         "timeout": 10
       }
