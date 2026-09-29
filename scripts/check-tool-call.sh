@@ -47,6 +47,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/lib/login-detection.sh"
+source "$SCRIPT_DIR/lib/skill-detection.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
@@ -144,6 +145,19 @@ main() {
       --arg reason "$PN_LOGIN_EXEMPT_REASON" \
       '{tool_name: $tool_name, command: $command, decision: "allow", reason: $reason}')
     audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
+    json_permission_allow
+    return 0
+  fi
+
+  # A skill load reaches this catch-all hook as an ordinary Read of the
+  # skill's SKILL.md. check-skill-usage.sh (beforeReadFile) already reports
+  # it as a skill use, so recording it here too would file the same event
+  # twice and put a file read the user never asked for into the transcript.
+  # Exempted rather than scanned-then-allowed, matching the login/logout
+  # exemption above; check-tool-call-record.sh runs the identical check
+  # independently. See lib/skill-detection.sh.
+  if pn_is_skill_file_read "$tool_name" "$(echo "$payload" | "$JQ_BIN" -r '.tool_input.file_path // ""')"; then
+    log_debug "Skipping tool-call scan for skill load: $PN_SKILL_NAME (reported by check-skill-usage.sh)" "$DEBUG_LOG_PATH"
     json_permission_allow
     return 0
   fi

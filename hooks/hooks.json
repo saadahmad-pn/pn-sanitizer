@@ -32,6 +32,14 @@
         "failClosed": true
       }
     ],
+    "beforeReadFile": [
+      {
+        "matcher": "",
+        "command": "scripts/run-hook.cmd check-skill-usage",
+        "failClosed": false,
+        "timeout": 10
+      }
+    ],
     "preToolUse": [
       {
         "matcher": "",

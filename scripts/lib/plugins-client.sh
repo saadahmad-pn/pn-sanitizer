@@ -293,6 +293,84 @@ pn_plugin_after_tool_call() {
 }
 
 # ---------------------------------------------------------------------------
+# Skill-uses domain
+# ---------------------------------------------------------------------------
+
+# pn_plugin_skill_use <base_url> <access_token> <timeout> <session_id>
+#   <cwd> <git_repo_url> <git_branch> <skill_name> <file_path> <content>
+#   <content_sha256> [generation_id]
+#
+# Records that the agent loaded an Agent Skill on this turn. Unlike the two
+# domains above this one has no Action field and no lifecycle halves: a skill
+# load is a single event with nothing to gate. The server's reply carries the
+# match verdict, which nothing here acts on -- Cursor's beforeReadFile has no
+# field to act on it, and this must never block a read.
+#
+# content is the SKILL.md as it exists ON DISK, not whatever the hook payload
+# carried -- see check-skill-usage.sh for why that distinction decides whether
+# the skill can ever be matched to the registry at all. content_sha256 must be
+# the digest OF THAT EXACT STRING; the server re-hashes and rejects a
+# mismatch with a 400 rather than storing a body that disagrees with its own
+# hash.
+#
+# Sets PN_SKILL_USE_STATUS/HTTP_STATUS/MATCH_METHOD/SKILL_ID.
+pn_plugin_skill_use() {
+  local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
+  local cwd="$5" git_repo_url="$6" git_branch="$7"
+  local skill_name="$8" file_path="$9" content="${10}" content_sha="${11}"
+  local generation_id="${12:-}"
+
+  PN_SKILL_USE_STATUS=""; PN_SKILL_USE_HTTP_STATUS=""
+  PN_SKILL_USE_MATCH_METHOD=""; PN_SKILL_USE_SKILL_ID=""
+
+  if [[ -z "$session_id" || -z "$base_url" || -z "$JQ_BIN" ]]; then
+    PN_SKILL_USE_STATUS="no_session"
+    return 0
+  fi
+
+  local body
+  body=$("$JQ_BIN" -n \
+    --arg platform "$PN_PLUGIN_PLATFORM" \
+    --arg cwd "$cwd" --arg gitRepoUrl "$git_repo_url" --arg gitBranch "$git_branch" \
+    --arg skillName "$skill_name" --arg filePath "$file_path" \
+    --arg content "$content" --arg sha "$content_sha" \
+    --arg generationId "$generation_id" \
+    '{Platform: $platform, Cwd: $cwd, GitRepoUrl: $gitRepoUrl, GitBranch: $gitBranch, SkillName: $skillName, FilePath: $filePath, Content: $content, ContentSha256: $sha, GenerationId: $generationId}')
+
+  local url="${base_url%/}/api/v1/plugins/sessions/${session_id}/skill-uses"
+  local raw
+  raw=$(http_post_json "$url" "$body" "$access_token" "$timeout")
+  local curl_exit=$?
+
+  if [[ $curl_exit -eq 28 ]]; then
+    PN_SKILL_USE_STATUS="timeout"
+    log_debug "plugins: skill_use timed out after ${timeout}s | skill=$skill_name | url=$url" "$PLUGINS_DEBUG_LOG_PATH"
+    return 0
+  elif [[ $curl_exit -ne 0 ]]; then
+    PN_SKILL_USE_STATUS="unreachable"
+    log_debug "plugins: skill_use unreachable (curl exit=$curl_exit) | skill=$skill_name | url=$url" "$PLUGINS_DEBUG_LOG_PATH"
+    return 0
+  fi
+
+  http_post_split_status "$raw"
+  PN_SKILL_USE_HTTP_STATUS="$HTTP_POST_STATUS"
+  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
+    PN_SKILL_USE_STATUS="http_error"
+    # The BODY, not just the status: a 403 here means the route is missing
+    # from the backend's permission catalog and a 400 means the digest and
+    # the body disagree -- both say so in the message, and both have already
+    # cost real debugging time when only the status was logged.
+    log_debug "plugins: skill_use REJECTED (HTTP ${HTTP_POST_STATUS:-none}) | skill=$skill_name | $HTTP_POST_BODY" "$PLUGINS_DEBUG_LOG_PATH"
+    return 0
+  fi
+
+  PN_SKILL_USE_STATUS="ok"
+  PN_SKILL_USE_MATCH_METHOD=$(echo "$HTTP_POST_BODY" | "$JQ_BIN" -r '.match_method // ""')
+  PN_SKILL_USE_SKILL_ID=$(echo "$HTTP_POST_BODY" | "$JQ_BIN" -r '.skill_id // ""')
+  log_debug "plugins: skill_use recorded | skill=$skill_name | match=$PN_SKILL_USE_MATCH_METHOD | $HTTP_POST_BODY" "$PLUGINS_DEBUG_LOG_PATH"
+}
+
+# ---------------------------------------------------------------------------
 # Git-diff file collection for a before_tool_call gating a git push/commit
 # (folded in from the old before_shell_execution gate -- see design-ideas/
 # Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md; this is the

@@ -40,6 +40,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/lib/login-detection.sh"
+source "$SCRIPT_DIR/lib/skill-detection.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # 60s (was 10s) -- control-server's after_tool_call now runs the same
@@ -85,6 +86,16 @@ main() {
   # state between the two separate hook-process invocations.
   if pn_login_logout_exempt_reason "$tool_name" "$(echo "$tool_input_raw" | "$JQ_BIN" -r '.command // ""')" "$SCRIPT_DIR"; then
     log_debug "Skipping after_tool_call recording for the exempted command (reason: ${PN_LOGIN_EXEMPT_REASON})." "$DEBUG_LOG_PATH"
+    return 0
+  fi
+
+  # The postToolUse half of the skill-load exemption -- see the matching
+  # block in check-tool-call.sh. Checked independently on this hook's own
+  # payload, so nothing has to be threaded between the two hook processes.
+  # Recording only this half would be worse than recording neither: it would
+  # leave a tool_result with no tool_use for it to pair with.
+  if pn_is_skill_file_read "$tool_name" "$(echo "$tool_input_raw" | "$JQ_BIN" -r '.file_path // ""')"; then
+    log_debug "Skipping after_tool_call recording for skill load: $PN_SKILL_NAME (reported by check-skill-usage.sh)" "$DEBUG_LOG_PATH"
     return 0
   fi
 
