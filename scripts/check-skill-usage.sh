@@ -39,6 +39,15 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 LOG_PATH="${HOME}/.paradigm-scanner/skill-usage.jsonl"
+# The POST's own outcome. Separate from LOG_PATH on purpose: that file is
+# written BEFORE the POST and only ever proves the skill was DETECTED, so it
+# can never say whether the report actually arrived. Confirmed the hard way
+# (2026-09-29) -- a 403 from an unregistered route looked identical to
+# success from this side, because the detached curl's status went to
+# /dev/null and nothing here logged it. Every other hook in this repo already
+# keeps a debug log for exactly this; this one was modelled on
+# report-tool.sh, which does not.
+DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-skill-usage.log"
 mkdir -p "$(dirname "$LOG_PATH")" 2>/dev/null
 
 # Identifies this plugin to the backend's vendor-classification engine --
@@ -98,15 +107,24 @@ log_line=$("$JQ_BIN" -nc \
   '{received_at: $received_at, skill_name: $skill_name, file_path: $file_path}') \
   && printf '%s\n' "$log_line" >> "$LOG_PATH"
 
-# Not signed in -- nothing to report to, and this hook must not nag.
-pn_is_configured || respond_allow
+# Not signed in -- nothing to report to, and this hook must not nag. Logged
+# anyway: from the outside this looks exactly like a working hook that never
+# delivers, and that ambiguity is what made the first real failure here hard
+# to see.
+if ! pn_is_configured; then
+  log_debug "Skill use NOT reported | skill=$skill_name | not signed in" "$DEBUG_LOG_PATH"
+  respond_allow
+fi
 
 # session_id/conversation_id are the same value in practice; generation_id
 # changes per user turn and is what control-server merges this use onto the
 # right turn with. Without a session id there is no turn to attach to, so
 # there is nothing worth sending.
 session_id=$(printf '%s' "$payload" | "$JQ_BIN" -r '.session_id // .conversation_id // ""' 2>/dev/null)
-[[ -n "$session_id" ]] || respond_allow
+if [[ -z "$session_id" ]]; then
+  log_debug "Skill use NOT reported | skill=$skill_name | no session_id in payload" "$DEBUG_LOG_PATH"
+  respond_allow
+fi
 generation_id=$(printf '%s' "$payload" | "$JQ_BIN" -r '.generation_id // ""' 2>/dev/null)
 
 # The payload carries the file's full content. Falling back to reading it off
@@ -122,9 +140,15 @@ if [[ -r "$file_path" ]]; then
   content_sha=$(sha256_of_file "$file_path")
 fi
 
-config=$(pn_resolve_config) || respond_allow
+config=$(pn_resolve_config) || {
+  log_debug "Skill use NOT reported | skill=$skill_name | could not resolve config (token refresh failed?)" "$DEBUG_LOG_PATH"
+  respond_allow
+}
 read -r base_url access_token <<<"$config"
-[[ -n "$base_url" && -n "$access_token" ]] || respond_allow
+if [[ -z "$base_url" || -z "$access_token" ]]; then
+  log_debug "Skill use NOT reported | skill=$skill_name | config resolved but base_url/token empty" "$DEBUG_LOG_PATH"
+  respond_allow
+fi
 
 encoded_session=$(urlencode_strict "$session_id")
 skill_url="${base_url%/}/api/v1/plugins/sessions/${encoded_session}/skill-uses"
@@ -140,10 +164,29 @@ json_body=$("$JQ_BIN" -n \
   --arg cwd "$PWD" \
   '{Platform: "cursor", GenerationId: $generation_id, SkillName: $skill_name, FilePath: $file_path, Content: $content, ContentSha256: $sha, Cwd: $cwd}')
 
+log_debug "Reporting skill use | skill=$skill_name | url=$skill_url | sha=${content_sha:0:8} | content_len=${#content}" "$DEBUG_LOG_PATH"
+
 # DETACHED, like report-tool.sh -- Cursor waits for a hook to return, and
-# nothing here reads the reply.
+# nothing here acts on the reply. The outcome is still logged inside the
+# subshell rather than discarded: nothing acting on a failure is not a reason
+# to be unable to SEE one.
 (
-  http_post_json "$skill_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id" "$PN_CLIENT_ID" >/dev/null 2>&1
+  raw_response=$(http_post_json "$skill_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS" "$session_id" "$PN_CLIENT_ID" 2>/dev/null)
+  curl_exit=$?
+  if [[ $curl_exit -eq 28 ]]; then
+    log_debug "Skill use NOT reported | skill=$skill_name | timed out after ${TIMEOUT_SECONDS}s" "$DEBUG_LOG_PATH"
+  elif [[ $curl_exit -ne 0 ]]; then
+    log_debug "Skill use NOT reported | skill=$skill_name | connection failed (curl exit=$curl_exit)" "$DEBUG_LOG_PATH"
+  else
+    http_post_split_status "$raw_response"
+    if [[ "$HTTP_POST_STATUS" == 2* ]]; then
+      log_debug "Skill use reported | skill=$skill_name | HTTP $HTTP_POST_STATUS | $HTTP_POST_BODY" "$DEBUG_LOG_PATH"
+    else
+      # The body matters as much as the status: a 403 here means the route is
+      # missing from the backend's permission catalog, and the message says so.
+      log_debug "Skill use REJECTED | skill=$skill_name | HTTP $HTTP_POST_STATUS | $HTTP_POST_BODY" "$DEBUG_LOG_PATH"
+    fi
+  fi
 ) >/dev/null 2>&1 &
 
 respond_allow
