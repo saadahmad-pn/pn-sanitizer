@@ -33,9 +33,35 @@ description: Log this workspace in to Paradigm Networks so Paradigm Networks sec
 Needed for both the configuration check (step 2) and running the login
 script (step 4) — there's no environment variable that tells you where the
 plugin is installed, so path-guessing isn't reliable; locate it once here
-and reuse the result. Use whichever command matches the shell you're
-actually running in — a Windows machine without WSL/Git Bash can't run the
-bash `find` command, and vice versa:
+and reuse the result.
+
+**First, check your existing context for the path — do not search when it is
+already there.** When Paradigm Networks is not configured, the sessionStart
+hook injects a notice containing the exact command to run, with this
+installation's own absolute path already filled in:
+
+```
+bash <scripts-dir>/login.sh --base-url <their-base-url>
+```
+
+If you have that, you already have the scripts directory. Skip straight to
+step 3 (get the base URL) and then step 4, using that exact path. Skip
+step 2 as well: the notice only appears when Paradigm Networks is not
+configured, so the answer is already known.
+
+This matters because **while Paradigm Networks is unconfigured, every tool
+call except the login/logout/check-configured commands is denied** — so the
+search commands below are themselves blocked, and running them first is the
+one way to get stuck. The deny message you receive also repeats the same
+login command, so if you have already been blocked, take the path from
+there rather than searching again.
+
+Only fall back to searching when neither the injected notice nor a deny
+message gave you a path — for example a switch-organization re-login, where
+Paradigm Networks is already configured and tool calls are not blocked. Use
+whichever command matches the shell you're actually running in — a Windows
+machine without WSL/Git Bash can't run the bash `find` command, and vice
+versa:
 
 macOS/Linux:
 

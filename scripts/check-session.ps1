@@ -77,7 +77,11 @@ try {
       Write-Output "{}"
     }
   } else {
-    $message = "Paradigm Networks is not configured for this workspace. Ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run the paradigmnetworks-login skill to authenticate before relying on Paradigm Networks-gated prompts or tool calls."
+    # $ScriptDir is interpolated for the same reason as check-session.sh: the
+    # agent cannot discover the plugin's install path, and every command it
+    # would use to look is blocked while unconfigured.
+    $loginScript = Join-Path $ScriptDir "login.ps1"
+    $message = "Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.`n`nTo fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in:`n`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$loginScript`" --base-url <their-base-url>`n`nRun it verbatim. Do NOT search for the script, list directories, read files, or chain anything onto the command -- that path is this plugin's own install directory and is the only one accepted, and every other tool call is blocked until login finishes, so trying to locate it yourself will fail. See the paradigmnetworks-login skill for the rest of the flow."
     Write-JsonSessionContext -Context $message
   }
 } catch {

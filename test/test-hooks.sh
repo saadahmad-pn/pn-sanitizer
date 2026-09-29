@@ -20,6 +20,59 @@ result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
 assert_json_valid "$result" "Valid JSON output"
 assert_json_has_key "$result" "additional_context" "Shows context when not configured"
 
+# Regression: the unconfigured notice must carry this install's literal
+# login.sh path. Cursor exposes no plugin-install env var and every discovery
+# command is denied while unconfigured, so without the path the agent can
+# never build the command login-detection.sh exempts -- login becomes
+# impossible from a cold start.
+test_case "check-session.sh not-configured context carries the literal login command"
+result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
+context=$(echo "$result" | jq -r '.additional_context')
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$context" == *"bash $SCRIPTS_DIR/login.sh --base-url"* ]]; then
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  echo -e "  ${GREEN}✓${NC} Names this install's login.sh with its flag"
+else
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  echo -e "  ${RED}✗${NC} Missing the literal login command — cold-start login would deadlock"
+  echo "    Context: $context"
+fi
+
+# The command it advertises must be one the exemption actually accepts, or
+# the agent is sent to run something that gets blocked anyway.
+test_case "check-session.sh advertises a command the login exemption accepts"
+TESTS_RUN=$((TESTS_RUN + 1))
+if pn_login_logout_exempt_reason "Shell" "bash $SCRIPTS_DIR/login.sh --base-url https://acme.paradigmnetworks.ai" "$SCRIPTS_DIR"; then
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  echo -e "  ${GREEN}✓${NC} Advertised command is scan-exempt ($PN_LOGIN_EXEMPT_REASON)"
+else
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  echo -e "  ${RED}✗${NC} Advertised command is NOT scan-exempt — cold-start login would deadlock"
+fi
+
+# The deny an unconfigured tool call returns is the agent's only feedback
+# once session context is gone, so it must carry the same recovery command.
+test_case "check-tool-call.sh not-configured deny carries the recovery command"
+deny=$("$SCRIPTS_DIR/check-tool-call.sh" <<< '{"tool_name":"Shell","tool_input":{"command":"ls -la"},"tool_use_id":"t1","cwd":"/tmp"}')
+assert_json_field_equals "$deny" "permission" "deny" "Still denies (security unchanged)"
+agent_msg=$(echo "$deny" | jq -r '.agent_message // ""')
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$agent_msg" == *"bash $SCRIPTS_DIR/login.sh --base-url"* ]]; then
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  echo -e "  ${GREEN}✓${NC} Deny tells the agent exactly how to recover"
+else
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  echo -e "  ${RED}✗${NC} Deny gives the agent no recoverable command"
+  echo "    agent_message: $agent_msg"
+fi
+
+# The whole point: the login command must pass the gate while unconfigured.
+test_case "check-tool-call.sh allows the login command while unconfigured"
+login_call=$(jq -nc --arg c "bash $SCRIPTS_DIR/login.sh --base-url https://acme.paradigmnetworks.ai" \
+  '{tool_name:"Shell",tool_input:{command:$c},tool_use_id:"t2",cwd:"/tmp"}')
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$login_call")
+assert_json_field_equals "$result" "permission" "allow" "Login is never blocked by the not-configured state it fixes"
+
 test_case "check-session.sh with jq, configured, and a recent successful scan"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
 pn_record_successful_scan
