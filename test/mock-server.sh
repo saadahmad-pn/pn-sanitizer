@@ -1,7 +1,25 @@
 #!/bin/bash
 # Mock Paradigm Networks API server for testing
 # Usage: start_mock_server <port> [mode]
-# Modes: allow, block, warn, timeout, error500, error401
+# Modes: allow, block, anomaly, timeout, error500, error401,
+#        detections_allow, detections_warn, detections_block
+#
+# The detections_* modes return the standardized plugins domain response
+# shape (action_to_take/message/overall_threat_level/triggered_by/ToolUseId
+# -- see control-server's ScanOutcome/ToolCallResult) for testing
+# check-prompt.sh/check-tool-call.sh against lib/plugins-client.sh. Kept the
+# "detections_*" mode names for minimal test-file churn even though the
+# retired /api/v1/detections/evaluate endpoint no longer exists -- these now
+# stand in for either gating domain's before_* verdict shape, which is
+# identical across both (prompts, tool-calls -- the former shell-executions
+# domain is retired too, see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md).
+#
+# The non-detections modes (allow/block/anomaly/timeout/error500/error401)
+# return the /v1/messages (Anthropic-compatible) response shape -- LEGACY,
+# unused scaffolding from before this plugin called control-server's
+# composite scan endpoints at all. Left in place rather than removed
+# outright.
 
 PORT=""
 MODE="allow"
@@ -26,13 +44,13 @@ start_mock_server() {
           # Generate response based on mode
           case "$MODE" in
             allow)
-              send_response "200" '{"action_to_take": "allow", "scan_id": "scan-123"}'
+              send_response "200" '{"content":[{"type":"text","text":"mock allow reply"}],"usage":{"input_tokens":10,"output_tokens":5}}'
               ;;
             block)
-              send_response "200" '{"action_to_take": "block", "message": "Policy violation detected", "scan_id": "scan-456"}'
+              send_response "200" '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: mock policy violation.\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
               ;;
-            warn)
-              send_response "200" '{"action_to_take": "warn", "message": "Warning: suspicious pattern", "scan_id": "scan-789"}'
+            anomaly)
+              send_response "200" '{"content":[{"type":"text","text":"mock anomaly: zero usage without a block banner"}],"usage":{"input_tokens":0,"output_tokens":0}}'
               ;;
             timeout)
               # Don't respond (causes timeout)
@@ -43,6 +61,15 @@ start_mock_server() {
               ;;
             error401)
               send_response "401" '{"error": "Unauthorized"}'
+              ;;
+            detections_allow)
+              send_response "200" '{"action_to_take":"allow","message":"","overall_threat_level":"","ToolUseId":"mock-tool-use-id"}'
+              ;;
+            detections_warn)
+              send_response "200" '{"action_to_take":"warn","message":"mock policy warning","overall_threat_level":"low","triggered_by":["code_defense"],"ToolUseId":"mock-tool-use-id"}'
+              ;;
+            detections_block)
+              send_response "200" '{"action_to_take":"block","message":"mock policy violation","overall_threat_level":"high","triggered_by":["code_defense"],"ToolUseId":"mock-tool-use-id"}'
               ;;
           esac
         fi
@@ -89,19 +116,28 @@ start_simple_mock_server() {
 
   case "$mode" in
     allow)
-      echo '{"action_to_take": "allow", "scan_id": "scan-123"}' >"$response_file"
+      echo '{"content":[{"type":"text","text":"mock allow reply"}],"usage":{"input_tokens":10,"output_tokens":5}}' >"$response_file"
       ;;
     block)
-      echo '{"action_to_take": "block", "message": "Policy violation", "scan_id": "scan-456"}' >"$response_file"
+      echo '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: mock policy violation.\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}' >"$response_file"
       ;;
-    warn)
-      echo '{"action_to_take": "warn", "message": "Warning detected", "scan_id": "scan-789"}' >"$response_file"
+    anomaly)
+      echo '{"content":[{"type":"text","text":"mock anomaly: zero usage without a block banner"}],"usage":{"input_tokens":0,"output_tokens":0}}' >"$response_file"
       ;;
     error500)
       echo 'HTTP/1.1 500 Internal Server Error\r\n\r\n{"error": "server error"}' >"$response_file"
       ;;
     error401)
       echo 'HTTP/1.1 401 Unauthorized\r\n\r\n{"error": "unauthorized"}' >"$response_file"
+      ;;
+    detections_allow)
+      echo '{"Decision":"allow","Message":"","FileAnalyses":[],"LatencyMs":0,"AuditId":"mock-scan-allow"}' >"$response_file"
+      ;;
+    detections_warn)
+      echo '{"Decision":"warn","Message":"mock policy warning","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"low","ActionToTake":"warn","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-warn"}' >"$response_file"
+      ;;
+    detections_block)
+      echo '{"Decision":"block","Message":"mock policy violation","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"high","ActionToTake":"block","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-block"}' >"$response_file"
       ;;
   esac
 

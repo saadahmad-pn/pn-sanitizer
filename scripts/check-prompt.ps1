@@ -9,25 +9,20 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
+. (Join-Path $ScriptDir "lib\git-utils.ps1")
+. (Join-Path $ScriptDir "lib\scan-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
-$ScanUrlOverride = $env:SNANTIZER_SCAN_URL
-# 40s (not 20s, matching the bash side): observed directly that
-# establishing the HTTPS connection to the scan API from a real Windows
-# target can itself take ~20-25s (likely a slow/blocked certificate
-# revocation check), before any actual server-side work even starts --
-# a stopgap while that root cause is investigated separately.
-$TimeoutSeconds = 40
-if ($env:SNANTIZER_TIMEOUT) {
+$TimeoutSeconds = 60
+if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   $parsedTimeout = 0
-  if ([int]::TryParse($env:SNANTIZER_TIMEOUT, [ref]$parsedTimeout)) {
+  if ([int]::TryParse($env:PARADIGM_NETWORKS_TIMEOUT, [ref]$parsedTimeout)) {
     $TimeoutSeconds = $parsedTimeout
   }
 }
 $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
 
 $rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
-if (-not $rawMode) { $rawMode = $env:SNANTIZER_PROMPT_FAILURE_MODE }
 if (-not $rawMode) { $rawMode = "allow" }
 $rawMode = $rawMode.ToLowerInvariant()
 $PromptFailureMode = if ($rawMode -eq "block" -or $rawMode -eq "closed") { "closed" } else { "open" }
@@ -43,26 +38,42 @@ try {
     $parsedPayload = $payload | ConvertFrom-Json -ErrorAction Stop
   } catch {
     Write-DebugLog -Message "Payload failed to parse as JSON | error=$($_.Exception.Message) | raw(first 300 chars)=$($payload.Substring(0, [Math]::Min(300, $payload.Length)))" -LogPath $DebugLogPath
-    Write-JsonDeny -Message "Received invalid input. Prompt blocked."
+    # Deliberately always allow here, unlike the $PromptFailureMode-driven
+    # branches below: a malformed payload usually signals a Cursor
+    # integration/encoding quirk, not an unreachable scanner.
+    Write-JsonAllow -Message "Received invalid input. Allowing prompt -- it was not scanned."
     return
   }
 
   $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
 
-  # Temporary, extra-verbose diagnostic: mirrors the manual field-by-field
-  # check exactly, from inside this hook's own process, so a mismatch
-  # against a manual interactive check points straight at an environment
-  # difference (e.g. $HOME) rather than the credentials file's content.
-  if (Test-Path $Script:PnCredPath -PathType Leaf) {
-    try {
-      $diagRaw = Get-Utf8FileText -Path $Script:PnCredPath
-      $diagParsed = $diagRaw | ConvertFrom-Json -ErrorAction Stop
-      Write-DebugLog -Message "DIAG credentials file | has base_url=$([bool]$diagParsed.base_url) has access_token=$([bool]$diagParsed.access_token) has refresh_token=$([bool]$diagParsed.refresh_token) has expires_at=$([bool]$diagParsed.expires_at)" -LogPath $DebugLogPath
-    } catch {
-      Write-DebugLog -Message "DIAG credentials file exists but failed to parse | error=$($_.Exception.Message)" -LogPath $DebugLogPath
-    }
-  } else {
-    Write-DebugLog -Message "DIAG credentials file does not exist at $($Script:PnCredPath)" -LogPath $DebugLogPath
+  # Session id + cwd (for the scan call's chatapi join and context -- see
+  # lib/scan-client.ps1's header) and derive git context from cwd the same
+  # way every other hook here does.
+  $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "conversation_id" -Default "")
+  if (-not $clientSessionId) {
+    $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "session_id" -Default "")
+  }
+  $cwd = [string](Get-JsonProperty -InputObject $parsedPayload -Name "cwd" -Default "")
+  if (-not $cwd) {
+    $roots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
+    if ($roots.Count -gt 0) { $cwd = $roots[0] }
+  }
+  # Cursor's own generation_id -- changes per user turn, unlike
+  # conversation_id. See lib/scan-client.ps1's header.
+  $generationId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "generation_id" -Default "")
+  # Cursor's own hook-reported model name -- see lib/scan-client.ps1's header.
+  # ModelId ("Structured ID for the selected model, when available", per
+  # Cursor's hooks docs) is preferred over the legacy model slug -- see
+  # Resolve-HookModel's header comment in lib/common.ps1.
+  $modelId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "model_id" -Default "")
+  $modelLegacy = [string](Get-JsonProperty -InputObject $parsedPayload -Name "model" -Default "")
+  $model = Resolve-HookModel -ModelId $modelId -LegacyModel $modelLegacy
+  $gitRepoUrl = ""
+  $gitBranch = ""
+  if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+    $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
+    $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
   }
 
   Write-DebugLog -Message "Resolving config (may refresh an expiring token)..." -LogPath $DebugLogPath
@@ -73,96 +84,96 @@ try {
     return
   }
 
-  $scanUrl = $ScanUrlOverride
-  if (-not $scanUrl) {
-    $scanUrl = "$($config.BaseUrl.TrimEnd('/'))/api/v1/codedefense/scan"
-  }
+  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
-  Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | scan_url=$scanUrl | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
-
+  # Invoke-PnScanText (lib/scan-client.ps1) posts to the composite
+  # PromptGuard+PolicyEngine+CodeDefense scan endpoint -- no model
+  # invocation, a real structured Action verdict instead of the old
+  # /v1/messages zero-usage/banner-text heuristic.
   $callStart = Get-Date
-  Write-DebugLog -Message "POST starting -> $scanUrl" -LogPath $DebugLogPath
-  $result = Invoke-ScanHttpPost -Url $scanUrl -TextData $prompt -AuthToken $config.AccessToken -TimeoutSec $TimeoutSeconds
+  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds `
+    -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Text $prompt -Kind "prompt" -GenerationId $generationId -Model $model
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
+  Write-DebugLog -Message "Scan returned after ${elapsedMs}ms | Status=$($scanResult.Status) | Action=$($scanResult.Action)" -LogPath $DebugLogPath
 
-  $bodyPreview = ""
-  if ($result.Body) {
-    $bodyPreview = $result.Body.Substring(0, [Math]::Min(500, $result.Body.Length))
-  }
-  Write-DebugLog -Message "POST returned after ${elapsedMs}ms | TimedOut=$($result.TimedOut) | ConnectionFailed=$($result.ConnectionFailed) | StatusCode=$($result.StatusCode) | body(first 500 chars)=$bodyPreview" -LogPath $DebugLogPath
-
-  if ($result.TimedOut) {
-    Write-DebugLog -Message "API timeout | after ${TimeoutSeconds}s | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service timed out (${TimeoutSeconds}s). Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service timed out (${TimeoutSeconds}s). Allowing prompt."
-    }
-    return
-  }
-  if ($result.ConnectionFailed) {
-    Write-DebugLog -Message "API unreachable | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service is unreachable. Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service is unreachable. Allowing prompt."
-    }
-    return
-  }
-
-  if ($result.StatusCode -lt 200 -or $result.StatusCode -ge 300) {
-    Write-DebugLog -Message "API HTTP error | status=$($result.StatusCode) | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service returned an error (HTTP $($result.StatusCode)). Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service returned an error (HTTP $($result.StatusCode)). Allowing prompt."
-    }
-    return
-  }
-
-  $responseObject = $null
-  try {
-    $responseObject = $result.Body | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    Write-DebugLog -Message "API invalid JSON response | url=$scanUrl" -LogPath $DebugLogPath
-    if ($PromptFailureMode -eq "closed") {
-      Write-JsonDeny -Message "The scanning service returned an invalid response. Prompt blocked."
-    } else {
-      Write-JsonAllow -Message "The scanning service returned an invalid response. Allowing prompt."
-    }
-    return
-  }
-
-  $action = Get-JsonProperty -InputObject $responseObject -Name "action_to_take" -Default "allow"
-  $message = Get-JsonProperty -InputObject $responseObject -Name "message" -Default "Prompt blocked by Paradigm Networks."
-
-  Write-DebugLog -Message "API response received | action=$action" -LogPath $DebugLogPath
-
-  switch ($action) {
-    "block" {
-      # Mirrors scripts/check-prompt.sh's block-message formatting
-      # exactly -- see that file's comments for the full rationale. Note
-      # from testing on a real Windows target: one specific Cursor UI
-      # surface ("Submission blocked by hook") silently drops **bold**
-      # weight (the markdown gets stripped, but no bold is applied),
-      # while `inline code` highlighting does render correctly there.
-      # Porting the same design anyway to get a clean, direct read on how
-      # the new ### heading / > blockquote parts render in that surface.
-      $reason = $message
-      if ($message -match 'security concerns:?\s*\(?([^.)]+)[.\)]') {
-        $reason = $Matches[1]
+  switch ($scanResult.Status) {
+    "no_session" {
+      # Every beforeSubmitPrompt payload observed so far has carried
+      # conversation_id, so this is not expected in practice.
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service could not be reached (no session id available). Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service could not be reached (no session id available). Allowing prompt."
       }
+      return
+    }
+    "timeout" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service timed out (${TimeoutSeconds}s). Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service timed out (${TimeoutSeconds}s). Allowing prompt."
+      }
+      return
+    }
+    "unreachable" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service is unreachable. Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service is unreachable. Allowing prompt."
+      }
+      return
+    }
+    "http_error" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service returned an error (HTTP $($scanResult.HttpStatus)). Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service returned an error (HTTP $($scanResult.HttpStatus)). Allowing prompt."
+      }
+      return
+    }
+    "invalid_json" {
+      if ($PromptFailureMode -eq "closed") {
+        Write-JsonDeny -Message "The scanning service returned an invalid response. Prompt blocked."
+      } else {
+        Write-JsonAllow -Message "The scanning service returned an invalid response. Allowing prompt."
+      }
+      return
+    }
+  }
 
-      # Preview of the actual prompt that got flagged, capped at 60 words
-      # so a long prompt doesn't blow up the message. Collapsed to a
-      # single line first: markdown's ">" blockquote syntax only quotes
-      # the line it's on, so a multi-line prompt would otherwise break out
-      # of the quote after the first line.
+  switch ($scanResult.Action) {
+    { [string]::IsNullOrEmpty($_) } {
+      # A valid JSON response with no recognized action_to_take -- an
+      # unexpected response shape, not a confirmed verdict either way.
+      Write-DebugLog -Message "Scan response shape unexpected (no recognized action_to_take)" -LogPath $DebugLogPath
+      $anomalyStreak = Add-PnScanAnomaly
+      $anomalyPrefix = ""
+      if ($anomalyStreak -ge $Script:PnAnomalyWarningThreshold) {
+        $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
+        $anomalyPrefix = "$warningSign Security scanning has failed $anomalyStreak times in a row and may not be protecting you right now. Contact your administrator. "
+      }
+      if ($scanResult.Message) {
+        if ($PromptFailureMode -eq "closed") {
+          Write-JsonDeny -Message "${anomalyPrefix}$($scanResult.Message)"
+        } else {
+          Write-JsonAllow -Message "${anomalyPrefix}$($scanResult.Message)"
+        }
+      } else {
+        if ($PromptFailureMode -eq "closed") {
+          Write-JsonDeny -Message "${anomalyPrefix}The scanning service returned an unexpected response. Prompt blocked."
+        } else {
+          Write-JsonAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Allowing prompt."
+        }
+      }
+    }
+    "block" {
+      Set-PnLastSuccessfulScan
+      # Markdown formatting confirmed rendering correctly in Cursor's UI.
+      $reason = $scanResult.Message
+      if (-not $reason) { $reason = "A policy violation was detected." }
+
+      # Preview of the actual prompt that got flagged, capped at 60 words.
       $flaggedPreview = ($prompt -replace '\s+', ' ').Trim()
-      # @(...) matters even though Where-Object already returns a
-      # collection: a single-word prompt would otherwise reduce to a bare
-      # string crossing this pipeline, and .Count would throw the same way
-      # it did once already this session for a single-item collection.
       $words = @($flaggedPreview -split ' ' | Where-Object { $_ -ne '' })
       $wasTruncated = $words.Count -gt 60
       $flaggedPreview = ($words | Select-Object -First 60) -join ' '
@@ -170,24 +181,13 @@ try {
         $flaggedPreview = "$flaggedPreview..."
       }
 
-      # Built via single-quoted (fully literal) fragments concatenated in,
-      # not backtick-escaped inside a double-quoted string: backtick is
-      # PowerShell's own escape character, so embedding a literal backtick
-      # directly in a double-quoted string needs doubling it up, which is
-      # easy to get wrong -- concatenating literal single-quoted pieces
-      # sidesteps that entirely.
-      $concernLine = '**Concern** `' + $reason + '`'
+      if ($reason -match "`n") {
+        $concernLine = "**Concern**`n`n$reason"
+      } else {
+        $concernLine = '**Concern** `' + $reason + '`'
+      }
       $quotedContent = '> ' + $flaggedPreview
 
-      # Built from its Unicode code points, not embedded as a literal
-      # character in this source file: a literal multi-byte emoji here
-      # depends on the file being read back with the exact encoding it was
-      # saved with, which is exactly the kind of ambiguity that produced
-      # mojibake ("dY>...") on a real Windows target even after forcing
-      # [Console]::OutputEncoding to UTF-8 in common.ps1. The shield emoji
-      # is two code points -- U+1F6E1 SHIELD, U+FE0F VARIATION SELECTOR-16
-      # (selects the emoji-style presentation) -- constructing both from
-      # their code points sidesteps source-file encoding entirely.
       $shieldEmoji = [char]::ConvertFromUtf32(0x1F6E1) + [char]::ConvertFromUtf32(0xFE0F)
       $brandedMessage = "### $shieldEmoji Request blocked by Paradigm Networks`n`n" +
         "This message wasn't sent to the model. Your organization's proxy inspects`n" +
@@ -198,10 +198,22 @@ try {
       Write-JsonDeny -Message $brandedMessage
     }
     "warn" {
-      Write-JsonAllow -Message $message
+      # Non-blocking: surface the scan's own explanation and let it proceed.
+      Set-PnLastSuccessfulScan
+      if ($scanResult.Message) {
+        Write-JsonAllow -Message $scanResult.Message
+      } else {
+        Write-JsonAllow
+      }
     }
     default {
-      Write-JsonAllow
+      # "allow"
+      Set-PnLastSuccessfulScan
+      if ($scanResult.Message) {
+        Write-JsonAllow -Message $scanResult.Message
+      } else {
+        Write-JsonAllow
+      }
     }
   }
 } catch {

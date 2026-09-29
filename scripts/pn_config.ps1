@@ -11,12 +11,12 @@ Set-StrictMode -Version Latest
 $Script:PnClientId = "cursor-plugin"
 $Script:PnCredDir = Join-Path $HOME ".pn"
 $Script:PnCredPath = Join-Path $Script:PnCredDir "credentials.json"
-# 40s, not 10s: same reasoning as check-prompt.ps1/check-write.ps1 -- this
+# 60s, matching the bash side and check-prompt.ps1/check-write.ps1 -- this
 # hits the same host, and establishing the HTTPS connection alone has been
 # observed to take ~20-25s on a real Windows target (likely a slow/blocked
 # certificate revocation check). This is the silent, on-the-critical-path
 # refresh call, so it needs the same margin, not less.
-$Script:PnTokenTimeoutSec = 40
+$Script:PnTokenTimeoutSec = 60
 $Script:PnExpiryMarginSeconds = 60
 
 # Restricts a file or directory to the current user only -- the Windows
@@ -77,13 +77,6 @@ function Save-PnCredentials {
     [Parameter(Mandatory = $true)][long]$ExpiresAt
   )
 
-  $credsObject = [PSCustomObject]@{
-    base_url      = $BaseUrl
-    access_token  = $AccessToken
-    refresh_token = $RefreshToken
-    expires_at    = $ExpiresAt
-  }
-
   # Write to a temp file first, lock it down, then move into place --
   # mirrors the bash version's mktemp + chmod-before-move pattern so the
   # credentials file is never briefly world-readable.
@@ -99,6 +92,27 @@ function Save-PnCredentials {
       New-Item -ItemType Directory -Path $Script:PnCredDir -Force -ErrorAction Stop | Out-Null
     }
     Protect-PathForCurrentUserOnly -Path $Script:PnCredDir
+
+    # Merge into whatever's already on disk, not a from-scratch rebuild --
+    # this function runs automatically and silently on every token
+    # refresh (see Get-PnValidAccessToken below), so a naive rebuild
+    # would wipe any field this function doesn't itself know about the
+    # very next time a session runs long enough to trigger a refresh.
+    $credsObject = [PSCustomObject]@{}
+    if (Test-Path $Script:PnCredPath -PathType Leaf) {
+      try {
+        $existing = (Get-Utf8FileText -Path $Script:PnCredPath) | ConvertFrom-Json -ErrorAction Stop
+        if ($existing) { $credsObject = $existing }
+      } catch {
+        # Corrupt/unreadable existing file -- fall through with an empty
+        # object rather than fail the save outright.
+      }
+    }
+    $credsObject | Add-Member -NotePropertyName "base_url" -NotePropertyValue $BaseUrl -Force
+    $credsObject | Add-Member -NotePropertyName "access_token" -NotePropertyValue $AccessToken -Force
+    $credsObject | Add-Member -NotePropertyName "refresh_token" -NotePropertyValue $RefreshToken -Force
+    $credsObject | Add-Member -NotePropertyName "expires_at" -NotePropertyValue $ExpiresAt -Force
+
     Set-Utf8FileTextNoBom -Path $tempFile -Value ($credsObject | ConvertTo-Json -Compress)
     Protect-PathForCurrentUserOnly -Path $tempFile
     Move-Item -Path $tempFile -Destination $Script:PnCredPath -Force -ErrorAction Stop
@@ -190,17 +204,11 @@ function Get-PnValidAccessToken {
   return [PSCustomObject]@{ BaseUrl = $creds.BaseUrl; AccessToken = $refreshed.AccessToken }
 }
 
-# Resolve config: PARADIGM_NETWORKS_* env vars take precedence, then
-# legacy SNANTIZER_* env vars, then the stored file (with refresh).
+# Resolve config: PARADIGM_NETWORKS_URL/PARADIGM_NETWORKS_TOKEN env vars
+# take precedence, then the stored file (with refresh).
 function Resolve-PnConfig {
   $envBase = $env:PARADIGM_NETWORKS_URL
   $envToken = $env:PARADIGM_NETWORKS_TOKEN
-  if ($envBase -and $envToken) {
-    return [PSCustomObject]@{ BaseUrl = $envBase; AccessToken = $envToken }
-  }
-
-  $envBase = $env:SNANTIZER_BASE_URL
-  $envToken = $env:SNANTIZER_TOKEN
   if ($envBase -and $envToken) {
     return [PSCustomObject]@{ BaseUrl = $envBase; AccessToken = $envToken }
   }

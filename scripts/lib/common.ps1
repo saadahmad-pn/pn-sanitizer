@@ -7,8 +7,9 @@
 #
 # Written against Windows PowerShell 5.1 (the version that ships on every
 # Windows machine by default) -- not PowerShell 7+-only syntax or cmdlet
-# parameters (e.g. Invoke-WebRequest's -Form, added in 6.1+, is deliberately
-# not used below; see Invoke-ScanHttpPost).
+# parameters. HTTP calls shell out to curl.exe (ships inbox on Windows 10
+# build 17063+/Windows 11) rather than Invoke-WebRequest/HttpClient -- see
+# Invoke-CurlRequest below for why.
 
 Set-StrictMode -Version Latest
 
@@ -76,7 +77,7 @@ function Set-Utf8FileTextNoBom {
 # check (and [Console]::In generally) sits on top of Windows console-mode
 # detection that has been observed to misreport when PowerShell is
 # launched through an intermediate process (cmd.exe -> powershell.exe
-# -File, which is exactly how run-powershell.cmd invokes every hook here),
+# -File, which is exactly how run-hook.cmd invokes every hook here),
 # silently leaving the payload empty and making a real, piped-in JSON
 # payload look like invalid input. Reading the raw standard-input stream
 # directly, with an explicit encoding, sidesteps both that and a possible
@@ -119,20 +120,111 @@ function Get-JsonProperty {
   return $Default
 }
 
-Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+# ConvertTo-NormalizedHookModel -Model <string>
+# Mirrors common.sh's normalize_hook_model: strips Cursor's own "unknown"
+# placeholder (sent verbatim on its .model hook field when the model hasn't
+# resolved yet at hook-fire time -- e.g. Auto model mode) down to an empty
+# string, so it reads as genuinely absent rather than being persisted in the
+# chatapi collection as if "unknown" were a real model identifier.
+# Case-insensitive since Cursor's own casing for this value is not
+# documented/guaranteed. Confirmed via control-server's raw-payload debug
+# logging (2026-09-22): a real afterAgentResponse payload carried
+# "model":"unknown" -- Cursor's own value, not something this plugin's
+# extraction introduces, so the fix belongs at the point where we read it.
+function ConvertTo-NormalizedHookModel {
+  param([string]$Model)
+  if ($Model -and $Model.ToLowerInvariant() -eq "unknown") {
+    return ""
+  }
+  return $Model
+}
+
+# Resolve-HookModel -ModelId <string> -LegacyModel <string>
+# Mirrors common.sh's resolve_hook_model: picks the best available model
+# identifier from a Cursor hook payload -- ModelId (Cursor's docs:
+# "Structured ID for the selected model, when available" -- optional, newer)
+# when present, falling back to LegacyModel (Cursor's docs: "Legacy model
+# slug configured for the composer") when ModelId is absent -- e.g. an older
+# Cursor build that doesn't send it yet. Whichever value is chosen is passed
+# through ConvertTo-NormalizedHookModel, since either field could in
+# principle carry the "unknown" placeholder.
+function Resolve-HookModel {
+  param([string]$ModelId, [string]$LegacyModel)
+  $chosen = if ($ModelId) { $ModelId } else { $LegacyModel }
+  return ConvertTo-NormalizedHookModel -Model $chosen
+}
+
+# Invoke-CurlRequest -CurlArgs <string[]>
+# Shared machinery for Invoke-HttpPostRaw below: runs
+# curl.exe with the given arguments (which must already include -s, the
+# URL/method/headers, and a trailing "-w `n%{http_code}"), splits the
+# status-code line curl appends off of the response body, and maps
+# curl's own exit code onto the same {Body, StatusCode, TimedOut,
+# ConnectionFailed} contract this plugin has always used -- so every
+# existing caller keeps working unchanged regardless of what HTTP
+# transport sits underneath.
+#
+# Replaces an HttpClient + CancellationToken implementation that had its
+# own real, confirmed bug: -TimeoutSec/CancelAfter did not reliably abort
+# a hung request on a real Windows PowerShell 5.1 target (a 10s timeout
+# ran ~22s anyway), forcing a manual Task.Wait(timeout) workaround just to
+# get a hard deadline. curl's own --max-time is mature and already proven
+# reliable here -- it's exactly what the bash side has used from day one
+# (see http_post in common.sh) with no equivalent problem. This
+# also collapses two parallel HTTP implementations (bash's curl calls,
+# PowerShell's HttpClient calls) that had to be kept behaviorally
+# identical by hand into one real implementation, mirrored.
+#
+# curl.exe ships inbox on Windows 10 (build 17063+) and Windows 11 by
+# default. A heavily locked-down machine that blocks/removes it is a real
+# but separate risk, deliberately not handled here yet (no fallback) --
+# revisit if it turns out to matter in practice.
+function Invoke-CurlRequest {
+  param(
+    [Parameter(Mandatory = $true)][string[]]$CurlArgs
+  )
+
+  $rawOutput = & curl.exe @CurlArgs 2>$null
+  $exitCode = $LASTEXITCODE
+
+  # curl exit codes (https://curl.se/libcurl/c/libcurl-errors.html): 28 is
+  # specifically operation-timeout (--max-time exceeded); every other
+  # non-zero code (couldn't resolve host, couldn't connect, SSL failure,
+  # etc.) is treated as one generic connection failure -- the same
+  # coarse-grained split check-write.sh/check-prompt.sh already make on
+  # the bash side (curl_exit -eq 28 vs curl_exit -ne 0), nothing finer.
+  if ($exitCode -eq 28) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
+  }
+  if ($exitCode -ne 0) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+  }
+
+  # curl's "-w `n%{http_code}" always appends the status code as one more
+  # line after the response body. PowerShell splits a native command's
+  # multi-line stdout into an array of strings (one per line, newlines
+  # already stripped) when capturing it into a variable -- @(...) just
+  # guards the pathological case where curl printed only a single line.
+  $lines = @($rawOutput)
+  if ($lines.Count -lt 1) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+  }
+  $statusText = ([string]$lines[$lines.Count - 1]).Trim()
+  $statusCode = 0
+  if (-not [int]::TryParse($statusText, [ref]$statusCode)) {
+    return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
+  }
+  $body = if ($lines.Count -gt 1) { ($lines[0..($lines.Count - 2)]) -join "`n" } else { "" }
+
+  return [PSCustomObject]@{
+    Body             = $body
+    StatusCode       = $statusCode
+    TimedOut         = $false
+    ConnectionFailed = $false
+  }
+}
 
 # Invoke-HttpPostRaw -Url ... -BodyBytes ... -ContentType ... -AuthToken ... -TimeoutSec ...
-# A hard-timeout HTTP POST built directly on HttpClient + a
-# CancellationToken, instead of Invoke-WebRequest/-RestMethod's -TimeoutSec.
-# Observed directly against a real Windows test environment for this
-# plugin: -TimeoutSec did not reliably abort a hung request -- the process
-# outlived it and had to be killed from outside by Cursor's own, longer,
-# hook-level timeout instead, with the actual HTTP call never returning at
-# all. CancellationToken.CancelAfter forces the issue: cancelling it aborts
-# the underlying socket operation directly, it does not depend on the HTTP
-# stack choosing to honor a timeout value the way -TimeoutSec apparently
-# doesn't in that environment.
-#
 # Returns a PSCustomObject with:
 #   Body              - response body string, or $null if unreachable/timed out
 #   StatusCode        - HTTP status code (int), or $null if unreachable/timed out
@@ -147,101 +239,61 @@ function Invoke-HttpPostRaw {
     [int]$TimeoutSec = 5
   )
 
-  $cts = New-Object System.Threading.CancellationTokenSource
-  $client = New-Object System.Net.Http.HttpClient
+  # The request body is written to a temp file and sent via
+  # --data-binary @file, never inlined on the command line. PowerShell
+  # does not reliably preserve embedded double quotes (which JSON is full
+  # of) when marshaling a string argument into the one flat command-line
+  # string a native process actually receives on Windows -- confirmed
+  # directly: an inline JSON body produced a real "Unable to parse
+  # request data" from the backend even though the PowerShell string
+  # itself looked completely correct. A uniquely-named temp file (Cursor
+  # can fire multiple hook invocations in parallel -- confirmed directly
+  # in real logs) avoids that whole class of problem.
+  $tempFile = Join-Path $env:TEMP "pn-http-body-$([System.Guid]::NewGuid().ToString('N')).tmp"
   try {
-    # CancelAfter is kept as a best-effort signal, but it is NOT what
-    # actually enforces the timeout below -- observed directly against a
-    # real Windows PowerShell 5.1 target: a request configured with a 10s
-    # timeout ran for ~22s anyway. Windows PowerShell 5.1's HttpClient
-    # sits on older machinery than PowerShell 7's and does not reliably
-    # honor cancellation the way it does on modern .NET (verified working
-    # correctly there in this plugin's own testing). The actual guarantee
-    # here comes from Task.Wait(timeout) below: it returns false on timeout
-    # without throwing, and without waiting any longer, regardless of
-    # whether the underlying request ever actually stops -- an abandoned
-    # task left running in the background is fine, since this process
-    # prints its result and exits shortly after either way.
-    $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
+    [System.IO.File]::WriteAllBytes($tempFile, $BodyBytes)
 
-    # The leading comma matters: without it, PowerShell unrolls the byte
-    # array into one constructor argument per byte instead of passing the
-    # array itself as the single argument ByteArrayContent(byte[]) expects
-    # -- observed directly: "Cannot find an overload ... argument count: 127".
-    $content = New-Object System.Net.Http.ByteArrayContent(, $BodyBytes)
-    $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($ContentType)
+    $curlArgs = @(
+      "-s", "-X", "POST", $Url,
+      "-H", "Content-Type: $ContentType",
+      "--data-binary", "@$tempFile",
+      "--max-time", "$TimeoutSec",
+      "-w", "`n%{http_code}"
+    )
     if ($AuthToken) {
-      $client.DefaultRequestHeaders.Authorization =
-        New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $AuthToken)
+      $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
     }
 
-    $postTask = $client.PostAsync($Url, $content, $cts.Token)
-    # Task.Wait(timeout) returns false on a pure timeout (our own wait
-    # gave up, the task may still be running) -- but if the task itself
-    # transitions to Faulted/Canceled *within* that same window, Wait()
-    # throws instead of returning normally. Both outcomes are handled here.
-    try {
-      $completedInTime = $postTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
-    } catch {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-    if (-not $completedInTime) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-    }
-    if ($postTask.IsFaulted) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-
-    $response = $postTask.Result
-    $readTask = $response.Content.ReadAsStringAsync()
-    try {
-      $readCompletedInTime = $readTask.Wait([TimeSpan]::FromSeconds($TimeoutSec))
-    } catch {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $false; ConnectionFailed = $true }
-    }
-    if (-not $readCompletedInTime) {
-      return [PSCustomObject]@{ Body = $null; StatusCode = $null; TimedOut = $true; ConnectionFailed = $false }
-    }
-
-    return [PSCustomObject]@{
-      Body             = $readTask.Result
-      StatusCode       = [int]$response.StatusCode
-      TimedOut         = $false
-      ConnectionFailed = $false
-    }
+    return Invoke-CurlRequest -CurlArgs $curlArgs
   } finally {
-    $client.Dispose()
-    $cts.Dispose()
+    Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
   }
 }
 
-# Invoke-ScanHttpPost -Url ... -TextData ... -AuthToken ... -TimeoutSec ...
-# Mirrors http_post_form + http_post_split_status combined into one call:
-# sends TextData as a literal multipart/form-data field named "text" (never
-# interpreted as a file path, matching curl --form-string's behavior).
-function Invoke-ScanHttpPost {
+# Invoke-HttpPostMultipart -Url ... -FormArgs <string[]> -AuthToken ... -TimeoutSec ...
+# Generic multipart/form-data POST for the detections API (lib/detection-
+# client.ps1) -- mirrors http_post_multipart_form in common.sh. FormArgs is
+# the full, flat list of curl --form-string/-F flag/value tokens the caller
+# wants sent (e.g. "--form-string", "EventType=git.push", ..., "-F",
+# "Files=@C:\path\to\file;filename=rel/path"), passed straight through to
+# curl.exe via Invoke-CurlRequest. Unlike Invoke-HttpPostRaw's JSON body,
+# there's no quote-escaping problem here needing a temp-file workaround --
+# Invoke-CurlRequest already preserves each array element's own boundaries
+# when invoking curl.exe as a native process.
+function Invoke-HttpPostMultipart {
   param(
     [Parameter(Mandatory = $true)][string]$Url,
-    [Parameter(Mandatory = $true)][string]$TextData,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$FormArgs,
     [string]$AuthToken = "",
     [int]$TimeoutSec = 5
   )
 
-  $boundary = [System.Guid]::NewGuid().ToString()
-  $bodyLines = @(
-    "--$boundary",
-    'Content-Disposition: form-data; name="text"',
-    "",
-    $TextData,
-    "--$boundary--",
-    ""
-  )
-  $bodyString = $bodyLines -join "`r`n"
-  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyString)
+  $curlArgs = @("-s", "-X", "POST", $Url) + $FormArgs + @("--max-time", "$TimeoutSec", "-w", "`n%{http_code}")
+  if ($AuthToken) {
+    $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
+  }
 
-  return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
-    -ContentType "multipart/form-data; boundary=$boundary" `
-    -AuthToken $AuthToken -TimeoutSec $TimeoutSec
+  return Invoke-CurlRequest -CurlArgs $curlArgs
 }
 
 # Write-DebugLog -Message ... -LogPath ...
@@ -298,6 +350,102 @@ function Write-AuditLog {
   } catch {
     # Audit logging must never be the reason a hook fails.
   }
+}
+
+# Anomaly-streak tracking. Mirrors pn_record_scan_anomaly/
+# pn_record_successful_scan in common.sh -- see that comment for the full
+# rationale: ConvertFrom-PnMessagesResponse's block/allow verdict is a
+# reverse-engineered heuristic with no real structured field from the
+# backend yet, so a silent, complete loss of enforcement (every scan
+# landing on "anomaly") needs a loud signal past a threshold instead of
+# staying invisible. Scoped narrowly to that classification, not
+# transport-level failures, same as the bash side.
+$Script:PnAnomalyStatePath = Join-Path $HOME ".paradigm-scanner\anomaly_state.json"
+$Script:PnAnomalyWarningThreshold = 3
+$Script:PnScanStalenessThresholdSeconds = 3600
+
+function Add-PnScanAnomaly {
+  $count = 0
+  $lastSuccessfulScan = $null
+  if (Test-Path $Script:PnAnomalyStatePath -PathType Leaf) {
+    try {
+      $existing = Get-Content -Path $Script:PnAnomalyStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $existingCount = Get-JsonProperty -InputObject $existing -Name "consecutive_anomaly_count" -Default 0
+      if ($existingCount -match '^\d+$') { $count = [int]$existingCount }
+      # Preserve whatever was there -- an anomaly verdict must not erase
+      # the last confirmed-good scan's timestamp, only bump the streak.
+      $lastSuccessfulScan = Get-JsonProperty -InputObject $existing -Name "last_successful_scan" -Default $null
+    } catch {
+      $count = 0
+    }
+  }
+  $count++
+
+  # Best-effort persistence, same posture as Write-DebugLog/Write-AuditLog
+  # above: if this fails, the count returned for this one call is still
+  # correct, it just won't be remembered for the next invocation.
+  try {
+    $dir = Split-Path -Parent $Script:PnAnomalyStatePath
+    if ($dir -and -not (Test-Path $dir)) {
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+    }
+    $stateObject = @{ consecutive_anomaly_count = $count }
+    if ($null -ne $lastSuccessfulScan) { $stateObject["last_successful_scan"] = $lastSuccessfulScan }
+    $tempFile = "$($Script:PnAnomalyStatePath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    (ConvertTo-CompactJson $stateObject) | Set-Content -Path $tempFile -Encoding UTF8 -ErrorAction Stop
+    Move-Item -Path $tempFile -Destination $Script:PnAnomalyStatePath -Force -ErrorAction Stop
+  } catch {
+    # Non-fatal -- see comment above.
+  }
+
+  return $count
+}
+
+# Called on every allow/block verdict -- never on anomaly/timeout/
+# connection-error/HTTP-error/invalid-JSON, since those are exactly the
+# failure modes staleness tracking exists to catch. Replaces the old
+# Reset-PnScanAnomaly (Remove-Item only): the anomaly streak still needs
+# clearing, but that now happens alongside writing a fresh timestamp, so a
+# bare file delete no longer fits. This is a blind write (no read step) --
+# see pn_record_successful_scan's comment in common.sh for why that's safe
+# under a concurrent Add-PnScanAnomaly call.
+function Set-PnLastSuccessfulScan {
+  try {
+    $dir = Split-Path -Parent $Script:PnAnomalyStatePath
+    if ($dir -and -not (Test-Path $dir)) {
+      New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+    }
+    $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $tempFile = "$($Script:PnAnomalyStatePath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    (ConvertTo-CompactJson @{ consecutive_anomaly_count = 0; last_successful_scan = $nowEpoch }) |
+      Set-Content -Path $tempFile -Encoding UTF8 -ErrorAction Stop
+    Move-Item -Path $tempFile -Destination $Script:PnAnomalyStatePath -Force -ErrorAction Stop
+  } catch {
+    # Non-fatal -- same posture as Add-PnScanAnomaly.
+  }
+}
+
+# Mirrors pn_check_scan_staleness, but returns $true/$false directly since
+# a PowerShell function can return a single value cleanly (bash's global-
+# variable convention there works around $(...) subshells stripping state).
+function Test-PnScanStale {
+  $lastSuccessfulScan = $null
+  if (Test-Path $Script:PnAnomalyStatePath -PathType Leaf) {
+    try {
+      $existing = Get-Content -Path $Script:PnAnomalyStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $lastSuccessfulScan = Get-JsonProperty -InputObject $existing -Name "last_successful_scan" -Default $null
+    } catch {
+      $lastSuccessfulScan = $null
+    }
+  }
+
+  if ($null -eq $lastSuccessfulScan) { return $true }
+
+  $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  $age = $nowEpoch - [int64]$lastSuccessfulScan
+  # Clock skew -- see Set-PnLastSuccessfulScan's bash mirror comment.
+  if ($age -lt 0) { return $false }
+  return ($age -gt $Script:PnScanStalenessThresholdSeconds)
 }
 
 # Get-FileTail -Path ... -MaxBytes ...
@@ -404,6 +552,73 @@ function Get-CurrentTurnText {
     }
   }
   return ($textParts -join "`n`n")
+}
+
+# Same scoping as Get-CurrentTurnText (last user message to end of file),
+# but role-separated into $Script:PnTurnPrompt/$Script:PnTurnResponse
+# instead of one blended string -- for Code Chain's turn-recording payload
+# (lib/codechain-client.ps1), which has distinct Prompt/Response fields.
+# Both globals are reset to "" up front so a missing/unreadable transcript
+# leaves neither stale from a previous call in the same process.
+function Get-CurrentTurnMessages {
+  param(
+    [Parameter(Mandatory = $true)][string]$TranscriptPath,
+    [int]$MaxLines = 500
+  )
+
+  $Script:PnTurnPrompt = ""
+  $Script:PnTurnResponse = ""
+
+  if (-not (Test-Path $TranscriptPath -PathType Leaf)) {
+    return
+  }
+
+  try {
+    $lines = @(Get-Content -Path $TranscriptPath -Tail $MaxLines -ErrorAction Stop)
+  } catch {
+    return
+  }
+
+  $parsed = New-Object System.Collections.Generic.List[object]
+  foreach ($line in $lines) {
+    if (-not $line) { continue }
+    try {
+      $parsed.Add(($line | ConvertFrom-Json -ErrorAction Stop))
+    } catch {
+      # Skip a malformed/partial line -- see Get-CurrentTurnText's identical comment.
+    }
+  }
+  if ($parsed.Count -eq 0) {
+    return
+  }
+
+  $startIndex = 0
+  for ($i = $parsed.Count - 1; $i -ge 0; $i--) {
+    $role = Get-JsonProperty -InputObject $parsed[$i] -Name "role" -Default ""
+    if ($role -eq "user") {
+      $startIndex = $i
+      break
+    }
+  }
+
+  $promptParts = New-Object System.Collections.Generic.List[string]
+  $responseParts = New-Object System.Collections.Generic.List[string]
+  for ($i = $startIndex; $i -lt $parsed.Count; $i++) {
+    $role = Get-JsonProperty -InputObject $parsed[$i] -Name "role" -Default ""
+    $message = Get-JsonProperty -InputObject $parsed[$i] -Name "message" -Default $null
+    if ($null -eq $message) { continue }
+    $content = @(Get-JsonProperty -InputObject $message -Name "content" -Default @())
+    foreach ($block in $content) {
+      $blockType = Get-JsonProperty -InputObject $block -Name "type" -Default ""
+      if ($blockType -ne "text") { continue }
+      $text = Get-JsonProperty -InputObject $block -Name "text" -Default ""
+      if (-not $text) { continue }
+      if ($role -eq "user") { $promptParts.Add($text) }
+      elseif ($role -eq "assistant") { $responseParts.Add($text) }
+    }
+  }
+  $Script:PnTurnPrompt = ($promptParts -join "`n`n")
+  $Script:PnTurnResponse = ($responseParts -join "`n`n")
 }
 
 # --- Hook response helpers (for beforeSubmitPrompt / preToolUse) ---

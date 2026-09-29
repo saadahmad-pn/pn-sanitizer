@@ -3,46 +3,49 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "bash ./scripts/check-session.sh",
+        "command": "scripts/run-hook.cmd check-session",
         "matcher": "",
         "failClosed": false,
         "timeout": 10
-      },
+      }
+    ],
+    "sessionEnd": [
       {
-        "command": "./scripts/run-powershell.cmd ./scripts/check-session.ps1",
+        "command": "scripts/run-hook.cmd check-session-end",
         "matcher": "",
         "failClosed": false,
         "timeout": 10
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "scripts/run-hook.cmd check-turn-complete",
+        "matcher": "",
+        "failClosed": false,
+        "timeout": 15
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "bash ./scripts/check-prompt.sh",
-        "timeout": 25
-      },
-      {
-        "command": "./scripts/run-powershell.cmd ./scripts/check-prompt.ps1",
-        "timeout": 45
-      },
-      {
-        "command": "bash ./scripts/check-repo-context.sh",
-        "timeout": 10
-      },
-      {
-        "command": "./scripts/run-powershell.cmd ./scripts/check-repo-context.ps1",
-        "timeout": 10
+        "command": "scripts/run-hook.cmd check-prompt",
+        "timeout": 250,
+        "failClosed": true
       }
     ],
     "preToolUse": [
       {
-        "matcher": "Write",
-        "command": "bash ./scripts/check-write.sh",
-        "timeout": 25
-      },
+        "matcher": "",
+        "command": "scripts/run-hook.cmd check-tool-call",
+        "timeout": 250,
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
       {
-        "matcher": "Write",
-        "command": "./scripts/run-powershell.cmd ./scripts/check-write.ps1",
-        "timeout": 45
+        "matcher": "",
+        "command": "scripts/run-hook.cmd check-tool-call-record",
+        "failClosed": false,
+        "timeout": 250
       }
     ]
   }

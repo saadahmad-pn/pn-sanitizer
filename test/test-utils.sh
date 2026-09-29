@@ -190,7 +190,7 @@ assert_json_valid() {
 
   TESTS_RUN=$((TESTS_RUN + 1))
 
-  if echo "$json" | jq empty 2>/dev/null; then
+  if echo "$json" | "$JQ_BIN" empty 2>/dev/null; then
     echo -e "  ${GREEN}✓${NC} $name"
     TESTS_PASSED=$((TESTS_PASSED + 1))
     return 0
@@ -210,7 +210,7 @@ assert_json_has_key() {
 
   TESTS_RUN=$((TESTS_RUN + 1))
 
-  if echo "$json" | jq -e ".$key" >/dev/null 2>&1; then
+  if echo "$json" | "$JQ_BIN" -e ".$key" >/dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} $name"
     TESTS_PASSED=$((TESTS_PASSED + 1))
     return 0
@@ -232,7 +232,7 @@ assert_json_field_equals() {
   TESTS_RUN=$((TESTS_RUN + 1))
 
   local actual
-  actual=$(echo "$json" | jq -r ".$field" 2>/dev/null)
+  actual=$(echo "$json" | "$JQ_BIN" -r ".$field" 2>/dev/null)
 
   if [[ "$actual" == "$expected" ]]; then
     echo -e "  ${GREEN}✓${NC} $name"
@@ -275,7 +275,7 @@ mock_credentials() {
   local expires_at="${4:-$(($(date +%s) + 3600))}"
 
   mkdir -p "$HOME/.pn"
-  jq -n \
+  "$JQ_BIN" -n \
     --arg base_url "$base_url" \
     --arg access_token "$access_token" \
     --arg refresh_token "$refresh_token" \
@@ -289,5 +289,26 @@ mock_credentials() {
 source_scripts() {
   source "$SCRIPTS_DIR/lib/common.sh"
   source "$SCRIPTS_DIR/lib/git-utils.sh"
+  source "$SCRIPTS_DIR/lib/plugins-client.sh"
+  source "$SCRIPTS_DIR/lib/repo-context.sh"
+  source "$SCRIPTS_DIR/lib/session-metadata.sh"
+  source "$SCRIPTS_DIR/lib/login-detection.sh"
   source "$SCRIPTS_DIR/pn_config.sh"
+}
+
+# Create a throwaway git repo under TEST_TEMP_DIR for git-utils/detection
+# tests. Prints the repo's absolute path. Always on branch "main" with one
+# initial commit, no remote configured -- callers add a remote/commits as
+# their scenario needs.
+make_test_git_repo() {
+  local name="${1:-repo}"
+  local repo_path="$TEST_TEMP_DIR/$name"
+  mkdir -p "$repo_path"
+  git -C "$repo_path" init -q -b main
+  git -C "$repo_path" config user.email "test@example.com"
+  git -C "$repo_path" config user.name "Test"
+  echo "init" > "$repo_path/README.md"
+  git -C "$repo_path" add README.md
+  git -C "$repo_path" commit -q -m "init"
+  echo "$repo_path"
 }

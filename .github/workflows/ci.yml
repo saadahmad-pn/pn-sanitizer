@@ -1,0 +1,143 @@
+name: CI
+
+# Disabled from running automatically while this project is still in
+# active development -- every push/PR would otherwise trigger it. Left
+# in place, not deleted, so it's a one-line change to re-enable later:
+# restore the `pull_request:` / `push:` triggers below. Can still be run
+# manually any time via the Actions tab (or `gh workflow run ci.yml`).
+on:
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Run shellcheck
+        run: shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh
+
+  test-suite:
+    name: test suite (${{ matrix.os }}, jq=${{ matrix.jq }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        jq: [system, bundled]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The bundled scripts/bin/jq-* fallback (see resolve_jq in
+      # lib/common.sh) is the path most real users without jq installed
+      # actually hit -- without this leg, the suite only ever proves the
+      # system-jq path works and the bundled fallback goes untested. This
+      # is what P0-6 in the remediation brief was about: the test harness
+      # itself used to call bare `jq`, so this exact axis used to fail
+      # with 24 unrelated tooling failures instead of actually exercising
+      # the fallback.
+      - name: Hide system jq (bundled-jq matrix leg)
+        if: matrix.jq == 'bundled'
+        run: |
+          set -euo pipefail
+          JQ_PATH="$(command -v jq || true)"
+          if [ -z "$JQ_PATH" ]; then
+            echo "system jq not found, nothing to hide"
+            exit 0
+          fi
+          JQ_DIR="$(dirname "$JQ_PATH")"
+          echo "Excluding $JQ_DIR from PATH so the suite falls back to the bundled binary"
+          NEW_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vFx "$JQ_DIR" | paste -sd ':' -)"
+          echo "PATH=$NEW_PATH" >> "$GITHUB_ENV"
+
+      # Fail loudly rather than silently passing the wrong leg -- if
+      # system jq is still reachable on the "bundled" leg (or missing on
+      # the "system" leg), the matrix isn't testing what its name claims.
+      - name: Confirm jq resolution matches this matrix leg
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.jq }}" = "bundled" ]; then
+            if command -v jq >/dev/null 2>&1; then
+              echo "::error::system jq is still on PATH -- the bundled-jq leg isn't actually testing the fallback"
+              exit 1
+            fi
+          else
+            command -v jq >/dev/null 2>&1 || { echo "::error::expected system jq to be present on the system-jq leg"; exit 1; }
+          fi
+
+      - name: Run test suite
+        run: bash test/run-all-tests.sh
+
+  psscriptanalyzer:
+    name: PSScriptAnalyzer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+          $files = Get-ChildItem -Path ./scripts -Filter *.ps1 -Recurse
+          $results = $files | ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error }
+          if ($results) {
+            $results | Format-Table -AutoSize
+            Write-Error "PSScriptAnalyzer found $($results.Count) issue(s) across $($files.Count) file(s)"
+            exit 1
+          }
+          Write-Output "PSScriptAnalyzer: no issues found across $($files.Count) file(s)"
+
+  pester:
+    name: Pester (PowerShell unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Install-Module -Name Pester -Force -Scope CurrentUser -SkipPublisherCheck -ErrorAction Stop
+          $result = Invoke-Pester -Path test/pester -Output Detailed -PassThru
+          if ($result.FailedCount -gt 0) {
+            exit 1
+          }
+
+  json-validity:
+    name: JSON validity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON files
+        run: |
+          set -euo pipefail
+          for f in hooks/hooks.json .cursor-plugin/plugin.json .cursor-plugin/marketplace.json; do
+            echo "Checking $f"
+            jq empty "$f"
+          done
+
+  jq-provenance:
+    name: Verify bundled jq binaries against PROVENANCE.md
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify SHA-256 hashes
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in scripts/bin/jq-*; do
+            name="$(basename "$f")"
+            expected="$(grep -F "\`$name\`" scripts/bin/PROVENANCE.md | sed -E 's/.*`([0-9a-f]{64})`.*/\1/')"
+            if [ -z "$expected" ]; then
+              echo "::error::no PROVENANCE.md entry found for $name"
+              fail=1
+              continue
+            fi
+            actual="$(sha256sum "$f" | awk '{print $1}')"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$name hash mismatch: expected $expected, got $actual"
+              fail=1
+            else
+              echo "$name OK"
+            fi
+          done
+          exit "$fail"

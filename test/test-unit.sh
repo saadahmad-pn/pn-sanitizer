@@ -86,6 +86,35 @@ result=$(cat "$audit_file")
 assert_json_valid "$result" "Valid JSON line"
 assert_json_has_key "$result" "timestamp" "Has timestamp"
 
+# Regression coverage for P2-1: pn_scan_text (lib/scan-client.sh) treats a
+# valid-JSON response with no recognized action_to_take as an anomaly rather
+# than guessing allow/block -- rarer now than under the old /v1/messages
+# heuristic (a real structured field, not reverse-engineered), but still
+# possible on an API contract change. These functions track consecutive
+# anomalies so callers can escalate to a visible warning past a threshold
+# instead of staying silent indefinitely.
+test_case "pn_record_scan_anomaly counts consecutive calls and persists across them"
+rm -f "$PN_ANOMALY_STATE_PATH"
+assert_output_equals "pn_record_scan_anomaly" "1" "First call returns 1"
+assert_output_equals "pn_record_scan_anomaly" "2" "Second call returns 2"
+assert_output_equals "pn_record_scan_anomaly" "3" "Third call returns 3, meeting PN_ANOMALY_WARNING_THRESHOLD"
+assert_file_exists "$PN_ANOMALY_STATE_PATH" "State file persisted to disk"
+
+test_case "pn_record_successful_scan clears the streak and records a timestamp"
+pn_record_successful_scan
+assert_file_exists "$PN_ANOMALY_STATE_PATH" "State file written (not removed -- it now also carries last_successful_scan)"
+assert_output_equals "\"\$JQ_BIN\" -r '.consecutive_anomaly_count' \"\$PN_ANOMALY_STATE_PATH\"" "0" "Streak reset to 0"
+last_scan=$("$JQ_BIN" -r '.last_successful_scan // empty' "$PN_ANOMALY_STATE_PATH")
+assert_output_equals "echo \"$last_scan\" | grep -Eq '^[0-9]+$' && echo yes || echo no" "yes" "last_successful_scan is a numeric epoch"
+assert_output_equals "pn_record_scan_anomaly" "1" "Next call after a success record starts back at 1, not 4"
+
+test_case "pn_record_scan_anomaly preserves an existing last_successful_scan"
+rm -f "$PN_ANOMALY_STATE_PATH"
+pn_record_successful_scan
+preserved_scan=$("$JQ_BIN" -r '.last_successful_scan' "$PN_ANOMALY_STATE_PATH")
+pn_record_scan_anomaly > /dev/null
+assert_output_equals "\"\$JQ_BIN\" -r '.last_successful_scan' \"\$PN_ANOMALY_STATE_PATH\"" "$preserved_scan" "last_successful_scan survives an anomaly call"
+
 echo ""
 echo -e "${BLUE}=== Unit Tests: lib/git-utils.sh ===${NC}"
 
@@ -146,6 +175,42 @@ test_case "dedupe_lines removes duplicates, preserving first-seen order"
 result=$(printf 'a\nb\na\nc\nb\n' | dedupe_lines)
 assert_output_equals "echo '$result'" "$(printf 'a\nb\nc')" "Duplicates removed, order preserved"
 
+test_case "normalize_hook_model strips Cursor's literal 'unknown' placeholder"
+result=$(normalize_hook_model "unknown")
+assert_output_equals "echo '$result'" "" "lowercase unknown becomes empty"
+
+test_case "normalize_hook_model is case-insensitive"
+result=$(normalize_hook_model "Unknown")
+assert_output_equals "echo '$result'" "" "capitalized Unknown becomes empty"
+result=$(normalize_hook_model "UNKNOWN")
+assert_output_equals "echo '$result'" "" "uppercase UNKNOWN becomes empty"
+
+test_case "normalize_hook_model passes a real model name through unchanged"
+result=$(normalize_hook_model "claude-sonnet-4-5")
+assert_output_equals "echo '$result'" "claude-sonnet-4-5" "real model name untouched"
+
+test_case "normalize_hook_model passes an empty string through unchanged"
+result=$(normalize_hook_model "")
+assert_output_equals "echo '$result'" "" "already-empty stays empty"
+
+test_case "resolve_hook_model prefers model_id over the legacy model slug"
+result=$(resolve_hook_model "claude-sonnet-4-5-20250929" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "claude-sonnet-4-5-20250929" "structured model_id wins"
+
+test_case "resolve_hook_model falls back to the legacy model slug when model_id is absent"
+result=$(resolve_hook_model "" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "claude-sonnet-4.5" "falls back to legacy model"
+
+test_case "resolve_hook_model normalizes 'unknown' regardless of which field it came from"
+result=$(resolve_hook_model "unknown" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "" "unknown model_id becomes empty, no fallback to legacy"
+result=$(resolve_hook_model "" "unknown")
+assert_output_equals "echo '$result'" "" "unknown legacy model (no model_id) becomes empty"
+
+test_case "resolve_hook_model returns empty when both fields are absent"
+result=$(resolve_hook_model "" "")
+assert_output_equals "echo '$result'" "" "both empty stays empty"
+
 echo ""
 echo -e "${BLUE}=== Unit Tests: pn_config.sh ===${NC}"
 
@@ -184,13 +249,35 @@ mkdir -p "$HOME/.pn"
 echo '{"base_url": "https://test.com"}' > "$HOME/.pn/credentials.json"
 assert_failure "pn_load_credentials" "pn_load_credentials fails for missing required fields"
 
+test_case "pn_refresh_token URL-encodes the refresh token and client_id in its form body"
+# Regression test for P0-4: the body used to be built by raw
+# interpolation (grant_type=refresh_token&refresh_token=${refresh_token}&
+# client_id=${CLIENT_ID}), so a refresh token containing "+", "&", or "="
+# corrupted the request -- "+" decodes server-side as a space, and both
+# "&" and "=" are the form format's own delimiter characters. Stubs curl
+# to capture the actual --data-raw body instead of hitting the network.
+curl() {
+  local args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "--data-raw" ]]; then
+      echo "${args[$((i + 1))]}" > "$TEST_TEMP_DIR/captured_refresh_body.txt"
+    fi
+  done
+  echo '{"access_token":"a","refresh_token":"b","expires_in":3600}'
+}
+pn_refresh_token "https://test.example.com" "abc+def=ghi&jkl" >/dev/null
+unset -f curl
+captured_body=$(cat "$TEST_TEMP_DIR/captured_refresh_body.txt" 2>/dev/null)
+assert_output_contains "echo '$captured_body'" "refresh_token=abc%2Bdef%3Dghi%26jkl" "Refresh token is fully percent-encoded, not raw-interpolated"
+assert_output_contains "echo '$captured_body'" "client_id=cursor-plugin" "client_id present and unaffected (no reserved characters to encode)"
+
 test_case "pn_resolve_config uses env vars first"
-export SNANTIZER_BASE_URL="https://env.example.com"
-export SNANTIZER_TOKEN="env-token"
+export PARADIGM_NETWORKS_URL="https://env.example.com"
+export PARADIGM_NETWORKS_TOKEN="env-token"
 result=$(pn_resolve_config)
 assert_output_contains "echo '$result'" "https://env.example.com" "Uses env base_url"
 assert_output_contains "echo '$result'" "env-token" "Uses env token"
-unset SNANTIZER_BASE_URL SNANTIZER_TOKEN
+unset PARADIGM_NETWORKS_URL PARADIGM_NETWORKS_TOKEN
 
 test_case "pn_resolve_config falls back to file"
 rm -f "$HOME/.pn/credentials.json"
@@ -200,6 +287,66 @@ pn_save_credentials "https://file.example.com" "file-token" "refresh" "$future_e
 result=$(pn_resolve_config)
 assert_output_contains "echo '$result'" "https://file.example.com" "Uses file base_url"
 assert_output_contains "echo '$result'" "file-token" "Uses file token"
+
+echo ""
+echo -e "${BLUE}=== Unit Tests: login.sh ===${NC}"
+
+# Safe to source directly (rather than sed-extracting functions): login.sh
+# guards its own `main "$@"` call behind a BASH_SOURCE-vs-$0 check
+# specifically so it can be sourced like this for testing.
+source "$SCRIPTS_DIR/login.sh"
+
+test_case "wait_for_callback: a denied-consent callback is reported as a denial, not a false CSRF alarm"
+# Regression test for P0-3: wait_for_callback used to return code/state/
+# error as a single space-joined string (`echo "$CODE $STATE $ERROR"`),
+# read back with `read -r code state_got error_msg`. A denied consent has
+# no code, so that leading empty field shifted STATE into error_msg's
+# slot and ERROR out of the string entirely -- error_msg silently landed
+# empty, the (now-misaligned) state comparison failed instead, and the
+# user saw "possible CSRF, aborting" for what was actually a normal
+# denial. Drives the real function end-to-end via a real local HTTP
+# request, the same mechanism a real browser redirect uses.
+callback_port=18765
+callback_deadline=$(($(date +%s) + 10))
+(
+  sleep 0.5
+  curl -s -o /dev/null "http://127.0.0.1:${callback_port}/callback?state=abc123&error=access_denied"
+) &
+curl_pid=$!
+wait_for_callback "$callback_port" "$callback_deadline"
+wait_for_callback_status=$?
+wait "$curl_pid" 2>/dev/null
+
+assert_output_equals "echo '$wait_for_callback_status'" "0" "wait_for_callback received the request (didn't time out)"
+assert_output_equals "echo '$CALLBACK_CODE'" "" "CALLBACK_CODE is empty (denied consent has no code)"
+assert_output_equals "echo '$CALLBACK_STATE'" "abc123" "CALLBACK_STATE is correctly the real state, not shifted"
+assert_output_equals "echo '$CALLBACK_ERROR'" "access_denied" "CALLBACK_ERROR is correctly the real error, not lost"
+
+# Replicate main()'s own decision sequence (error check, then state check,
+# then code check) to prove the fix end-to-end -- this used to fall
+# through to the state-mismatch branch instead.
+expected_state="abc123"
+login_outcome=""
+if [[ -n "$CALLBACK_ERROR" ]]; then
+  login_outcome="denied:$CALLBACK_ERROR"
+elif [[ "$CALLBACK_STATE" != "$expected_state" ]]; then
+  login_outcome="csrf_mismatch"
+elif [[ -z "$CALLBACK_CODE" ]]; then
+  login_outcome="no_code"
+else
+  login_outcome="proceed"
+fi
+assert_output_equals "echo '$login_outcome'" "denied:access_denied" "Reports as a denial, not a CSRF mismatch"
+
+test_case "urlencode_strict/urldecode_strict round-trip a code containing a reserved character"
+# Regression test for P0-2: the callback used to skip decoding entirely,
+# so a code re-encoded on the way to the token exchange (double-encoding
+# any character outside [a-zA-Z0-9.~_-]).
+wire_value=$(urlencode_strict "AB+CD")
+decoded_value=$(urldecode_strict "$wire_value")
+reencoded_value=$(urlencode_strict "$decoded_value")
+assert_output_equals "echo '$decoded_value'" "AB+CD" "Decodes back to the true value"
+assert_output_equals "echo '$reencoded_value'" "$wire_value" "Re-encoding the decoded value matches the original wire value (single encoding, not double)"
 
 echo ""
 test_summary

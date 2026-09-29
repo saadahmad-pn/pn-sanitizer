@@ -5,7 +5,7 @@
 CLIENT_ID="cursor-plugin"
 CRED_DIR="${HOME}/.pn"
 CRED_PATH="${CRED_DIR}/credentials.json"
-TOKEN_TIMEOUT_SECONDS=10
+TOKEN_TIMEOUT_SECONDS=60
 EXPIRY_MARGIN_SECONDS=60
 
 # Load credentials from disk
@@ -31,13 +31,24 @@ pn_save_credentials() {
   mkdir -p "$CRED_DIR" 2>/dev/null
   chmod 700 "$CRED_DIR" 2>/dev/null || true
 
+  # Merge into whatever's already on disk, not a from-scratch rebuild --
+  # this function runs automatically and silently on every token refresh
+  # (see pn_get_valid_access_token below), so a naive rebuild would wipe
+  # any field this function doesn't itself know about the very next time
+  # a session runs long enough to trigger a refresh.
+  local existing_json="{}"
+  if [[ -f "$CRED_PATH" ]]; then
+    existing_json=$(cat "$CRED_PATH" 2>/dev/null)
+    echo "$existing_json" | "$JQ_BIN" empty 2>/dev/null || existing_json="{}"
+  fi
+
   local creds_json
-  creds_json=$("$JQ_BIN" -n \
+  creds_json=$(echo "$existing_json" | "$JQ_BIN" \
     --arg base_url "$base_url" \
     --arg access_token "$access_token" \
     --arg refresh_token "$refresh_token" \
     --argjson expires_at "$expires_at" \
-    '{base_url: $base_url, access_token: $access_token, refresh_token: $refresh_token, expires_at: $expires_at}')
+    '. + {base_url: $base_url, access_token: $access_token, refresh_token: $refresh_token, expires_at: $expires_at}')
 
   # Write with secure temp file to avoid race conditions
   local temp_file
@@ -62,11 +73,15 @@ pn_refresh_token() {
 
   local token_url="${base_url%/}/api/v1/plugin/token"
 
+  # urlencode_strict (lib/common.sh): a refresh token is just as capable of
+  # containing a URL-reserved character as an authorization code is (see
+  # login.sh's exchange_code, which already encodes every field it sends).
+  # An unencoded "+" in particular is common in base64-ish tokens and
+  # decodes server-side as a space, so an affected refresh silently
+  # corrupts the token instead of erroring clearly -- the failure mode is
+  # "user is mysteriously logged out" on whichever refresh first hits one.
   local body
-  body=$(cat <<EOF
-grant_type=refresh_token&refresh_token=${refresh_token}&client_id=${CLIENT_ID}
-EOF
-)
+  body="grant_type=refresh_token&refresh_token=$(urlencode_strict "$refresh_token")&client_id=$(urlencode_strict "$CLIENT_ID")"
 
   local response
   response=$(curl -s -X POST "$token_url" \
@@ -148,23 +163,14 @@ pn_get_valid_access_token() {
   return 0
 }
 
-# Resolve config: new PARADIGM_NETWORKS_* names take precedence, then SNANTIZER_* names, then file
+# Resolve config: PARADIGM_NETWORKS_URL/PARADIGM_NETWORKS_TOKEN env vars
+# take precedence, then the stored file (with refresh).
 pn_resolve_config() {
   local env_base
   local env_token
 
-  # Check new variable names first (PARADIGM_NETWORKS_URL, PARADIGM_NETWORKS_TOKEN)
   env_base="${PARADIGM_NETWORKS_URL:-}"
   env_token="${PARADIGM_NETWORKS_TOKEN:-}"
-
-  if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
-    echo "$env_base $env_token"
-    return 0
-  fi
-
-  # Fall back to legacy names (SNANTIZER_BASE_URL, SNANTIZER_TOKEN)
-  env_base="${SNANTIZER_BASE_URL:-}"
-  env_token="${SNANTIZER_TOKEN:-}"
 
   if [[ -n "$env_base" ]] && [[ -n "$env_token" ]]; then
     echo "$env_base $env_token"

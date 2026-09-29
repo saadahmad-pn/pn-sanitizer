@@ -41,7 +41,8 @@ Confirm, and your browser opens to sign you in — nothing to copy or paste.
 Once you're signed in, Cursor remembers it on this machine.
 
 To switch organizations later, just ask to log in again — it replaces the
-old login.
+old login. To remove your login from this machine entirely, ask to log
+out — the **paradigmnetworks-logout** skill handles it.
 
 ## Try it
 
@@ -50,6 +51,35 @@ old login.
    Networks policy blocks — it should be denied with a message explaining
    why.
 3. Submit something that's allowed — it should go through normally.
+4. Ask the agent to `git push`, `git commit`, or run `gh pr create` in a
+   repo containing a policy-violating change — it should be denied before
+   the operation runs, with a message explaining why.
 
 Check **Cursor Settings → Hooks** or the Hooks output channel if something
 does not fire.
+
+## Limitations
+
+- **File edits made through Cursor's own Write tool, and `git push`/`git
+  commit`/`gh pr create` run through the agent's Shell tool, are scanned
+  today.** Other commands run in the terminal (e.g. `cat >`, `sed -i`) are
+  not — a change made that way goes through unscanned.
+- **The git push/commit/PR hooks only fire when the Cursor agent itself
+  runs the command.** Typing `git push` (or the others) directly into a
+  terminal panel yourself, rather than asking the agent to run it, is
+  invisible to these hooks — the same blind spot the existing prompt/write
+  hooks already have for anything outside Cursor's own tool calls.
+- **If the scanning service can't be reached, prompts are allowed
+  through by default; file writes and git push/commit/PR-create are
+  blocked by default.** This asymmetry is intentional — it exists so a
+  not-yet-logged-in user is never blocked from sending their very first
+  message — but it also means someone who can block this machine's
+  network access to the scanner can silently disable prompt scanning
+  while write and git-event scanning stay in their normal (blocking)
+  state.
+
+## More
+
+- [Security policy](SECURITY.md) — how to report a vulnerability
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE) — MIT

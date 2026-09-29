@@ -5,13 +5,11 @@
 
 set -o pipefail
 
-# On Windows, this same hook event also has a PowerShell entry (run via
-# scripts/run-powershell.cmd) that does the real work -- Cursor has no way
-# to run only one entry per platform per event (confirmed against Cursor's
-# own hooks documentation), so both are always present in hooks.json. If
-# bash happens to be available anyway (Git Bash, MSYS2, Cygwin), this would
-# otherwise run a second time for the same event. Defer to the PowerShell
-# entry instead.
+# Dead code on the hook path: hooks.json now registers exactly one entry
+# per event, dispatched by scripts/run-hook.cmd (bash here, PowerShell on
+# Windows), so Cursor never spawns this script under Git Bash/MSYS2/Cygwin
+# in the first place. Left in place only so this .sh still behaves
+# correctly if someone invokes it directly under one of those.
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
     echo '{}'
@@ -23,12 +21,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/session-metadata.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Drain stdin (hook may send payload)
 if [[ ! -t 0 ]]; then
   stdin_data=$(cat 2>/dev/null)
 fi
+
+# Writes this session's local metadata file (SessionId/Cwd/GitRepoUrl/
+# GitBranch) -- see lib/session-metadata.sh. Previously this recorded a
+# Code Chain session-start marker via the plugins API instead; that call
+# was removed (see this file's header note in git history and design-ideas/
+# Session_Lifecycle_Simplification_And_Contract_Updates.md — the marker had
+# no processing/governance/observability/reporting consumer). This write is
+# purely local -- no login/config needed, unlike the API call it replaces.
+# Never affects this hook's own JSON output/exit code (sessionStart is
+# fire-and-forget context injection regardless).
+write_session_metadata() {
+  [[ -z "$JQ_BIN" ]] && return 0
+  [[ -z "$stdin_data" ]] && return 0
+  echo "$stdin_data" | "$JQ_BIN" empty 2>/dev/null || return 0
+
+  local client_session_id cwd
+  client_session_id=$(echo "$stdin_data" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
+  cwd=$(echo "$stdin_data" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
+  [[ -z "$client_session_id" ]] && return 0
+
+  local git_repo_url="" git_branch=""
+  if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
+    git_repo_url=$(get_remote_url_or_empty "$cwd")
+    git_branch=$(get_current_branch_or_empty "$cwd")
+  fi
+
+  pn_write_session_metadata "$client_session_id" "$cwd" "$git_repo_url" "$git_branch"
+}
+# Backgrounded, not called inline: this must never delay the login-check
+# message below, which is this hook's actual job.
+write_session_metadata &
 
 # Fail open: any error just returns empty context
 main() {
@@ -55,8 +86,16 @@ EOF
 
   # Check if Paradigm Networks is configured
   if pn_is_configured; then
-    # Configured, return no-op
-    echo '{}'
+    pn_check_scan_staleness
+    if [[ "$PN_SCAN_STALE" == "true" ]]; then
+      local stale_message
+      read -r -d '' stale_message <<'EOF' || true
+⚠️ Paradigm Networks security scanning hasn't completed a successful scan in over an hour (or hasn't completed one yet this session). Prompts and file writes may currently be going through unscanned. Check your network connection and Paradigm Networks login status; if this continues, contact your administrator.
+EOF
+      json_session_context "$stale_message"
+    else
+      echo '{}'
+    fi
   else
     # Not configured, ask user to login
     local message
