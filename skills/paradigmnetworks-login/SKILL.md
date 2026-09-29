@@ -186,12 +186,11 @@ reach the user even though the script itself always prints it. Keep
 checking (this is normally a matter of seconds, not the full five-minute
 budget) until you actually see it before relaying anything.
 
-The script already knows whether it's running in a sandboxed agent shell and
-adjusts itself accordingly — it will either open a browser for the user or
-print a link for them to open manually, and tell you which. Just relay
-whatever it printed verbatim; don't add your own caveats about browsers
-possibly failing to open, and don't try alternate ways to launch a browser
-yourself.
+The script always tries to open the user's browser itself, and falls back to
+copying the link to their clipboard, then to printing it — it reports which
+of those happened. Just relay whatever it printed verbatim; don't add your
+own caveats about browsers possibly failing to open, and don't try alternate
+ways to launch a browser yourself.
 
 Each run binds a fresh local port and generates a new URL — a URL from an
 earlier (timed-out or killed) run will not work. If you retry, always relay

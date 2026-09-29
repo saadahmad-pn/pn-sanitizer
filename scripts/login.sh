@@ -289,25 +289,43 @@ exchange_code() {
   echo "$response"
 }
 
-# Check if running in Cursor sandbox
-running_in_cursor_sandbox() {
-  [[ -n "${CURSOR_SANDBOX:-}" ]] || [[ "${CURSOR_AGENT:-}" == "1" ]]
-}
-
-# Try to open browser
+# Try to open browser.
+#
+# Attempted unconditionally, including when the agent is the one running
+# this script. It used to bail out whenever CURSOR_AGENT=1 -- but that is
+# set on the normal, documented path (the login skill has the agent run
+# this), so the browser was in practice never opened and every user hand-
+# copied a URL, contradicting what the README promises. A blocked opener
+# just returns non-zero here and the URL is printed regardless, so trying
+# costs nothing and removes the copy/paste step whenever it would have
+# worked.
 open_browser() {
   local url="$1"
-
-  # Skip in Cursor sandbox (IPC blocked)
-  if running_in_cursor_sandbox; then
-    return 1
-  fi
 
   # Try native opener first (macOS: open, Linux: xdg-open)
   if [[ "$(uname)" == "Darwin" ]] && command -v open &>/dev/null; then
     open "$url" 2>/dev/null && return 0
   elif [[ "$(uname)" == "Linux" ]] && command -v xdg-open &>/dev/null; then
     xdg-open "$url" 2>/dev/null && return 0
+  fi
+
+  return 1
+}
+
+# Best-effort clipboard copy, so a user who has to open the URL by hand can
+# paste it rather than retype it. Every caller already prints the URL, so
+# failure here needs no handling.
+copy_to_clipboard() {
+  local text="$1"
+
+  if command -v pbcopy &>/dev/null; then
+    printf '%s' "$text" | pbcopy 2>/dev/null && return 0
+  elif command -v wl-copy &>/dev/null; then
+    printf '%s' "$text" | wl-copy 2>/dev/null && return 0
+  elif command -v xclip &>/dev/null; then
+    printf '%s' "$text" | xclip -selection clipboard 2>/dev/null && return 0
+  elif command -v xsel &>/dev/null; then
+    printf '%s' "$text" | xsel --clipboard --input 2>/dev/null && return 0
   fi
 
   return 1
@@ -406,11 +424,12 @@ main() {
   # account, or no default browser association can all "succeed" here
   # with nothing actually appearing on screen). Relaying the URL must
   # never depend on silently trusting that it worked.
-  if running_in_cursor_sandbox; then
-    echo "Open this URL to log in:"
-    echo "  $authorize_url"
-  elif open_browser "$authorize_url"; then
+  if open_browser "$authorize_url"; then
     echo "Opened your browser to log in. If it didn't appear, open this URL manually:"
+    echo "  $authorize_url"
+  elif copy_to_clipboard "$authorize_url"; then
+    echo "Couldn't open a browser automatically -- the login URL has been copied to your clipboard."
+    echo "Paste it into your browser to log in:"
     echo "  $authorize_url"
   else
     echo "Couldn't open a browser automatically. Open this URL to log in:"

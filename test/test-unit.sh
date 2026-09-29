@@ -349,6 +349,53 @@ assert_output_equals "echo '$decoded_value'" "AB+CD" "Decodes back to the true v
 assert_output_equals "echo '$reencoded_value'" "$wire_value" "Re-encoding the decoded value matches the original wire value (single encoding, not double)"
 
 echo ""
+echo -e "${BLUE}=== Unit Tests: login.sh browser handoff ===${NC}"
+
+# Regression: open_browser must be attempted even when the agent is running
+# login.sh. It used to bail out on CURSOR_AGENT=1 -- which is set on the
+# normal, documented path -- so the browser was never opened and every user
+# hand-copied a URL. login.sh only runs main when executed directly, so it
+# can be sourced to exercise these two helpers in isolation.
+BROWSER_STUB_DIR="$TEST_TEMP_DIR/browser-stub"
+mkdir -p "$BROWSER_STUB_DIR"
+for opener in open xdg-open; do
+  cat > "$BROWSER_STUB_DIR/$opener" <<STUB
+#!/bin/bash
+printf '%s' "\$1" > "$TEST_TEMP_DIR/opened-url.txt"
+exit 0
+STUB
+  chmod +x "$BROWSER_STUB_DIR/$opener"
+done
+
+test_case "login.sh opens the browser even when the agent is running it"
+rm -f "$TEST_TEMP_DIR/opened-url.txt"
+login_url="https://acme.paradigmnetworks.ai/api/v1/plugin/authorize?state=abc"
+TESTS_RUN=$((TESTS_RUN + 1))
+if PATH="$BROWSER_STUB_DIR:$PATH" CURSOR_AGENT=1 CURSOR_SANDBOX=1 \
+   bash -c "source '$SCRIPTS_DIR/login.sh'; open_browser '$login_url'" >/dev/null 2>&1 \
+   && [[ "$(cat "$TEST_TEMP_DIR/opened-url.txt" 2>/dev/null)" == "$login_url" ]]; then
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  echo -e "  ${GREEN}✓${NC} Opener invoked with the authorize URL under CURSOR_AGENT=1"
+else
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  echo -e "  ${RED}✗${NC} Browser was not opened — the agent path is back to hand-copying a URL"
+fi
+
+# A blocked opener must fail cleanly rather than erroring out: every caller
+# prints the URL regardless, so a false "opened your browser" is the only
+# real failure mode here.
+test_case "login.sh reports failure cleanly when no opener exists"
+TESTS_RUN=$((TESTS_RUN + 1))
+if PATH="$TEST_TEMP_DIR/empty-path" \
+   bash -c "source '$SCRIPTS_DIR/login.sh'; open_browser 'https://example.com'" >/dev/null 2>&1; then
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  echo -e "  ${RED}✗${NC} Reported success with no opener available"
+else
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  echo -e "  ${GREEN}✓${NC} Returns failure so the caller falls back to clipboard/print"
+fi
+
+echo ""
 test_summary
 FINAL_RESULT=$?
 
