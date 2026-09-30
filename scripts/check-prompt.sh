@@ -23,11 +23,16 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 source "$SCRIPT_DIR/lib/plugins-client.sh"
 source "$SCRIPT_DIR/lib/repo-context.sh"
+source "$SCRIPT_DIR/lib/skill-detection.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-60}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
+# Skill reporting keeps its own log, shared with check-skill-usage.sh, so the
+# two paths a skill can arrive by read as one story.
+SKILL_DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-skill-usage.log"
+SKILL_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_SKILL_TIMEOUT:-30}"
 
 # PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (manual env var override:
 # block/allow — no Cursor Settings UI for this, must be set directly in
@@ -284,6 +289,9 @@ $concern_section
       # Non-blocking: surface the scan's own explanation as a notice and
       # let the prompt proceed.
       pn_record_successful_scan
+      # Warned, not blocked: the prompt still reaches the agent, so the skill
+      # still runs and still counts.
+      report_slash_skill_use "$prompt" "$base_url" "$access_token" "$client_session_id" "$generation_id" "$cwd" "$git_repo_url" "$git_branch"
       if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
         json_allow "$PN_PROMPT_MESSAGE"
       else
@@ -293,6 +301,10 @@ $concern_section
     *)
       # "allow"
       pn_record_successful_scan
+      # The prompt is going through, so a skill named by a slash command is
+      # about to run. Recorded here rather than in check-skill-usage.sh because
+      # a slash invocation reads no file — see report_slash_skill_use.
+      report_slash_skill_use "$prompt" "$base_url" "$access_token" "$client_session_id" "$generation_id" "$cwd" "$git_repo_url" "$git_branch"
       if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
         json_allow "$PN_PROMPT_MESSAGE"
       else
@@ -302,6 +314,49 @@ $concern_section
   esac
 
   return 0
+}
+
+# report_slash_skill_use
+# A slash command ("/greetings") invokes a skill WITHOUT the agent ever reading
+# its SKILL.md, so beforeReadFile — which is how check-skill-usage.sh detects
+# every other skill load — never fires and the use would go unrecorded.
+# Confirmed live 2026-09-30: "/greetings " arrived here verbatim and produced
+# no skill row, while the same skill asked for in plain English was recorded.
+#
+# Called only AFTER before_prompt has opened this turn on the server: the skill
+# attaches to that turn, and reporting it first would find nothing to attach to.
+# Called only when the prompt is allowed to proceed — a blocked prompt never
+# reaches the agent, so the skill it names never runs.
+#
+# Fire-and-forget and detached, like every other reporting call here: this hook
+# gates prompt submission with failClosed:true, and recording a skill must
+# never be able to affect that verdict or make the user wait.
+report_slash_skill_use() {
+  local prompt_text="$1" base_url="$2" access_token="$3" session_id="$4" generation_id="$5" cwd="$6" git_repo_url="$7" git_branch="$8"
+
+  pn_slash_skill_name "$prompt_text" || return 0
+  local skill_name="$PN_SKILL_NAME"
+  # Most slash input is a built-in ("/undo", "/help"), not a skill. No file on
+  # disk means there is nothing to report, which is the ordinary case.
+  pn_resolve_skill_path "$skill_name" "$cwd" || {
+    log_debug "Slash command /$skill_name is not a skill on disk; nothing to report" "$SKILL_DEBUG_LOG_PATH"
+    return 0
+  }
+  local skill_path="$PN_SKILL_PATH"
+  pn_collect_skill_content "$skill_path" || {
+    log_debug "Slash skill /$skill_name found at $skill_path but unreadable" "$SKILL_DEBUG_LOG_PATH"
+    return 0
+  }
+
+  log_debug "Reporting slash skill use | skill=$skill_name | sha=${PN_SKILL_SHA:0:8} | bytes=${#PN_SKILL_CONTENT} | session=$session_id gen=$generation_id" "$SKILL_DEBUG_LOG_PATH"
+
+  local content="$PN_SKILL_CONTENT" sha="$PN_SKILL_SHA"
+  (
+    pn_plugin_skill_use "$base_url" "$access_token" "$SKILL_TIMEOUT_SECONDS" "$session_id" \
+      "$cwd" "$git_repo_url" "$git_branch" \
+      "$skill_name" "$skill_path" "$content" "$sha" "$generation_id"
+    log_debug "Slash skill outcome | skill=$skill_name | status=$PN_SKILL_USE_STATUS | http=$PN_SKILL_USE_HTTP_STATUS | match=$PN_SKILL_USE_MATCH_METHOD" "$SKILL_DEBUG_LOG_PATH"
+  ) >/dev/null 2>&1 &
 }
 
 main

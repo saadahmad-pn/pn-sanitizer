@@ -115,5 +115,124 @@ test_case "Read with no file path -> NOT exempt"
 assert_failure "pn_is_skill_file_read Read ''" \
   "an unidentifiable read is recorded rather than silently dropped"
 
+# --- pn_slash_skill_name: the slash-command path ---
+#
+# A slash command never reads the SKILL.md, so beforeReadFile never fires for
+# it and everything above is blind to it. This is the only signal there is.
+
+test_case "A bare slash command -> matches"
+assert_success "pn_slash_skill_name '/greetings'" \
+  "the plainest invocation"
+
+test_case "Trailing space (what Cursor actually sends) -> matches"
+assert_success "pn_slash_skill_name '/greetings '" \
+  "confirmed live: Cursor appends a space"
+
+test_case "Command with arguments -> matches"
+assert_success "pn_slash_skill_name '/api-documentation write docs for this'" \
+  "the skill name is the first token"
+
+test_case "Leading whitespace -> matches"
+assert_success "pn_slash_skill_name '   /greetings'" \
+  "a stray space before the command is still an invocation"
+
+test_case "Extracted name is the command, not the arguments"
+pn_slash_skill_name '/api-documentation write docs'
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$PN_SKILL_NAME" == "api-documentation" ]]; then
+  echo -e "  ${GREEN}✓${NC} PN_SKILL_NAME is the skill name alone"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} PN_SKILL_NAME is the skill name alone (got: $PN_SKILL_NAME)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# A prompt is not an invocation just because it contains a slash. Treating one
+# as such would file a skill use for ordinary work.
+test_case "A path mentioned mid-prompt -> no match"
+assert_failure "pn_slash_skill_name 'fix /etc/hosts please'" \
+  "a slash inside the text is not a command"
+
+test_case "A slash not at the start -> no match"
+assert_failure "pn_slash_skill_name 'what is 3/4 of 12'" \
+  "arithmetic is not a skill"
+
+test_case "Ordinary prose -> no match"
+assert_failure "pn_slash_skill_name 'now greet me'" \
+  "the natural-language path is beforeReadFile's job, not this one"
+
+test_case "Uppercase -> no match"
+assert_failure "pn_slash_skill_name '/Greetings'" \
+  "skill names are lowercase per the Agent Skills grammar"
+
+test_case "Underscore -> no match"
+assert_failure "pn_slash_skill_name '/greet_ings'" \
+  "the grammar allows hyphens, not underscores"
+
+test_case "Empty prompt -> no match"
+assert_failure "pn_slash_skill_name ''" \
+  "nothing typed is nothing invoked"
+
+test_case "A non-match clears PN_SKILL_NAME rather than leaving it stale"
+pn_slash_skill_name '/greetings' || true
+pn_slash_skill_name 'hello there' || true
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ -z "$PN_SKILL_NAME" ]]; then
+  echo -e "  ${GREEN}✓${NC} PN_SKILL_NAME cleared, not left over from the previous call"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} PN_SKILL_NAME cleared (got: $PN_SKILL_NAME)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# --- pn_resolve_skill_path ---
+
+SKILL_HOME="$TEST_TEMP_DIR/home"
+WORKSPACE="$TEST_TEMP_DIR/workspace"
+mkdir -p "$SKILL_HOME/.cursor/skills-cursor/canvas" "$SKILL_HOME/.cursor/skills/shared" "$WORKSPACE/.cursor/skills/deploy"
+printf -- '---\nname: canvas\n---\n' > "$SKILL_HOME/.cursor/skills-cursor/canvas/SKILL.md"
+printf -- '---\nname: shared\n---\n' > "$SKILL_HOME/.cursor/skills/shared/SKILL.md"
+printf -- '---\nname: deploy\n---\n' > "$WORKSPACE/.cursor/skills/deploy/SKILL.md"
+ORIGINAL_HOME="$HOME"
+export HOME="$SKILL_HOME"
+
+test_case "A workspace skill resolves from its name"
+assert_success "pn_resolve_skill_path deploy '$WORKSPACE'" \
+  "the project's own skills are searched first"
+
+test_case "A personal skill resolves from its name"
+assert_success "pn_resolve_skill_path canvas '$WORKSPACE'" \
+  "Cursor's own skills-cursor directory is searched too"
+
+# Most slash input is a built-in ("/undo", "/help"), not a skill. Reporting one
+# would invent a skill use out of an ordinary command.
+test_case "A built-in command resolves to nothing"
+assert_failure "pn_resolve_skill_path undo '$WORKSPACE'" \
+  "no file on disk means nothing to report"
+
+test_case "An unknown name resolves to nothing"
+assert_failure "pn_resolve_skill_path does-not-exist '$WORKSPACE'" \
+  "a typo is not a skill use"
+
+# --- pn_collect_skill_content ---
+
+test_case "Content and digest come off the file"
+pn_collect_skill_content "$WORKSPACE/.cursor/skills/deploy/SKILL.md"
+TESTS_RUN=$((TESTS_RUN + 1))
+EXPECTED_SHA=$(printf -- '---\nname: deploy\n---\n' | shasum -a 256 | awk '{print $1}')
+if [[ "$PN_SKILL_SHA" == "$EXPECTED_SHA" ]]; then
+  echo -e "  ${GREEN}✓${NC} digest is of the file's exact bytes, trailing newline included"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} digest is of the file's exact bytes (got $PN_SKILL_SHA, want $EXPECTED_SHA)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "An unreadable file reports failure rather than an empty digest"
+assert_failure "pn_collect_skill_content '$TEST_TEMP_DIR/nope/SKILL.md'" \
+  "a missing file is not a use with no content"
+
+export HOME="$ORIGINAL_HOME"
+
 test_summary
 exit $?

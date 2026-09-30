@@ -63,3 +63,144 @@ pn_is_skill_file_read() {
   [[ "$tool_name" == "Read" ]] || return 1
   pn_skill_name_from_path "$file_path"
 }
+
+# pn_slash_skill_name <prompt>
+# Sets PN_SKILL_NAME and returns 0 when the prompt IS a slash invocation of a
+# skill ("/greetings", "/api-documentation some argument"), 1 otherwise.
+#
+# WHY THIS EXISTS. A slash command never reads the SKILL.md through the agent's
+# Read tool, so beforeReadFile — the whole basis of the detection above — never
+# fires for it, and the use would go unrecorded. Confirmed live (2026-09-30):
+# "/greetings " reached beforeSubmitPrompt verbatim and produced no skill row
+# at all, while the same skill invoked in plain English ("now greet me") was
+# recorded, because there the agent chose to read the file.
+#
+# Cursor passes the typed text through UNEXPANDED, so the name is right there
+# in the prompt. The skill's own body is not, which is why the caller resolves
+# the file from disk (pn_resolve_skill_path) rather than reporting a bare name:
+# a name cannot be matched against the registry, and reporting one would file
+# every slash-invoked skill as unmatched forever.
+#
+# Anchored to the start and limited to one token. A prompt that merely MENTIONS
+# a path ("fix /etc/hosts") is not an invocation, and neither is a question
+# containing a slash. Skill names follow the Agent Skills grammar: lowercase
+# letters, digits and hyphens.
+pn_slash_skill_name() {
+  local prompt="${1:-}"
+  PN_SKILL_NAME=""
+  # Only the first line matters; a multi-line prompt that happens to start with
+  # a command is still one invocation.
+  local first_line="${prompt%%$'\n'*}"
+  first_line="${first_line#"${first_line%%[![:space:]]*}"}"
+  [[ "$first_line" =~ ^/([a-z0-9][a-z0-9-]*)([[:space:]]|$) ]] || return 1
+  PN_SKILL_NAME="${BASH_REMATCH[1]}"
+  return 0
+}
+
+# pn_resolve_skill_path <skill_name> <workspace_root>
+# Sets PN_SKILL_PATH to the SKILL.md a slash-invoked skill would load, or
+# returns 1 when no such file exists.
+#
+# Searched in the order Cursor itself resolves them: the workspace's own skills
+# win over the user's, which win over a plugin's. Reading the file (rather than
+# trusting the name) is what keeps a slash-invoked use indistinguishable from a
+# read-invoked one — same bytes, same digest, same registry match.
+#
+# A miss is ordinary, not an error: "/undo" and "/help" are Cursor's built-in
+# commands, not skills, and most slash input is one of those.
+pn_resolve_skill_path() {
+  local name="${1:-}" workspace="${2:-}"
+  PN_SKILL_PATH=""
+  [[ -n "$name" ]] || return 1
+
+  local candidates=()
+  if [[ -n "$workspace" ]]; then
+    candidates+=("${workspace%/}/.cursor/skills/${name}/SKILL.md")
+    candidates+=("${workspace%/}/.claude/skills/${name}/SKILL.md")
+  fi
+  candidates+=("${HOME}/.cursor/skills/${name}/SKILL.md")
+  candidates+=("${HOME}/.cursor/skills-cursor/${name}/SKILL.md")
+  candidates+=("${HOME}/.claude/skills/${name}/SKILL.md")
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -r "$candidate" ]]; then
+      PN_SKILL_PATH="$candidate"
+      return 0
+    fi
+  done
+
+  # Plugin caches nest under a publisher/package/commit triple, so the name
+  # alone cannot spell the path — glob for it. Newest first, so a re-pulled
+  # plugin's current copy wins over a stale one left behind by an earlier
+  # commit. Nullglob is scoped and restored: leaving it set would change how
+  # every later unmatched glob in the calling hook behaves.
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  local matches=("${HOME}"/.cursor/plugins/cache/*/*/*/skills/"${name}"/SKILL.md)
+  [[ $had_nullglob -eq 1 ]] || shopt -u nullglob
+
+  local newest="" candidate_time newest_time=0
+  for candidate in "${matches[@]}"; do
+    [[ -r "$candidate" ]] || continue
+    candidate_time=$(stat -f%m "$candidate" 2>/dev/null || stat -c%Y "$candidate" 2>/dev/null || echo 0)
+    if [[ "$candidate_time" -ge "$newest_time" ]]; then
+      newest_time="$candidate_time"
+      newest="$candidate"
+    fi
+  done
+  if [[ -n "$newest" ]]; then
+    PN_SKILL_PATH="$newest"
+    return 0
+  fi
+  return 1
+}
+
+# pn_collect_skill_content <path>
+# Sets PN_SKILL_CONTENT to the file's exact bytes and PN_SKILL_SHA to their
+# SHA-256. Returns 1 when the file could not be read.
+#
+# Shared by both hooks that report a skill: beforeReadFile (the agent read the
+# file) and beforeSubmitPrompt (a slash command, where nothing was read). Both
+# must produce byte-identical records for the same skill, or the same use would
+# match the registry through one path and not the other.
+#
+# THE FILE ON DISK IS THE SOURCE. beforeReadFile carries a `content` field, but
+# Cursor CHUNKS a large file across several events, each holding only its own
+# piece — measured 2026-09-30 on a 6748-byte SKILL.md delivered as 4590 + 2163.
+# A fragment's digest can never equal the published file's, so a large skill
+# would be permanently unmatched and one load would file several uses. A slash
+# command carries no content at all. Reading the file answers both.
+#
+# The trailing newline is preserved deliberately. $(...) strips every trailing
+# newline and a SKILL.md almost always ends in one; that single byte is not
+# cosmetic when the match is an exact SHA-256. The sentinel is the standard
+# fix: append a byte the stripping cannot remove, then remove it by hand.
+pn_collect_skill_content() {
+  local path="${1:-}"
+  PN_SKILL_CONTENT=""
+  PN_SKILL_SHA=""
+  [[ -r "$path" ]] || return 1
+
+  local out
+  out=$(cat "$path" 2>/dev/null; printf 'x')
+  PN_SKILL_CONTENT="${out%x}"
+  [[ -n "$PN_SKILL_CONTENT" ]] || return 1
+
+  # Hashed from the content itself, never from the file as a separate read, so
+  # the digest and the body can never disagree — the server re-hashes what it
+  # receives and rejects a mismatch outright.
+  #
+  # Three tools because no single one is present everywhere: shasum ships with
+  # macOS, sha256sum with most Linux distributions, openssl is the fallback.
+  # No digest downgrades the report to unmatched rather than dropping it.
+  if command_exists shasum; then
+    PN_SKILL_SHA=$(printf '%s' "$PN_SKILL_CONTENT" | shasum -a 256 2>/dev/null | awk '{print $1}')
+  elif command_exists sha256sum; then
+    PN_SKILL_SHA=$(printf '%s' "$PN_SKILL_CONTENT" | sha256sum 2>/dev/null | awk '{print $1}')
+  elif command_exists openssl; then
+    PN_SKILL_SHA=$(printf '%s' "$PN_SKILL_CONTENT" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}')
+  fi
+  return 0
+}

@@ -43,43 +43,6 @@ respond_allow() {
   exit 0
 }
 
-# sha256_of_string: the digest control-server matches against the published
-# SKILL.md. Hashes the EXACT STRING being sent, never the file on disk as a
-# separate read -- the two can differ, and when they do the server rejects
-# the call outright. Tried in order because no single tool is present
-# everywhere: shasum ships with macOS, sha256sum with most Linux
-# distributions, openssl is the fallback when a minimal image has neither.
-# Empty output downgrades the report to unmatched rather than dropping it;
-# the server re-hashes what it receives anyway.
-sha256_of_string() {
-  if command_exists shasum; then
-    printf '%s' "$1" | shasum -a 256 2>/dev/null | awk '{print $1}'
-  elif command_exists sha256sum; then
-    printf '%s' "$1" | sha256sum 2>/dev/null | awk '{print $1}'
-  elif command_exists openssl; then
-    printf '%s' "$1" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}'
-  fi
-}
-
-# read_file_preserving_trailing_newline <path>
-# Sets PN_SKILL_CONTENT to the file's exact bytes.
-#
-# It HAS to set a global rather than print: a caller writing x=$(...) would
-# strip the trailing newline right back off in that outer substitution, which
-# is the very thing this exists to prevent, and it fails silently.
-#
-# $(...) strips EVERY trailing newline and a SKILL.md almost always ends in
-# one. That single byte is not cosmetic: the match is an exact SHA-256
-# against the published file, so a body one byte short can never match
-# anything. Measured 2026-09-29 -- a 2141-byte skill came out as 2140, and
-# the two digests share no prefix. The sentinel is the standard fix: append
-# a byte the stripping cannot remove, then remove it by hand.
-read_file_preserving_trailing_newline() {
-  local out
-  out=$(cat "$1" 2>/dev/null; printf 'x')
-  PN_SKILL_CONTENT="${out%x}"
-}
-
 payload=""
 if [[ ! -t 0 ]]; then
   payload=$(cat 2>/dev/null)
@@ -114,33 +77,11 @@ if [[ -z "$session_id" ]]; then
 fi
 generation_id=$(printf '%s' "$payload" | "$JQ_BIN" -r '.generation_id // ""' 2>/dev/null)
 
-# THE FILE ON DISK IS THE SOURCE, NOT THE PAYLOAD.
-#
-# beforeReadFile carries a `content` field, but Cursor CHUNKS a large file:
-# it fires the hook once per piece, each carrying only that piece. Measured
-# 2026-09-29 on a 6748-byte SKILL.md, which arrived as two events of 4590 and
-# 2163 bytes, the second starting mid-word where the first ended.
-#
-# Hashing that is useless twice over: a fragment can never equal the
-# published file's digest, so a large skill would be permanently unmatched,
-# and one skill load would file two separate uses. Reading the file here
-# gives the whole thing and makes both events hash identically -- which the
-# server's unique (SessionId, GenerationId, ContentSha256) index then
-# collapses into the one use it actually was.
-#
-# The hook fires BEFORE the agent's read, so the file is on disk and readable
-# right now.
-PN_SKILL_CONTENT=""
-read_file_preserving_trailing_newline "$file_path"
+# Content and digest both come off the file on disk, never the payload — see
+# pn_collect_skill_content in lib/skill-detection.sh for why that matters.
+pn_collect_skill_content "$file_path" || log_debug "Skill use reported WITHOUT content | skill=$skill_name | unreadable: $file_path" "$DEBUG_LOG_PATH"
 content="$PN_SKILL_CONTENT"
-if [[ -z "$content" ]]; then
-  log_debug "Skill use reported WITHOUT content | skill=$skill_name | unreadable: $file_path" "$DEBUG_LOG_PATH"
-fi
-
-content_sha=""
-if [[ -n "$content" ]]; then
-  content_sha=$(sha256_of_string "$content")
-fi
+content_sha="$PN_SKILL_SHA"
 
 config=$(pn_resolve_config) || {
   log_debug "Skill use NOT reported | skill=$skill_name | could not resolve config" "$DEBUG_LOG_PATH"
