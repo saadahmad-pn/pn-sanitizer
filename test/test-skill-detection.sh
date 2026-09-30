@@ -234,5 +234,98 @@ assert_failure "pn_collect_skill_content '$TEST_TEMP_DIR/nope/SKILL.md'" \
 
 export HOME="$ORIGINAL_HOME"
 
+# --- pn_resolve_skill_by_declared_name: the renamed-folder fallback ---
+#
+# The Agent Skills standard expects a skill's directory to be named after it,
+# and every skill observed on a real machine obeys that. Nothing enforces it
+# though, and a renamed folder would otherwise resolve to nothing — the use
+# would go unrecorded silently, which is the failure mode worth covering.
+
+RENAMED="$TEST_TEMP_DIR/renamed"
+mkdir -p "$RENAMED/ws/.cursor/skills/greet" "$RENAMED/.cursor/skills/weird"
+printf -- '---\nname: greetings\ndescription: warm hello\n---\n# Hi\n' > "$RENAMED/ws/.cursor/skills/greet/SKILL.md"
+printf -- '---\nname: My_Skill\n---\n# x\n' > "$RENAMED/.cursor/skills/weird/SKILL.md"
+RENAMED_HOME="$HOME"
+export HOME="$RENAMED"
+
+test_case "A renamed folder misses the directory lookup"
+assert_failure "pn_resolve_skill_path greetings '$RENAMED/ws'" \
+  "the cheap path cannot find a skill whose folder was renamed"
+
+test_case "...and the declared-name fallback finds it"
+assert_success "pn_resolve_skill_by_declared_name greetings '$RENAMED/ws'" \
+  "the frontmatter name is the skill's real identity"
+
+# Same normalization the registry applies (NormalizeSkillDirName), so one skill
+# is not two names.
+test_case "Declared name matching is case- and underscore-insensitive"
+assert_success "pn_resolve_skill_by_declared_name my-skill '$RENAMED/ws'" \
+  "My_Skill and my-skill are the same skill"
+
+test_case "A built-in command still resolves to nothing via the fallback"
+assert_failure "pn_resolve_skill_by_declared_name undo '$RENAMED/ws'" \
+  "scanning frontmatter must not invent a skill for /undo"
+
+test_case "Declared name is read from the frontmatter"
+DECLARED=$(pn_skill_declared_name "$RENAMED/ws/.cursor/skills/greet/SKILL.md")
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$DECLARED" == "greetings" ]]; then
+  echo -e "  ${GREEN}✓${NC} the declared name is taken from name: in the frontmatter"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} the declared name is taken from name: (got: $DECLARED)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+export HOME="$RENAMED_HOME"
+
+# --- the directory is a hint, not the identity ---
+#
+# A skill is named by the `name:` in its own frontmatter. Trusting the
+# directory alone means "/greetings" landing on a greetings/ folder whose file
+# declares something else would report a skill that never ran, AND miss the one
+# that did — wrong twice from one lookup.
+
+IMPOSTER="$TEST_TEMP_DIR/imposter"
+mkdir -p "$IMPOSTER/ws/.cursor/skills/greetings" "$IMPOSTER/ws/.cursor/skills/greet" "$IMPOSTER/ws/.cursor/skills/nameless"
+printf -- '---\nname: farewells\n---\n# Bye\n' > "$IMPOSTER/ws/.cursor/skills/greetings/SKILL.md"
+printf -- '---\nname: greetings\n---\n# Hi\n' > "$IMPOSTER/ws/.cursor/skills/greet/SKILL.md"
+printf -- '---\ndescription: no name declared\n---\n# x\n' > "$IMPOSTER/ws/.cursor/skills/nameless/SKILL.md"
+IMPOSTER_HOME="$HOME"
+export HOME="$IMPOSTER"
+
+test_case "A directory matching the name but declaring another skill is REJECTED"
+assert_failure "pn_resolve_skill_path greetings '$IMPOSTER/ws'" \
+  "greetings/ declares farewells, so it is not the skill that was invoked"
+
+test_case "...and the fallback finds the skill that really declares that name"
+pn_resolve_skill_by_declared_name greetings "$IMPOSTER/ws"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$PN_SKILL_PATH" == *"/skills/greet/SKILL.md" ]]; then
+  echo -e "  ${GREEN}✓${NC} resolved to the file declaring greetings, not the folder named it"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} resolved to the file declaring greetings (got: $PN_SKILL_PATH)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+test_case "The imposter folder is still reachable under the name it DOES declare"
+pn_resolve_skill_by_declared_name farewells "$IMPOSTER/ws"
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$PN_SKILL_PATH" == *"/skills/greetings/SKILL.md" ]]; then
+  echo -e "  ${GREEN}✓${NC} /farewells finds it, because that is what it calls itself"
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+  echo -e "  ${RED}✗${NC} /farewells finds it (got: $PN_SKILL_PATH)"
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+# Nothing contradicts the directory, so it stands as the only identity there is.
+test_case "A file declaring no name at all falls back to its directory"
+assert_success "pn_resolve_skill_path nameless '$IMPOSTER/ws'" \
+  "an undeclared skill is identified by its folder"
+
+export HOME="$IMPOSTER_HOME"
+
 test_summary
 exit $?

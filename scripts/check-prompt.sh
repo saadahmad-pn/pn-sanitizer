@@ -338,10 +338,16 @@ report_slash_skill_use() {
   local skill_name="$PN_SKILL_NAME"
   # Most slash input is a built-in ("/undo", "/help"), not a skill. No file on
   # disk means there is nothing to report, which is the ordinary case.
-  pn_resolve_skill_path "$skill_name" "$cwd" || {
-    log_debug "Slash command /$skill_name is not a skill on disk; nothing to report" "$SKILL_DEBUG_LOG_PATH"
-    return 0
-  }
+  # Directory name first (the standard, and what every real skill uses), then
+  # the declared frontmatter name for a skill whose folder was renamed — see
+  # pn_resolve_skill_by_declared_name for why that fallback is second.
+  if ! pn_resolve_skill_path "$skill_name" "$cwd"; then
+    if ! pn_resolve_skill_by_declared_name "$skill_name" "$cwd"; then
+      log_debug "Slash command /$skill_name is not a skill on disk; nothing to report" "$SKILL_DEBUG_LOG_PATH"
+      return 0
+    fi
+    log_debug "Slash skill /$skill_name resolved by its declared name, not its directory: $PN_SKILL_PATH" "$SKILL_DEBUG_LOG_PATH"
+  fi
   local skill_path="$PN_SKILL_PATH"
   pn_collect_skill_content "$skill_path" || {
     log_debug "Slash skill /$skill_name found at $skill_path but unreadable" "$SKILL_DEBUG_LOG_PATH"

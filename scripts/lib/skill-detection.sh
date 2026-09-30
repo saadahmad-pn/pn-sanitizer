@@ -106,6 +106,14 @@ pn_slash_skill_name() {
 # trusting the name) is what keeps a slash-invoked use indistinguishable from a
 # read-invoked one — same bytes, same digest, same registry match.
 #
+# THE DIRECTORY IS A HINT, NOT THE IDENTITY. A skill is named by the `name:` in
+# its own frontmatter; the directory only usually agrees. So a directory hit is
+# ACCEPTED ONLY IF the file inside it declares the invoked name — otherwise
+# "/greetings" landing on a greetings/ folder whose SKILL.md declares something
+# else would report a skill that never ran, and miss the one that did. A file
+# declaring no name at all falls back to its directory, which is then the only
+# identity it has.
+#
 # A miss is ordinary, not an error: "/undo" and "/help" are Cursor's built-in
 # commands, not skills, and most slash input is one of those.
 pn_resolve_skill_path() {
@@ -124,7 +132,7 @@ pn_resolve_skill_path() {
 
   local candidate
   for candidate in "${candidates[@]}"; do
-    if [[ -r "$candidate" ]]; then
+    if [[ -r "$candidate" ]] && pn_skill_declares_name "$candidate" "$name"; then
       PN_SKILL_PATH="$candidate"
       return 0
     fi
@@ -144,6 +152,7 @@ pn_resolve_skill_path() {
   local newest="" candidate_time newest_time=0
   for candidate in "${matches[@]}"; do
     [[ -r "$candidate" ]] || continue
+    pn_skill_declares_name "$candidate" "$name" || continue
     candidate_time=$(stat -f%m "$candidate" 2>/dev/null || stat -c%Y "$candidate" 2>/dev/null || echo 0)
     if [[ "$candidate_time" -ge "$newest_time" ]]; then
       newest_time="$candidate_time"
@@ -203,4 +212,82 @@ pn_collect_skill_content() {
     PN_SKILL_SHA=$(printf '%s' "$PN_SKILL_CONTENT" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}')
   fi
   return 0
+}
+
+# pn_skill_declared_name <skill_md_path>
+# Prints the `name:` declared in a SKILL.md's frontmatter, or nothing.
+#
+# Only the first lines are read: frontmatter sits at the top, and a skill body
+# can be tens of kilobytes that this has no reason to touch.
+pn_skill_declared_name() {
+  sed -n '1,30p' "${1:-}" 2>/dev/null \
+    | grep -m1 '^name:[[:space:]]*' \
+    | sed -e 's/^name:[[:space:]]*//' -e 's/^["'"'"']//' -e 's/["'"'"']$//' -e 's/[[:space:]]*$//'
+}
+
+# pn_resolve_skill_by_declared_name <skill_name> <workspace_root>
+# The fallback for when no DIRECTORY carries the invoked name: scans the same
+# locations and matches each SKILL.md's own declared `name:` instead.
+#
+# The Agent Skills standard expects a skill's directory to be named after it
+# (our registry's NormalizeSkillDirName exists for exactly that check, case- and
+# underscore-insensitively), and every skill observed on a real machine obeys
+# it. But nothing FORCES it, and a skill whose folder was renamed would resolve
+# to nothing through the directory path — the use would then go unrecorded
+# silently, which is the one failure mode worth spending a directory scan on.
+#
+# Deliberately the second choice, not the first: reading every skill's
+# frontmatter on every slash command would cost a scan for each "/undo" too.
+# This runs only once the cheap path has already missed.
+pn_resolve_skill_by_declared_name() {
+  local name="${1:-}" workspace="${2:-}"
+  PN_SKILL_PATH=""
+  [[ -n "$name" ]] || return 1
+
+  # Same normalization the registry applies, so "My_Skill" and "my-skill" are
+  # one name here too.
+  local wanted
+  wanted=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  local roots=()
+  [[ -n "$workspace" ]] && roots+=("${workspace%/}"/.cursor/skills/*/SKILL.md "${workspace%/}"/.claude/skills/*/SKILL.md)
+  roots+=("${HOME}"/.cursor/skills/*/SKILL.md "${HOME}"/.cursor/skills-cursor/*/SKILL.md "${HOME}"/.claude/skills/*/SKILL.md)
+  roots+=("${HOME}"/.cursor/plugins/cache/*/*/*/skills/*/SKILL.md)
+  [[ $had_nullglob -eq 1 ]] || shopt -u nullglob
+
+  local candidate declared
+  for candidate in "${roots[@]}"; do
+    [[ -r "$candidate" ]] || continue
+    declared=$(pn_skill_declared_name "$candidate")
+    [[ -n "$declared" ]] || continue
+    declared=$(printf '%s' "$declared" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+    if [[ "$declared" == "$wanted" ]]; then
+      PN_SKILL_PATH="$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# pn_skill_declares_name <skill_md_path> <expected_name>
+# True when the file's own frontmatter declares that name, or declares none at
+# all (in which case its directory is the only identity it has, so a directory
+# match stands).
+#
+# This is what stops a directory hit from being trusted on its own — see
+# pn_resolve_skill_path. Compared with the registry's own normalization
+# (NormalizeSkillDirName: lowercased, underscores mapped to hyphens) so one
+# skill is never two names.
+pn_skill_declares_name() {
+  local path="${1:-}" expected="${2:-}"
+  local declared
+  declared=$(pn_skill_declared_name "$path")
+  # No declared name: nothing contradicts the directory, so accept it.
+  [[ -n "$declared" ]] || return 0
+  declared=$(printf '%s' "$declared" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+  expected=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+  [[ "$declared" == "$expected" ]]
 }
