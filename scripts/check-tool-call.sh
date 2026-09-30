@@ -293,7 +293,12 @@ main() {
     if [[ "$FAILURE_MODE" == "open" ]]; then
       json_permission_allow "The scanning service is unavailable ($reason). ${action_noun} allowed WITHOUT a security scan. $signup_note"
     else
-      json_permission_deny "The scanning service is unavailable ($reason). ${action_noun} blocked. $signup_note" "The scanning service is unavailable ($reason). Do not retry ${action_desc}."
+      # Carry the literal login command in agent_message: this denial is the
+      # agent's only feedback once a session's injected context is gone
+      # (compaction, a session that started configured), and it cannot look
+      # the path up -- see check-session.sh.
+      local recovery="Paradigm Networks is not logged in, so ${action_desc} was blocked. Ask the user for their Paradigm Networks base URL, then run EXACTLY: bash $SCRIPT_DIR/login.sh --base-url <their-base-url> -- verbatim, with nothing chained onto it. Do not retry ${action_desc}, and do not search for the script: every other tool call stays blocked until login completes."
+      json_permission_deny "The scanning service is unavailable ($reason). ${action_noun} blocked. $signup_note" "$recovery"
     fi
     return 0
   }

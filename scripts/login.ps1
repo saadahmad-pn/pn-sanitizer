@@ -58,15 +58,29 @@ function New-RandomHexState {
   return ([System.BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
 }
 
-function Test-RunningInCursorSandbox {
-  return ([bool]$env:CURSOR_SANDBOX -or $env:CURSOR_AGENT -eq "1")
-}
-
+# Attempted unconditionally, including when the agent is the one running
+# this script. It used to bail out whenever CURSOR_AGENT=1 -- but that is
+# set on the normal, documented path (the login skill has the agent run
+# this), so the browser was in practice never opened and every user hand-
+# copied a URL, contradicting what the README promises. A blocked opener
+# just returns false here and the URL is printed regardless.
 function Open-LoginBrowser {
   param([Parameter(Mandatory = $true)][string]$Url)
-  if (Test-RunningInCursorSandbox) { return $false }
   try {
     Start-Process $Url -ErrorAction Stop | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+# Best-effort clipboard copy, so a user who has to open the URL by hand can
+# paste it rather than retype it. Every caller already prints the URL, so
+# failure here needs no handling.
+function Copy-LoginUrlToClipboard {
+  param([Parameter(Mandatory = $true)][string]$Url)
+  try {
+    Set-Clipboard -Value $Url -ErrorAction Stop
     return $true
   } catch {
     return $false
@@ -270,11 +284,12 @@ function Invoke-Main {
   # service accounts, or no default browser association all "succeed"
   # here with nothing actually appearing on screen). Relaying the URL
   # must never depend on silently trusting that it worked.
-  if (Test-RunningInCursorSandbox) {
-    Write-ConsoleLine "Open this URL to log in:"
-    Write-ConsoleLine "  $authorizeUrl"
-  } elseif (Open-LoginBrowser -Url $authorizeUrl) {
+  if (Open-LoginBrowser -Url $authorizeUrl) {
     Write-ConsoleLine "Opened your browser to log in. If it didn't appear, open this URL manually:"
+    Write-ConsoleLine "  $authorizeUrl"
+  } elseif (Copy-LoginUrlToClipboard -Url $authorizeUrl) {
+    Write-ConsoleLine "Couldn't open a browser automatically -- the login URL has been copied to your clipboard."
+    Write-ConsoleLine "Paste it into your browser to log in:"
     Write-ConsoleLine "  $authorizeUrl"
   } else {
     Write-ConsoleLine "Couldn't open a browser automatically. Open this URL to log in:"
