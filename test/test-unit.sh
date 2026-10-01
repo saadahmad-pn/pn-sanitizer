@@ -52,114 +52,6 @@ result=$(json_session_context "Configure Paradigm Networks")
 assert_json_valid "$result" "Valid JSON"
 assert_json_has_key "$result" "additional_context" "Has additional_context key"
 
-# Test pn_parse_messages_response (the /v1/messages response-classification
-# heuristic -- see the function's own comment in lib/common.sh for why each
-# of these cases lands where it does)
-test_case "pn_parse_messages_response: normal reply, nonzero usage -> allow"
-pn_parse_messages_response '{"content":[{"type":"text","text":"Hello there!"}],"usage":{"input_tokens":50,"output_tokens":10}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "allow" "action is allow"
-
-test_case "pn_parse_messages_response: banner + zero usage -> block, reason extracted"
-pn_parse_messages_response '{"content":[{"type":"text","text":"```\n========================================================================\n  REQUEST BLOCKED\n========================================================================\n\n  The submitted content was flagged because it triggered the following security concerns: destructive operation.\n\n========================================================================\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "  The submitted content was flagged because it triggered the following security concerns: destructive operation." "reason extracted cleanly (banner scaffolding stripped, backend's own sentence kept as-is)"
-
-# Regression coverage for the real-world bug this replaced a brittle
-# regex with: the backend has at least two banner shapes -- a short
-# phrase-in-a-sentence (above) and a long, multi-finding structured
-# report (below, an actual example pulled from real hook logs, trimmed
-# to two findings). The old "security concerns: X" regex only matched
-# the first shape and silently dumped the entire raw banner -- dividers,
-# code fences, and all -- into the user-facing message for the second.
-# pn_strip_block_banner strips only the confirmed-fixed scaffolding
-# (the ==== dividers, the REQUEST BLOCKED line, the code fence) and
-# keeps everything else, so it has to handle both shapes correctly.
-test_case "pn_parse_messages_response: long structured-report banner -> block, full report kept (not the old regex's silent full-dump-with-double-wrap)"
-long_banner='```
-========================================================================
-  REQUEST BLOCKED
-========================================================================
-
-  The submitted content was flagged because it contains OWASP Top 10 and OWASP ASVS compliance violations.
-
-  OWASP Top 10 Findings (1 issue)
-  ----------------------------------------------------------------------
-
-  [1] [HIGH] Debug Mode Enabled in Production
-      Category : A02:2025 - Security Misconfiguration
-      Snippet  : debug=True
-
-========================================================================
-```'
-long_banner_json=$("$JQ_BIN" -n --arg text "$long_banner" '{content:[{type:"text",text:$text}],usage:{input_tokens:0,output_tokens:0}}')
-pn_parse_messages_response "$long_banner_json"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block"
-assert_output_contains "echo \"\$PN_MSG_MESSAGE\"" "OWASP Top 10 and OWASP ASVS compliance violations" "kept the backend's own explanation"
-assert_output_contains "echo \"\$PN_MSG_MESSAGE\"" "Debug Mode Enabled in Production" "kept the structured finding detail"
-result="$PN_MSG_MESSAGE"
-if [[ "$result" == *"===="* ]] || [[ "$result" == *'```'* ]] || [[ "$result" == *"REQUEST BLOCKED"* ]]; then
-  echo -e "  \033[0;31m✗\033[0m Banner scaffolding (dividers/fence/REQUEST BLOCKED) was stripped, not leaked into the message"
-  echo "    Got: $result"
-  TESTS_FAILED=$((TESTS_FAILED + 1))
-else
-  echo -e "  \033[0;32m✓\033[0m Banner scaffolding (dividers/fence/REQUEST BLOCKED) was stripped, not leaked into the message"
-  TESTS_PASSED=$((TESTS_PASSED + 1))
-fi
-TESTS_RUN=$((TESTS_RUN + 1))
-
-test_case "pn_parse_messages_response: zero usage, no banner -> anomaly (not guessed either way)"
-pn_parse_messages_response '{"content":[{"type":"text","text":"just a normal-looking short reply"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "just a normal-looking short reply" "PN_MSG_MESSAGE carries a raw preview instead of staying empty"
-
-test_case "pn_parse_messages_response: anomaly text is shown raw, not collapsed/reformatted"
-pn_parse_messages_response '{"content":[{"type":"text","text":"line one\nline two\t\tpadded"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "line one
-line two		padded" "PN_MSG_MESSAGE is the raw text verbatim -- newlines/tabs are not collapsed"
-
-test_case "pn_parse_messages_response: anomaly text is never truncated, however long"
-long_text=$(printf 'a%.0s' {1..250})
-pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_text}\"}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$long_text" "full 250-char text is kept, not clipped to 200 + ellipsis"
-
-test_case "pn_parse_messages_response: a second, unrecognized block-banner variant (zero usage, no REQUEST BLOCKED) is still shown in full as an anomaly"
-# Regression test: the backend has a real, confirmed second guard banner
-# ("RESPONSE BLOCKED", a post-generation check on the model's own
-# generated code) that this heuristic doesn't recognize as a block, only
-# as an anomaly -- but the full findings must still reach the user/agent,
-# not get swallowed behind a generic "unexpected response" sentence.
-response_blocked_text='```
-========================================================================
-  RESPONSE BLOCKED
-========================================================================
-
-  The generated code was blocked because post-generation security analysis identified OWASP compliance violations.
-```'
-pn_parse_messages_response "$("$JQ_BIN" -n --arg text "$response_blocked_text" '{content:[{type:"text",text:$text}],usage:{input_tokens:0,output_tokens:0}}')"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly (banner variant not recognized as a block)"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$response_blocked_text" "the full RESPONSE BLOCKED banner and findings are preserved, not clipped or discarded"
-
-test_case "pn_parse_messages_response: empty content array -> anomaly"
-pn_parse_messages_response '{"content":[],"usage":{"input_tokens":10,"output_tokens":5}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-
-test_case "pn_parse_messages_response: real allow (non-zero usage) surfaces the full reply, not truncated"
-long_reply=$(printf 'word %.0s' {1..80})
-pn_parse_messages_response "{\"content\":[{\"type\":\"text\",\"text\":\"${long_reply}\"}],\"usage\":{\"input_tokens\":117,\"output_tokens\":224}}"
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "allow" "action is allow"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "$long_reply" "PN_MSG_MESSAGE carries the full reply text"
-
-test_case "pn_parse_messages_response: leading thinking block -> still finds block signal in the text block after it"
-pn_parse_messages_response '{"content":[{"type":"thinking","thinking":"reasoning..."},{"type":"text","text":"```\n===\n  REQUEST BLOCKED\n===\n\n  The submitted content was flagged because it triggered the following security concerns: prompt injection.\n\n===\n```"}],"usage":{"input_tokens":0,"output_tokens":0}}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "block" "action is block (not derailed by the leading thinking block)"
-assert_output_equals "echo \"\$PN_MSG_MESSAGE\"" "  The submitted content was flagged because it triggered the following security concerns: prompt injection." "reason extracted from the correct block (also confirms a 3-char '===' divider strips the same as a 72-char one)"
-
-test_case "pn_parse_messages_response: usage entirely missing -> anomaly"
-pn_parse_messages_response '{"content":[{"type":"text","text":"some reply"}]}'
-assert_output_equals "echo \"\$PN_MSG_ACTION\"" "anomaly" "action is anomaly"
-
 # Test command checking
 test_case "command_exists with available command"
 assert_success "command_exists bash" "bash command exists"
@@ -194,13 +86,13 @@ result=$(cat "$audit_file")
 assert_json_valid "$result" "Valid JSON line"
 assert_json_has_key "$result" "timestamp" "Has timestamp"
 
-# Regression coverage for P2-1: pn_parse_messages_response's block/allow
-# verdict is a reverse-engineered heuristic with no real structured field
-# from the backend -- if an upstream change ever turns every scan into
-# "anomaly", that's a silent, complete loss of enforcement under the
-# prompt hook's fail-open default. These functions track consecutive
-# anomalies so callers can escalate to a visible warning past a
-# threshold instead of staying silent indefinitely.
+# Regression coverage for P2-1: pn_scan_text (lib/scan-client.sh) treats a
+# valid-JSON response with no recognized action_to_take as an anomaly rather
+# than guessing allow/block -- rarer now than under the old /v1/messages
+# heuristic (a real structured field, not reverse-engineered), but still
+# possible on an API contract change. These functions track consecutive
+# anomalies so callers can escalate to a visible warning past a threshold
+# instead of staying silent indefinitely.
 test_case "pn_record_scan_anomaly counts consecutive calls and persists across them"
 rm -f "$PN_ANOMALY_STATE_PATH"
 assert_output_equals "pn_record_scan_anomaly" "1" "First call returns 1"
@@ -283,6 +175,42 @@ test_case "dedupe_lines removes duplicates, preserving first-seen order"
 result=$(printf 'a\nb\na\nc\nb\n' | dedupe_lines)
 assert_output_equals "echo '$result'" "$(printf 'a\nb\nc')" "Duplicates removed, order preserved"
 
+test_case "normalize_hook_model strips Cursor's literal 'unknown' placeholder"
+result=$(normalize_hook_model "unknown")
+assert_output_equals "echo '$result'" "" "lowercase unknown becomes empty"
+
+test_case "normalize_hook_model is case-insensitive"
+result=$(normalize_hook_model "Unknown")
+assert_output_equals "echo '$result'" "" "capitalized Unknown becomes empty"
+result=$(normalize_hook_model "UNKNOWN")
+assert_output_equals "echo '$result'" "" "uppercase UNKNOWN becomes empty"
+
+test_case "normalize_hook_model passes a real model name through unchanged"
+result=$(normalize_hook_model "claude-sonnet-4-5")
+assert_output_equals "echo '$result'" "claude-sonnet-4-5" "real model name untouched"
+
+test_case "normalize_hook_model passes an empty string through unchanged"
+result=$(normalize_hook_model "")
+assert_output_equals "echo '$result'" "" "already-empty stays empty"
+
+test_case "resolve_hook_model prefers model_id over the legacy model slug"
+result=$(resolve_hook_model "claude-sonnet-4-5-20250929" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "claude-sonnet-4-5-20250929" "structured model_id wins"
+
+test_case "resolve_hook_model falls back to the legacy model slug when model_id is absent"
+result=$(resolve_hook_model "" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "claude-sonnet-4.5" "falls back to legacy model"
+
+test_case "resolve_hook_model normalizes 'unknown' regardless of which field it came from"
+result=$(resolve_hook_model "unknown" "claude-sonnet-4.5")
+assert_output_equals "echo '$result'" "" "unknown model_id becomes empty, no fallback to legacy"
+result=$(resolve_hook_model "" "unknown")
+assert_output_equals "echo '$result'" "" "unknown legacy model (no model_id) becomes empty"
+
+test_case "resolve_hook_model returns empty when both fields are absent"
+result=$(resolve_hook_model "" "")
+assert_output_equals "echo '$result'" "" "both empty stays empty"
+
 echo ""
 echo -e "${BLUE}=== Unit Tests: pn_config.sh ===${NC}"
 
@@ -360,56 +288,6 @@ result=$(pn_resolve_config)
 assert_output_contains "echo '$result'" "https://file.example.com" "Uses file base_url"
 assert_output_contains "echo '$result'" "file-token" "Uses file token"
 
-test_case "pn_get_preferred_model returns empty when never set"
-rm -f "$HOME/.pn/credentials.json"
-future_expiry=$(($(date +%s) + 7200))
-pn_save_credentials "https://model-test.example.com" "token" "refresh" "$future_expiry"
-result=$(pn_get_preferred_model)
-assert_output_equals "echo '$result'" "" "Empty string, not an error, when unset"
-
-test_case "pn_save_preferred_model then pn_get_preferred_model round-trips"
-pn_save_preferred_model "anthropic/claude-opus-4-7"
-result=$(pn_get_preferred_model)
-assert_output_equals "echo '$result'" "anthropic/claude-opus-4-7" "Round-trips the saved model id"
-
-test_case "pn_save_credentials (simulating a token refresh) does not wipe a saved preferred_model"
-new_expiry=$(($(date +%s) + 3600))
-pn_save_credentials "https://model-test.example.com" "refreshed-token" "refreshed-refresh" "$new_expiry"
-result=$(pn_get_preferred_model)
-assert_output_equals "echo '$result'" "anthropic/claude-opus-4-7" "Survives a credentials refresh unchanged"
-result=$(pn_load_credentials | "$JQ_BIN" -r '.access_token')
-assert_output_equals "echo '$result'" "refreshed-token" "The refreshed fields themselves still updated correctly"
-
-test_case "pn_save_preferred_model fails when not configured"
-rm -f "$HOME/.pn/credentials.json"
-assert_failure "pn_save_preferred_model 'some-model'" "Returns failure with no credentials file to merge into"
-
-# Regression coverage for P2-3: pn_resolve_model is the shared
-# precedence chain (env var > saved preference > default) that used to
-# be duplicated by hand across six files -- covering every tier here is
-# what actually catches a future drift, not just that the function
-# exists.
-test_case "pn_resolve_model: tier 3, nothing set, falls back to the default"
-rm -f "$HOME/.pn/credentials.json"
-unset PARADIGM_NETWORKS_MODEL
-pn_resolve_model
-assert_output_equals "echo '$PN_RESOLVED_MODEL'" "$PN_DEFAULT_MODEL" "Resolves to PN_DEFAULT_MODEL"
-assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "true" "Flags it as the default"
-
-test_case "pn_resolve_model: tier 2, saved preference wins over the default"
-pn_save_credentials "https://model-resolve-test.example.com" "tok" "reftok" "$(($(date +%s) + 3600))"
-pn_save_preferred_model "anthropic/claude-opus-4-7"
-pn_resolve_model
-assert_output_equals "echo '$PN_RESOLVED_MODEL'" "anthropic/claude-opus-4-7" "Resolves to the saved preference"
-assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "false" "Not flagged as the default"
-
-test_case "pn_resolve_model: tier 1, env var wins over the saved preference"
-export PARADIGM_NETWORKS_MODEL="anthropic/claude-sonnet-4-6"
-pn_resolve_model
-assert_output_equals "echo '$PN_RESOLVED_MODEL'" "anthropic/claude-sonnet-4-6" "Resolves to the env var, not the saved preference"
-assert_output_equals "echo '$PN_RESOLVED_MODEL_IS_DEFAULT'" "false" "Not flagged as the default"
-unset PARADIGM_NETWORKS_MODEL
-
 echo ""
 echo -e "${BLUE}=== Unit Tests: login.sh ===${NC}"
 
@@ -469,6 +347,53 @@ decoded_value=$(urldecode_strict "$wire_value")
 reencoded_value=$(urlencode_strict "$decoded_value")
 assert_output_equals "echo '$decoded_value'" "AB+CD" "Decodes back to the true value"
 assert_output_equals "echo '$reencoded_value'" "$wire_value" "Re-encoding the decoded value matches the original wire value (single encoding, not double)"
+
+echo ""
+echo -e "${BLUE}=== Unit Tests: login.sh browser handoff ===${NC}"
+
+# Regression: open_browser must be attempted even when the agent is running
+# login.sh. It used to bail out on CURSOR_AGENT=1 -- which is set on the
+# normal, documented path -- so the browser was never opened and every user
+# hand-copied a URL. login.sh only runs main when executed directly, so it
+# can be sourced to exercise these two helpers in isolation.
+BROWSER_STUB_DIR="$TEST_TEMP_DIR/browser-stub"
+mkdir -p "$BROWSER_STUB_DIR"
+for opener in open xdg-open; do
+  cat > "$BROWSER_STUB_DIR/$opener" <<STUB
+#!/bin/bash
+printf '%s' "\$1" > "$TEST_TEMP_DIR/opened-url.txt"
+exit 0
+STUB
+  chmod +x "$BROWSER_STUB_DIR/$opener"
+done
+
+test_case "login.sh opens the browser even when the agent is running it"
+rm -f "$TEST_TEMP_DIR/opened-url.txt"
+login_url="https://acme.paradigmnetworks.ai/api/v1/plugin/authorize?state=abc"
+TESTS_RUN=$((TESTS_RUN + 1))
+if PATH="$BROWSER_STUB_DIR:$PATH" CURSOR_AGENT=1 CURSOR_SANDBOX=1 \
+   bash -c "source '$SCRIPTS_DIR/login.sh'; open_browser '$login_url'" >/dev/null 2>&1 \
+   && [[ "$(cat "$TEST_TEMP_DIR/opened-url.txt" 2>/dev/null)" == "$login_url" ]]; then
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  echo -e "  ${GREEN}✓${NC} Opener invoked with the authorize URL under CURSOR_AGENT=1"
+else
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  echo -e "  ${RED}✗${NC} Browser was not opened — the agent path is back to hand-copying a URL"
+fi
+
+# A blocked opener must fail cleanly rather than erroring out: every caller
+# prints the URL regardless, so a false "opened your browser" is the only
+# real failure mode here.
+test_case "login.sh reports failure cleanly when no opener exists"
+TESTS_RUN=$((TESTS_RUN + 1))
+if PATH="$TEST_TEMP_DIR/empty-path" \
+   bash -c "source '$SCRIPTS_DIR/login.sh'; open_browser 'https://example.com'" >/dev/null 2>&1; then
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  echo -e "  ${RED}✗${NC} Reported success with no opener available"
+else
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  echo -e "  ${GREEN}✓${NC} Returns failure so the caller falls back to clipboard/print"
+fi
 
 echo ""
 test_summary

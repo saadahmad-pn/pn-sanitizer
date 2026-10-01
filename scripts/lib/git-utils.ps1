@@ -88,6 +88,113 @@ function Get-GitCurrentBranch {
   return (ConvertTo-SanitizedGitValue -Value $branch)
 }
 
+# Same as Get-GitRemoteUrl, but returns an empty string (not the "No
+# remote" placeholder) when there's no configured origin. Get-GitRemoteUrl's
+# fallback text is meant for human-readable <GIT>...</GIT> context injection
+# (check-repo-context.ps1); the detections API contract (design-ideas/
+# Cursor_PrePush_Governance_Enforcement_Plan.md 0.5.3) instead requires
+# GitRepoUrl to be a genuinely empty field when RepoPath isn't a git repo or
+# has no remote.
+function Get-GitRemoteUrlOrEmpty {
+  param([Parameter(Mandatory = $true)][string]$RepoPath)
+  $url = (git -C $RepoPath config --get remote.origin.url 2>$null)
+  if (-not $url) { return "" }
+  return (ConvertTo-SanitizedGitValue -Value $url)
+}
+
+# Same rationale as Get-GitRemoteUrlOrEmpty above, for GitBranch.
+function Get-GitCurrentBranchOrEmpty {
+  param([Parameter(Mandatory = $true)][string]$RepoPath)
+  $branch = (git -C $RepoPath branch --show-current 2>$null)
+  if (-not $branch) { return "" }
+  return (ConvertTo-SanitizedGitValue -Value $branch)
+}
+
+# Returns repo-relative paths (string array) of every file touched by a
+# commit reachable from the current branch's HEAD but not reachable from
+# ANY remote-tracking branch. Mirrors resolve_unpushed_changed_files in
+# git-utils.sh -- see that function's comment for the full rationale (why
+# this is used for both git.push and git.pr_create, and its one known
+# limitation around cherry-picked commits).
+function Get-UnpushedChangedFiles {
+  param([Parameter(Mandatory = $true)][string]$RepoPath)
+  $output = & git -C $RepoPath log HEAD --not --remotes --name-only --pretty=format: 2>$null
+  $paths = @($output | Where-Object { $_ }) | Select-Object -Unique
+  return @($paths)
+}
+
+# Returns repo-relative paths (string array) of every file staged for the
+# next commit (excluding deletions). Mirrors resolve_staged_changed_files
+# in git-utils.sh -- see that function's comment for why this is the right
+# file set for a git.commit event.
+function Get-StagedChangedFiles {
+  param([Parameter(Mandatory = $true)][string]$RepoPath)
+  $output = & git -C $RepoPath diff --cached --name-only --diff-filter=d 2>$null
+  return @($output | Where-Object { $_ })
+}
+
+# Returns repo-relative paths (string array) of every file that differs
+# between the current branch and the PR's base branch. Mirrors
+# resolve_pr_create_changed_files in git-utils.sh -- see that function's
+# comment for the full base-branch resolution order and why
+# Get-UnpushedChangedFiles is the wrong comparison once the branch has
+# already been pushed (the common flow immediately before `gh pr create`).
+function Get-PrCreateChangedFiles {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoPath,
+    [Parameter(Mandatory = $true)][string]$CommandText
+  )
+  $remote = "origin"
+
+  $baseBranch = ""
+  if ($CommandText -match '(--base|-B)\s+(\S+)') {
+    $baseBranch = $Matches[2]
+  }
+
+  $baseRef = ""
+  if ($baseBranch) {
+    & git -C $RepoPath rev-parse --verify -q "$remote/$baseBranch" *> $null
+    if ($LASTEXITCODE -eq 0) {
+      $baseRef = "$remote/$baseBranch"
+    } else {
+      & git -C $RepoPath rev-parse --verify -q $baseBranch *> $null
+      if ($LASTEXITCODE -eq 0) {
+        $baseRef = $baseBranch
+      }
+    }
+  }
+
+  if (-not $baseRef) {
+    $symbolic = (& git -C $RepoPath symbolic-ref -q "refs/remotes/$remote/HEAD" 2>$null)
+    if ($symbolic) {
+      $baseRef = $symbolic -replace '^refs/remotes/', ''
+    }
+  }
+
+  if (-not $baseRef) {
+    foreach ($candidate in @("main", "master")) {
+      & git -C $RepoPath rev-parse --verify -q "$remote/$candidate" *> $null
+      if ($LASTEXITCODE -eq 0) {
+        $baseRef = "$remote/$candidate"
+        break
+      }
+    }
+  }
+
+  if (-not $baseRef) {
+    return Get-UnpushedChangedFiles -RepoPath $RepoPath
+  }
+
+  $mergeBase = (& git -C $RepoPath merge-base $baseRef HEAD 2>$null)
+  if (-not $mergeBase) {
+    return Get-UnpushedChangedFiles -RepoPath $RepoPath
+  }
+
+  $output = & git -C $RepoPath diff --name-only --diff-filter=d "$mergeBase..HEAD" 2>$null
+  $paths = @($output | Where-Object { $_ }) | Select-Object -Unique
+  return @($paths)
+}
+
 # A cheap "has anything changed" signal: the last-write time of .git/HEAD,
 # which changes on checkout/branch-switch and (via the ref update it
 # triggers) on commit. Returns 0 if it can't be read.

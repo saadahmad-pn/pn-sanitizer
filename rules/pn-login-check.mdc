@@ -15,31 +15,54 @@ context), so this rule is the backstop.
 ## What to do
 
 On the **first user message of a session**, before doing anything else,
-check whether Paradigm Networks is already configured. Use a plain shell
-command, not by locating this plugin's own `scripts/` directory — it can
-be installed anywhere and there's no environment variable that tells you
-where, so path-guessing is unreliable. The credentials file lives at a
-fixed, well-known path regardless of install location.
+check whether Paradigm Networks is already configured. Locate the plugin's
+own `scripts/` directory (it can be installed anywhere and there's no
+environment variable that tells you where, so path-guessing is unreliable)
+and run `check-configured.sh`/`check-configured.ps1` from it.
+
+**Don't hand-write your own file-existence check** (e.g. `test -f
+~/.pn/credentials.json` or `Test-Path "$HOME\.pn\credentials.json"`) instead
+of running this script. That puts the credentials file's path directly in
+the tool call's command text, which security scanning flags as a
+credential-path exposure finding and can block the check outright — on
+literally the first message of every single session, since this rule runs
+every time. `check-configured.sh`/`.ps1` takes no arguments and its own
+invocation names no path, so there's nothing for that finding to point at.
 
 macOS/Linux:
 
 ```bash
-if [ -f ~/.pn/credentials.json ] || { [ -n "$PARADIGM_NETWORKS_URL" ] && [ -n "$PARADIGM_NETWORKS_TOKEN" ]; }; then
-  echo CONFIGURED
-else
-  echo NOT_CONFIGURED
-fi
+find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/check-configured.sh" 2>/dev/null
+```
+
+then, using the path that came back:
+
+```bash
+bash <path-to-check-configured.sh>
 ```
 
 Windows (PowerShell):
 
 ```powershell
-if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -and $env:PARADIGM_NETWORKS_TOKEN)) {
-  Write-Output "CONFIGURED"
-} else {
-  Write-Output "NOT_CONFIGURED"
-}
+Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\check-configured.ps1" } |
+  Select-Object -ExpandProperty FullName
 ```
+
+then:
+
+```
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<path-to-check-configured.ps1>"
+```
+
+Both cover marketplace installs (`~/.cursor/plugins/cache/`) and local
+installs (`~/.cursor/plugins/local/`). If both come back for a platform,
+prefer `local/`.
+
+Run the check-configured command **exactly as shown and nothing else** —
+don't combine it with `cd`, `&&`, `;`, or any other command, and don't add
+arguments. This precise, standalone, argument-free shape is what lets
+Paradigm Networks' own security scanning recognize it and skip scanning it.
 
 - `CONFIGURED` → proceed with the user's request normally, no further
   action needed. (This only checks presence, not validity — an expired
@@ -48,7 +71,9 @@ if ((Test-Path "$HOME\.pn\credentials.json") -or ($env:PARADIGM_NETWORKS_URL -an
 - `NOT_CONFIGURED` → run the `paradigmnetworks-login` skill before
   proceeding with the user's original request. That skill owns the
   entire flow (asking for the base URL, running the login script,
-  relaying the result) — don't duplicate any of it here.
+  relaying the result) — don't duplicate any of it here, and don't bother
+  passing along the scripts-directory path you found above; the skill
+  locates it again itself.
 
 Do not treat an allowed prompt or a "Paradigm Networks unreachable"
 message as proof that Paradigm Networks is configured — both hooks fail

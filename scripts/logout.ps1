@@ -12,8 +12,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 # Writes directly to the console's stdout stream rather than PowerShell's
-# own output pipeline -- same reasoning as login.ps1/set-model.ps1's
-# identical helper.
+# own output pipeline -- same reasoning as login.ps1's identical helper.
 function Write-ConsoleLine {
   param([string]$Text = "")
   [Console]::Out.WriteLine($Text)

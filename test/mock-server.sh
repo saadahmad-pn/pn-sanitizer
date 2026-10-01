@@ -1,14 +1,25 @@
 #!/bin/bash
 # Mock Paradigm Networks API server for testing
 # Usage: start_mock_server <port> [mode]
-# Modes: allow, block, anomaly, timeout, error500, error401
+# Modes: allow, block, anomaly, timeout, error500, error401,
+#        detections_allow, detections_warn, detections_block
 #
-# Response bodies match the /v1/messages (Anthropic-compatible) shape, not
-# the old codedefense/scan shape -- see pn_parse_messages_response in
-# lib/common.sh for what each mode is meant to exercise. "warn" is retired:
-# the new endpoint has no equivalent signal (see that function's comment).
-# "anomaly" is new: zero usage without the block banner, the case that must
-# NOT be silently guessed as either allow or block.
+# The detections_* modes return the standardized plugins domain response
+# shape (action_to_take/message/overall_threat_level/triggered_by/ToolUseId
+# -- see control-server's ScanOutcome/ToolCallResult) for testing
+# check-prompt.sh/check-tool-call.sh against lib/plugins-client.sh. Kept the
+# "detections_*" mode names for minimal test-file churn even though the
+# retired /api/v1/detections/evaluate endpoint no longer exists -- these now
+# stand in for either gating domain's before_* verdict shape, which is
+# identical across both (prompts, tool-calls -- the former shell-executions
+# domain is retired too, see design-ideas/
+# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md).
+#
+# The non-detections modes (allow/block/anomaly/timeout/error500/error401)
+# return the /v1/messages (Anthropic-compatible) response shape -- LEGACY,
+# unused scaffolding from before this plugin called control-server's
+# composite scan endpoints at all. Left in place rather than removed
+# outright.
 
 PORT=""
 MODE="allow"
@@ -50,6 +61,15 @@ start_mock_server() {
               ;;
             error401)
               send_response "401" '{"error": "Unauthorized"}'
+              ;;
+            detections_allow)
+              send_response "200" '{"action_to_take":"allow","message":"","overall_threat_level":"","ToolUseId":"mock-tool-use-id"}'
+              ;;
+            detections_warn)
+              send_response "200" '{"action_to_take":"warn","message":"mock policy warning","overall_threat_level":"low","triggered_by":["code_defense"],"ToolUseId":"mock-tool-use-id"}'
+              ;;
+            detections_block)
+              send_response "200" '{"action_to_take":"block","message":"mock policy violation","overall_threat_level":"high","triggered_by":["code_defense"],"ToolUseId":"mock-tool-use-id"}'
               ;;
           esac
         fi
@@ -109,6 +129,15 @@ start_simple_mock_server() {
       ;;
     error401)
       echo 'HTTP/1.1 401 Unauthorized\r\n\r\n{"error": "unauthorized"}' >"$response_file"
+      ;;
+    detections_allow)
+      echo '{"Decision":"allow","Message":"","FileAnalyses":[],"LatencyMs":0,"AuditId":"mock-scan-allow"}' >"$response_file"
+      ;;
+    detections_warn)
+      echo '{"Decision":"warn","Message":"mock policy warning","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"low","ActionToTake":"warn","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-warn"}' >"$response_file"
+      ;;
+    detections_block)
+      echo '{"Decision":"block","Message":"mock policy violation","FileAnalyses":[{"Filename":"app.py","ThreatLevel":"high","ActionToTake":"block","Categories":["mock-category"]}],"LatencyMs":0,"AuditId":"mock-scan-block"}' >"$response_file"
       ;;
   esac
 

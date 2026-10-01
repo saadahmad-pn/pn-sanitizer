@@ -96,9 +96,8 @@ function Save-PnCredentials {
     # Merge into whatever's already on disk, not a from-scratch rebuild --
     # this function runs automatically and silently on every token
     # refresh (see Get-PnValidAccessToken below), so a naive rebuild
-    # would wipe any field this function doesn't itself know about (e.g.
-    # a saved PreferredModel, see Save-PnPreferredModel) the very next
-    # time a session runs long enough to trigger a refresh.
+    # would wipe any field this function doesn't itself know about the
+    # very next time a session runs long enough to trigger a refresh.
     $credsObject = [PSCustomObject]@{}
     if (Test-Path $Script:PnCredPath -PathType Leaf) {
       try {
@@ -123,82 +122,6 @@ function Save-PnCredentials {
     Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
     return $false
   }
-}
-
-# Save the user's preferred scanning model. Separate from
-# Save-PnCredentials -- a model change shouldn't require also supplying
-# BaseUrl/AccessToken/RefreshToken/ExpiresAt -- but uses the same
-# merge-then-atomic-write pattern. Requires an existing, valid
-# credentials file (there's nothing meaningful to merge a model
-# preference into otherwise).
-function Save-PnPreferredModel {
-  param(
-    [Parameter(Mandatory = $true)][string]$Model
-  )
-
-  if (-not (Test-Path $Script:PnCredPath -PathType Leaf)) {
-    return $false
-  }
-
-  $tempFile = "$($Script:PnCredPath).$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
-  try {
-    $existing = (Get-Utf8FileText -Path $Script:PnCredPath) | ConvertFrom-Json -ErrorAction Stop
-    $existing | Add-Member -NotePropertyName "preferred_model" -NotePropertyValue $Model -Force
-
-    Set-Utf8FileTextNoBom -Path $tempFile -Value ($existing | ConvertTo-Json -Compress)
-    Protect-PathForCurrentUserOnly -Path $tempFile
-    Move-Item -Path $tempFile -Destination $Script:PnCredPath -Force -ErrorAction Stop
-    Protect-PathForCurrentUserOnly -Path $Script:PnCredPath
-    return $true
-  } catch {
-    Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
-    return $false
-  }
-}
-
-# Returns the stored preferred_model, or an empty string if unset or not
-# configured. Deliberately independent of Resolve-PnConfig -- this is a
-# plain file read, no auth/refresh machinery needed.
-function Get-PnPreferredModel {
-  if (-not (Test-Path $Script:PnCredPath -PathType Leaf)) {
-    return ""
-  }
-  try {
-    $creds = (Get-Utf8FileText -Path $Script:PnCredPath) | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    return ""
-  }
-  return [string](Get-JsonProperty -InputObject $creds -Name "preferred_model" -Default "")
-}
-
-# Resolve-PnModel
-# Resolves which model to use for a /v1/messages scan. Precedence:
-# PARADIGM_NETWORKS_MODEL env var (a manual override -- only takes effect
-# if something exports it directly into the process environment, e.g. a
-# shared-host setup; there is no Cursor Settings UI for this -- an
-# earlier version had one, but it was removed after confirming, against
-# a real installed plugin, that Cursor's plugin Settings panel never
-# delivers configured values to hook scripts) > the model saved locally
-# via the paradigmnetworks-models skill / set-model.ps1
-# (Get-PnPreferredModel, above -- this is the real, user-facing way to
-# change it) > $Script:PnDefaultModel.
-#
-# Formerly this exact precedence chain was duplicated by hand across six
-# files (check-prompt.sh/.ps1, check-write.sh/.ps1, paradigmnetworks-
-# models.sh/.ps1) -- see P2-3, and pn_resolve_model in pn_config.sh for
-# the bash mirror.
-#
-# Returns [PSCustomObject]@{ Model = "..."; IsDefault = $true/$false }
-# ($true only when nothing else resolved and the hardcoded default was
-# used -- paradigmnetworks-models.ps1 needs this to print "(default)").
-$Script:PnDefaultModel = "anthropic/claude-haiku-4-5-20251001"
-function Resolve-PnModel {
-  $model = $env:PARADIGM_NETWORKS_MODEL
-  if (-not $model) { $model = Get-PnPreferredModel }
-  if (-not $model) {
-    return [PSCustomObject]@{ Model = $Script:PnDefaultModel; IsDefault = $true }
-  }
-  return [PSCustomObject]@{ Model = $model; IsDefault = $false }
 }
 
 # Returns a PSCustomObject with AccessToken/RefreshToken/ExpiresIn, or

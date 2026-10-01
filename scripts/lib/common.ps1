@@ -120,8 +120,42 @@ function Get-JsonProperty {
   return $Default
 }
 
+# ConvertTo-NormalizedHookModel -Model <string>
+# Mirrors common.sh's normalize_hook_model: strips Cursor's own "unknown"
+# placeholder (sent verbatim on its .model hook field when the model hasn't
+# resolved yet at hook-fire time -- e.g. Auto model mode) down to an empty
+# string, so it reads as genuinely absent rather than being persisted in the
+# chatapi collection as if "unknown" were a real model identifier.
+# Case-insensitive since Cursor's own casing for this value is not
+# documented/guaranteed. Confirmed via control-server's raw-payload debug
+# logging (2026-09-22): a real afterAgentResponse payload carried
+# "model":"unknown" -- Cursor's own value, not something this plugin's
+# extraction introduces, so the fix belongs at the point where we read it.
+function ConvertTo-NormalizedHookModel {
+  param([string]$Model)
+  if ($Model -and $Model.ToLowerInvariant() -eq "unknown") {
+    return ""
+  }
+  return $Model
+}
+
+# Resolve-HookModel -ModelId <string> -LegacyModel <string>
+# Mirrors common.sh's resolve_hook_model: picks the best available model
+# identifier from a Cursor hook payload -- ModelId (Cursor's docs:
+# "Structured ID for the selected model, when available" -- optional, newer)
+# when present, falling back to LegacyModel (Cursor's docs: "Legacy model
+# slug configured for the composer") when ModelId is absent -- e.g. an older
+# Cursor build that doesn't send it yet. Whichever value is chosen is passed
+# through ConvertTo-NormalizedHookModel, since either field could in
+# principle carry the "unknown" placeholder.
+function Resolve-HookModel {
+  param([string]$ModelId, [string]$LegacyModel)
+  $chosen = if ($ModelId) { $ModelId } else { $LegacyModel }
+  return ConvertTo-NormalizedHookModel -Model $chosen
+}
+
 # Invoke-CurlRequest -CurlArgs <string[]>
-# Shared machinery for Invoke-HttpPostRaw/Invoke-HttpGetRaw below: runs
+# Shared machinery for Invoke-HttpPostRaw below: runs
 # curl.exe with the given arguments (which must already include -s, the
 # URL/method/headers, and a trailing "-w `n%{http_code}"), splits the
 # status-code line curl appends off of the response body, and maps
@@ -136,7 +170,7 @@ function Get-JsonProperty {
 # ran ~22s anyway), forcing a manual Task.Wait(timeout) workaround just to
 # get a hard deadline. curl's own --max-time is mature and already proven
 # reliable here -- it's exactly what the bash side has used from day one
-# (see http_post/http_get in common.sh) with no equivalent problem. This
+# (see http_post in common.sh) with no equivalent problem. This
 # also collapses two parallel HTTP implementations (bash's curl calls,
 # PowerShell's HttpClient calls) that had to be kept behaviorally
 # identical by hand into one real implementation, mirrored.
@@ -236,184 +270,30 @@ function Invoke-HttpPostRaw {
   }
 }
 
-# Invoke-HttpGetRaw -Url ... -AuthToken ... -TimeoutSec ...
-# Same contract as Invoke-HttpPostRaw above -- used for GET /v1/models.
-function Invoke-HttpGetRaw {
+# Invoke-HttpPostMultipart -Url ... -FormArgs <string[]> -AuthToken ... -TimeoutSec ...
+# Generic multipart/form-data POST for the detections API (lib/detection-
+# client.ps1) -- mirrors http_post_multipart_form in common.sh. FormArgs is
+# the full, flat list of curl --form-string/-F flag/value tokens the caller
+# wants sent (e.g. "--form-string", "EventType=git.push", ..., "-F",
+# "Files=@C:\path\to\file;filename=rel/path"), passed straight through to
+# curl.exe via Invoke-CurlRequest. Unlike Invoke-HttpPostRaw's JSON body,
+# there's no quote-escaping problem here needing a temp-file workaround --
+# Invoke-CurlRequest already preserves each array element's own boundaries
+# when invoking curl.exe as a native process.
+function Invoke-HttpPostMultipart {
   param(
     [Parameter(Mandatory = $true)][string]$Url,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$FormArgs,
     [string]$AuthToken = "",
     [int]$TimeoutSec = 5
   )
 
-  $curlArgs = @(
-    "-s", "-X", "GET", $Url,
-    "--max-time", "$TimeoutSec",
-    "-w", "`n%{http_code}"
-  )
+  $curlArgs = @("-s", "-X", "POST", $Url) + $FormArgs + @("--max-time", "$TimeoutSec", "-w", "`n%{http_code}")
   if ($AuthToken) {
     $curlArgs += @("-H", "Authorization: Bearer $AuthToken")
   }
 
   return Invoke-CurlRequest -CurlArgs $curlArgs
-}
-
-# Invoke-MessagesHttpPost -Url ... -TextData ... -Model ... -MaxTokens ... -AuthToken ... -TimeoutSec ...
-# Builds a request body for the Anthropic-compatible /v1/messages
-# endpoint via ConvertTo-Json (not hand-built string interpolation --
-# TextData can contain quotes/backslashes/newlines that must be escaped
-# correctly) and
-# posts it through the same generic Invoke-HttpPostRaw.
-function Invoke-MessagesHttpPost {
-  param(
-    [Parameter(Mandatory = $true)][string]$Url,
-    [Parameter(Mandatory = $true)][string]$TextData,
-    [Parameter(Mandatory = $true)][string]$Model,
-    [int]$MaxTokens = 150,
-    [string]$AuthToken = "",
-    [int]$TimeoutSec = 5
-  )
-
-  $requestBody = [PSCustomObject]@{
-    model      = $Model
-    max_tokens = $MaxTokens
-    stream     = $false
-    messages   = @(
-      [PSCustomObject]@{ role = "user"; content = $TextData }
-    )
-  }
-  # -Depth 5 matters: the default depth (2) would silently truncate the
-  # nested messages[0] object down to its string representation instead of
-  # a real JSON object.
-  $bodyJson = $requestBody | ConvertTo-Json -Depth 5 -Compress
-  $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
-
-  return Invoke-HttpPostRaw -Url $Url -BodyBytes $bodyBytes `
-    -ContentType "application/json" `
-    -AuthToken $AuthToken -TimeoutSec $TimeoutSec
-}
-
-# ConvertFrom-PnMessagesResponse -ResponseBody ...
-# Mirrors pn_parse_messages_response (common.sh) exactly -- see that
-# function's comment for the full detection-rule rationale (why zero usage
-# alone is treated as "anomaly" rather than guessed as allow/block, why
-# content[] is scanned by type instead of indexed at [0], etc).
-# Returns [PSCustomObject]@{ Action = "allow"|"block"|"anomaly"; Message = "..." }
-# (block: the extracted block reason; allow: the backend's actual reply
-# text; anomaly: the raw text content, if any -- all three in full, never
-# truncated: max_tokens already bounds how large this can get, and
-# clipping a real block/anomaly finding to hide it behind a canned
-# sentence defeats the point of showing it at all.)
-#
-# This whole function is a stopgap, not a permanent design (P2-1) --
-# mirrors pn_parse_messages_response in common.sh, see that function's
-# comment for the full rationale. The real fix is a backend change (an
-# explicit verdict field or response header); Add-PnScanAnomaly /
-# Reset-PnScanAnomaly (below) are a mitigation for the silent-failure
-# risk in the meantime, not a fix for the underlying fragility.
-function ConvertFrom-PnMessagesResponse {
-  param(
-    [Parameter(Mandatory = $true)][string]$ResponseBody
-  )
-
-  $result = [PSCustomObject]@{ Action = "allow"; Message = "" }
-
-  $parsed = $null
-  try {
-    $parsed = $ResponseBody | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    $result.Action = "anomaly"
-    return $result
-  }
-
-  $usage = Get-JsonProperty -InputObject $parsed -Name "usage" -Default $null
-  $inputTokens = $null
-  $outputTokens = $null
-  if ($usage) {
-    $inputTokens = Get-JsonProperty -InputObject $usage -Name "input_tokens" -Default $null
-    $outputTokens = Get-JsonProperty -InputObject $usage -Name "output_tokens" -Default $null
-  }
-
-  # @(...) matters: Get-JsonProperty returning a single content block would
-  # otherwise unwrap to a bare object instead of a one-element array, and
-  # the foreach below would iterate its properties instead of the block.
-  $contentBlocks = @(Get-JsonProperty -InputObject $parsed -Name "content" -Default @())
-  $textBlock = $null
-  foreach ($block in $contentBlocks) {
-    $blockType = Get-JsonProperty -InputObject $block -Name "type" -Default ""
-    if ($blockType -eq "text") {
-      $textBlock = Get-JsonProperty -InputObject $block -Name "text" -Default ""
-      break
-    }
-  }
-
-  if ($null -eq $inputTokens -or $null -eq $outputTokens -or $null -eq $textBlock) {
-    $result.Action = "anomaly"
-    # Best-effort: a missing text block means there's nothing to show
-    # (textBlock is already empty in that case), but missing/malformed
-    # usage numbers can still come with real text content worth showing,
-    # in full -- not guessed or trimmed, same reasoning as the zero-usage
-    # anomaly branch below.
-    if ($textBlock) {
-      $result.Message = $textBlock
-    }
-    return $result
-  }
-
-  if ([int]$inputTokens -eq 0 -and [int]$outputTokens -eq 0) {
-    if ($textBlock -like "*REQUEST BLOCKED*") {
-      $result.Action = "block"
-      $result.Message = ConvertTo-PnStrippedBlockBanner -Text $textBlock
-    } else {
-      $result.Action = "anomaly"
-      # Unlike a block, there's no known scaffolding to strip here -- an
-      # anomaly is by definition a shape we don't recognize (e.g. a real,
-      # legitimate block banner variant this heuristic doesn't know about
-      # yet -- confirmed to happen in practice: a "RESPONSE BLOCKED"
-      # post-generation banner, not just "REQUEST BLOCKED"). The raw text
-      # is shown in full rather than guessed at, hidden, or clipped --
-      # the caller decides how to present it, this function just refuses
-      # to throw away real content behind a canned "unexpected response"
-      # sentence.
-      $result.Message = $textBlock
-    }
-  } else {
-    # Real allow (non-zero usage): the backend is also a coding assistant,
-    # not just a scanner -- on this path its reply can be genuinely useful
-    # content (e.g. working code plus an explanation), not throwaway
-    # filler. Surfaced in full, the same way the block banner's own
-    # explanation is used verbatim rather than clipped -- clipping a
-    # real, useful answer would defeat the point of surfacing it at all.
-    $result.Message = $textBlock
-  }
-
-  return $result
-}
-
-# ConvertTo-PnStrippedBlockBanner <raw_block_banner_text>
-# Mirrors pn_strip_block_banner in common.sh -- see that function's
-# comment for the full rationale: the block banner has one confirmed-
-# fixed part (the "====" divider lines, the "REQUEST BLOCKED" line, and
-# the wrapping ``` code fence) and one part that varies and cannot be
-# predicted (the actual explanation -- observed as both a short phrase
-# and a long, multi-finding structured report). Stripping only the
-# confirmed-fixed scaffolding and keeping whatever's left works
-# regardless of which shape the backend sends.
-function ConvertTo-PnStrippedBlockBanner {
-  param([Parameter(Mandatory = $true)][string]$Text)
-
-  $lines = @($Text -split '\r?\n' | Where-Object {
-    $_ -notmatch '^```' -and
-    $_ -notmatch '^[ \t]*=+[ \t]*$' -and
-    $_ -notmatch '^[ \t]*REQUEST BLOCKED[ \t]*$'
-  })
-
-  $startIndex = 0
-  while ($startIndex -lt $lines.Count -and $lines[$startIndex] -match '^[ \t]*$') { $startIndex++ }
-  $endIndex = $lines.Count - 1
-  while ($endIndex -ge $startIndex -and $lines[$endIndex] -match '^[ \t]*$') { $endIndex-- }
-
-  if ($startIndex -gt $endIndex) { return "" }
-  return ($lines[$startIndex..$endIndex] -join "`n")
 }
 
 # Write-DebugLog -Message ... -LogPath ...
@@ -672,6 +552,73 @@ function Get-CurrentTurnText {
     }
   }
   return ($textParts -join "`n`n")
+}
+
+# Same scoping as Get-CurrentTurnText (last user message to end of file),
+# but role-separated into $Script:PnTurnPrompt/$Script:PnTurnResponse
+# instead of one blended string -- for Code Chain's turn-recording payload
+# (lib/codechain-client.ps1), which has distinct Prompt/Response fields.
+# Both globals are reset to "" up front so a missing/unreadable transcript
+# leaves neither stale from a previous call in the same process.
+function Get-CurrentTurnMessages {
+  param(
+    [Parameter(Mandatory = $true)][string]$TranscriptPath,
+    [int]$MaxLines = 500
+  )
+
+  $Script:PnTurnPrompt = ""
+  $Script:PnTurnResponse = ""
+
+  if (-not (Test-Path $TranscriptPath -PathType Leaf)) {
+    return
+  }
+
+  try {
+    $lines = @(Get-Content -Path $TranscriptPath -Tail $MaxLines -ErrorAction Stop)
+  } catch {
+    return
+  }
+
+  $parsed = New-Object System.Collections.Generic.List[object]
+  foreach ($line in $lines) {
+    if (-not $line) { continue }
+    try {
+      $parsed.Add(($line | ConvertFrom-Json -ErrorAction Stop))
+    } catch {
+      # Skip a malformed/partial line -- see Get-CurrentTurnText's identical comment.
+    }
+  }
+  if ($parsed.Count -eq 0) {
+    return
+  }
+
+  $startIndex = 0
+  for ($i = $parsed.Count - 1; $i -ge 0; $i--) {
+    $role = Get-JsonProperty -InputObject $parsed[$i] -Name "role" -Default ""
+    if ($role -eq "user") {
+      $startIndex = $i
+      break
+    }
+  }
+
+  $promptParts = New-Object System.Collections.Generic.List[string]
+  $responseParts = New-Object System.Collections.Generic.List[string]
+  for ($i = $startIndex; $i -lt $parsed.Count; $i++) {
+    $role = Get-JsonProperty -InputObject $parsed[$i] -Name "role" -Default ""
+    $message = Get-JsonProperty -InputObject $parsed[$i] -Name "message" -Default $null
+    if ($null -eq $message) { continue }
+    $content = @(Get-JsonProperty -InputObject $message -Name "content" -Default @())
+    foreach ($block in $content) {
+      $blockType = Get-JsonProperty -InputObject $block -Name "type" -Default ""
+      if ($blockType -ne "text") { continue }
+      $text = Get-JsonProperty -InputObject $block -Name "text" -Default ""
+      if (-not $text) { continue }
+      if ($role -eq "user") { $promptParts.Add($text) }
+      elseif ($role -eq "assistant") { $responseParts.Add($text) }
+    }
+  }
+  $Script:PnTurnPrompt = ($promptParts -join "`n`n")
+  $Script:PnTurnResponse = ($responseParts -join "`n`n")
 }
 
 # --- Hook response helpers (for beforeSubmitPrompt / preToolUse) ---

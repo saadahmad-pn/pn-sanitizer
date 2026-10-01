@@ -83,6 +83,13 @@ Windows:
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\logout.ps1"
 ```
 
+Run this command **exactly as shown above and nothing else** — don't combine
+it with `cd`, `&&`, `;`, or any other command, and don't add any flags. This
+precise, standalone shape (with no arguments) is what lets Paradigm
+Networks' own security scanning recognize it as the logout step and skip
+scanning it; anything else about the command line falls back to being
+scanned like any other tool call.
+
 ### 4. Relay the outcome
 
 Relay what the script printed verbatim — don't paraphrase or summarize it.

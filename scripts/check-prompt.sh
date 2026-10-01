@@ -20,34 +20,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/plugins-client.sh"
+source "$SCRIPT_DIR/lib/repo-context.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
-SCAN_URL_OVERRIDE="${PARADIGM_NETWORKS_SCAN_URL_OVERRIDE:-}"
-TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-240}"
+TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-60}"
 DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
-
-# codedefense/scan is retired; this now calls the Anthropic-compatible
-# /v1/messages endpoint on the same backend, which requires a model.
-# pn_resolve_model (pn_config.sh) is the shared precedence chain (env var
-# override > saved preference > hardcoded default) -- see its own
-# comment for the full rationale. The hardcoded default is a cheap/fast
-# tier, chosen because testing showed the block/allow verdict is
-# identical across models and max_tokens values -- the platform's guard
-# fires before the requested model ever runs, so model choice only
-# affects cost/latency on the allow-path reply, not detection accuracy.
-pn_resolve_model
-MODEL="$PN_RESOLVED_MODEL"
-# The block banner itself is never subject to max_tokens (confirmed via
-# live testing: output_tokens is 0 even for the full banner, since the
-# platform's guard injects it before the requested model runs at all), so
-# this budget only governs the allow-path reply's length. Raised from an
-# earlier 150 (which comfortably covered the banner but wasn't meant to
-# cover anything else, back when that reply was discarded) now that the
-# reply is surfaced to the user as user_message -- 150 would truncate most
-# real answers (a plain "write me hello.py" reply alone ran ~224 output
-# tokens in testing).
-MAX_TOKENS=1024
 
 # PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (manual env var override:
 # block/allow — no Cursor Settings UI for this, must be set directly in
@@ -101,6 +81,40 @@ main() {
   local prompt
   prompt=$(echo "$payload" | "$JQ_BIN" -r '.prompt // ""')
 
+  # Repo/branch context injection (formerly the separate check-repo-context.sh
+  # hook, now folded into this single beforeSubmitPrompt entry -- see
+  # design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md
+  # §5). Backgrounded: it never gates (writes a rule file only, nothing here
+  # calls Paradigm Networks) and must never delay this hook's actual gate.
+  local workspace_roots
+  workspace_roots=$(echo "$payload" | "$JQ_BIN" -r '.workspace_roots[]? // empty')
+  if [[ -n "$workspace_roots" ]]; then
+    write_repo_context_rules "$workspace_roots" &
+  fi
+
+  # Extract session id + cwd (for the scan call's chatapi join and context
+  # -- see lib/scan-client.sh's header) and derive git context from cwd the
+  # same way every other hook here does (check-turn-complete.sh et al).
+  local client_session_id cwd git_repo_url="" git_branch="" generation_id model
+  client_session_id=$(echo "$payload" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
+  cwd=$(echo "$payload" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
+  # Cursor's own generation_id -- changes per user turn, unlike
+  # conversation_id. Lets control-server match this prompt scan to the
+  # exact turn it belongs to -- see lib/scan-client.sh's header.
+  generation_id=$(echo "$payload" | "$JQ_BIN" -r '.generation_id // ""')
+  # Cursor's own hook-reported model name -- stored on the chatapi document
+  # so it's known which model this prompt was scanned/sent against.
+  # model_id ("Structured ID for the selected model, when available", per
+  # Cursor's hooks docs) is preferred over the legacy model slug -- see
+  # resolve_hook_model's header comment in lib/common.sh.
+  model_id=$(echo "$payload" | "$JQ_BIN" -r '.model_id // ""')
+  model_legacy=$(echo "$payload" | "$JQ_BIN" -r '.model // ""')
+  model=$(resolve_hook_model "$model_id" "$model_legacy")
+  if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
+    git_repo_url=$(get_remote_url_or_empty "$cwd")
+    git_branch=$(get_current_branch_or_empty "$cwd")
+  fi
+
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
@@ -112,146 +126,98 @@ main() {
   local access_token
   read -r base_url access_token <<<"$config"
 
-  local scan_url="${SCAN_URL_OVERRIDE}"
-  if [[ -z "$scan_url" ]]; then
-    scan_url="${base_url%/}/v1/messages"
-  fi
-
-  # Log debug info
-  log_debug "Scanning prompt | base_url=$base_url | scan_url=$scan_url | model=$MODEL | prompt_len=${#prompt}" "$DEBUG_LOG_PATH"
-  log_debug "Request body: ${prompt:0:200}$([ ${#prompt} -gt 200 ] && echo '...' || true)" "$DEBUG_LOG_PATH"
+  log_debug "Scanning prompt | base_url=$base_url | prompt_len=${#prompt}" "$DEBUG_LOG_PATH"
+  log_debug "Prompt preview: ${prompt:0:200}$([ ${#prompt} -gt 200 ] && echo '...' || true)" "$DEBUG_LOG_PATH"
   log_debug "Timeout: ${TIMEOUT_SECONDS}s" "$DEBUG_LOG_PATH"
 
-  # Log request details
-  log_debug "Sending POST request to $scan_url" "$DEBUG_LOG_PATH"
-
-  # Built via jq -n --arg, not string interpolation: the prompt can contain
-  # quotes/backslashes/newlines that must be escaped correctly, and jq
-  # handles that safely where hand-built JSON would not.
-  local json_body
-  json_body=$("$JQ_BIN" -n \
-    --arg model "$MODEL" \
-    --argjson max_tokens "$MAX_TOKENS" \
-    --arg content "$prompt" \
-    '{model: $model, max_tokens: $max_tokens, stream: false, messages: [{role: "user", content: $content}]}')
-
-  local response
-  local raw_response
-  raw_response=$(http_post_json "$scan_url" "$json_body" "$access_token" "$TIMEOUT_SECONDS")
-  local curl_exit=$?
-  http_post_split_status "$raw_response"
-  response="$HTTP_POST_BODY"
-
-  # Handle curl errors. These three branches run only after pn_resolve_config
-  # already succeeded (the user is logged in), so it's safe to honor
-  # PROMPT_FAILURE_MODE here — no onboarding deadlock risk.
-  if [[ $curl_exit -eq 28 ]]; then
-    # Timeout
-    log_debug "API timeout | after ${TIMEOUT_SECONDS}s | url=$scan_url" "$DEBUG_LOG_PATH"
-    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-      json_deny "The scanning service timed out (${TIMEOUT_SECONDS}s). Prompt blocked."
-    else
-      json_allow "The scanning service timed out (${TIMEOUT_SECONDS}s). Allowing prompt."
-    fi
-    return 0
-  elif [[ $curl_exit -ne 0 ]]; then
-    # Connection error
-    log_debug "API unreachable | curl exit=$curl_exit | url=$scan_url" "$DEBUG_LOG_PATH"
-    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-      json_deny "The scanning service is unreachable. Prompt blocked."
-    else
-      json_allow "The scanning service is unreachable. Allowing prompt."
-    fi
-    return 0
-  fi
-
-  # HTTP 403 from this endpoint means the org is logged in but has no
-  # models configured on the backend -- a known, deterministic state, not
-  # a transient/ambiguous failure. Always block here regardless of
-  # PROMPT_FAILURE_MODE (same posture as the unconditional-allow branches
-  # above for "not configured"/"jq missing": a known state gets a fixed,
-  # correct outcome rather than being left to the generic failure-mode
-  # setting). This intentionally does not distinguish sub-causes of 403
-  # (e.g. an expired token would also land here) -- if that turns out to
-  # matter, the fix is to inspect the response body for a specific error
-  # code rather than relax this branch.
-  if [[ "$HTTP_POST_STATUS" == "403" ]]; then
-    log_debug "API HTTP 403 | url=$scan_url" "$DEBUG_LOG_PATH"
-    json_deny "### 🛡️ Complete Your Paradigm Networks Setup
-
-You're logged in successfully, but a few setup steps are still pending before you can start sending prompts.
-
-Please visit the following link to finish your configuration, and then try again:
-[${base_url%/}](${base_url%/})
-
-If you run into any issues during setup, feel free to reach out to customer.support@paradigmnetworks.ai for assistance."
-    return 0
-  fi
-
-  # Reject other non-2xx responses (expired/invalid token, server error,
-  # etc.) before treating the body as a real verdict — a valid-JSON error
-  # body (e.g. {"error": "unauthorized"}) would otherwise default to
-  # "allow" via the // fallback below and silently mask the actual failure.
-  if [[ "$HTTP_POST_STATUS" != 2* ]]; then
-    log_debug "API HTTP error | status=$HTTP_POST_STATUS | url=$scan_url" "$DEBUG_LOG_PATH"
-    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-      json_deny "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Prompt blocked."
-    else
-      json_allow "The scanning service returned an error (HTTP ${HTTP_POST_STATUS}). Allowing prompt."
-    fi
-    return 0
-  fi
-
-  # Validate response is JSON
-  if ! echo "$response" | "$JQ_BIN" empty 2>/dev/null; then
-    log_debug "API invalid JSON response | url=$scan_url" "$DEBUG_LOG_PATH"
-    if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-      json_deny "The scanning service returned an invalid response. Prompt blocked."
-    else
-      json_allow "The scanning service returned an invalid response. Allowing prompt."
-    fi
-    return 0
-  fi
-
-  # pn_parse_messages_response (lib/common.sh) classifies this response --
-  # see that function's comment for the full detection-rule rationale.
-  # Called as a plain statement, not $(...): it sets PN_MSG_ACTION /
-  # PN_MSG_MESSAGE as globals in this shell, same contract as
+  # pn_plugin_before_prompt (lib/plugins-client.sh) posts to the standardized
+  # prompts domain (Action=before_prompt) -- runs the composite
+  # PromptGuard+PolicyEngine+CodeDefense scan, no model invocation, a real
+  # structured action_to_take verdict. Called as a plain statement, not
+  # $(...): it sets PN_PROMPT_* as globals in this shell, same contract as
   # http_post_split_status above.
-  pn_parse_messages_response "$response"
-  local action="$PN_MSG_ACTION"
+  pn_plugin_before_prompt "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "$generation_id" "$model"
 
-  log_debug "API response received | action=$action" "$DEBUG_LOG_PATH"
+  # These four failure states happen only after pn_resolve_config already
+  # succeeded (the user is logged in), so it's safe to honor
+  # PROMPT_FAILURE_MODE here — no onboarding deadlock risk.
+  case "$PN_PROMPT_STATUS" in
+    no_session)
+      # Every beforeSubmitPrompt payload observed so far has carried
+      # conversation_id, so this is not expected in practice -- treated the
+      # same as an invalid response rather than a distinct message, since
+      # there's nothing actionable to tell the user beyond "unscanned".
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "The scanning service could not be reached (no session id available). Prompt blocked."
+      else
+        json_allow "The scanning service could not be reached (no session id available). Allowing prompt."
+      fi
+      return 0
+      ;;
+    timeout)
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "The scanning service timed out (${TIMEOUT_SECONDS}s). Prompt blocked."
+      else
+        json_allow "The scanning service timed out (${TIMEOUT_SECONDS}s). Allowing prompt."
+      fi
+      return 0
+      ;;
+    unreachable)
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "The scanning service is unreachable. Prompt blocked."
+      else
+        json_allow "The scanning service is unreachable. Allowing prompt."
+      fi
+      return 0
+      ;;
+    http_error)
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "The scanning service returned an error (HTTP ${PN_PROMPT_HTTP_STATUS}). Prompt blocked."
+      else
+        json_allow "The scanning service returned an error (HTTP ${PN_PROMPT_HTTP_STATUS}). Allowing prompt."
+      fi
+      return 0
+      ;;
+    invalid_json)
+      if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+        json_deny "The scanning service returned an invalid response. Prompt blocked."
+      else
+        json_allow "The scanning service returned an invalid response. Allowing prompt."
+      fi
+      return 0
+      ;;
+  esac
+
+  log_debug "Scan response received | action=$PN_PROMPT_ACTION" "$DEBUG_LOG_PATH"
 
   # Return verdict
-  case "$action" in
-    anomaly)
-      # Zero usage without the block banner -- an unrecognized response
-      # shape, not a confirmed verdict either way. Same posture as an
-      # invalid-JSON or non-2xx response above: don't guess allow or block.
-      log_debug "API response shape unexpected (zero usage, no block banner) | url=$scan_url" "$DEBUG_LOG_PATH"
+  case "$PN_PROMPT_ACTION" in
+    ""|null)
+      # A valid JSON response with no recognized action_to_take -- an
+      # unexpected response shape, not a confirmed verdict either way. Same
+      # posture as an invalid-JSON or non-2xx response above: don't guess
+      # allow or block.
+      log_debug "Scan response shape unexpected (no recognized action_to_take)" "$DEBUG_LOG_PATH"
       local anomaly_streak
       anomaly_streak=$(pn_record_scan_anomaly)
       local anomaly_prefix=""
       if [[ "$anomaly_streak" -ge "$PN_ANOMALY_WARNING_THRESHOLD" ]]; then
         anomaly_prefix="⚠️ Security scanning has failed ${anomaly_streak} times in a row and may not be protecting you right now. Contact your administrator. "
       fi
-      # PN_MSG_MESSAGE is whatever the backend actually returned, in full
-      # (may be empty if there was truly no text content at all). Shown
-      # directly, the same way a real block's reason is shown directly --
-      # not wrapped in a canned "unexpected response" sentence, which
-      # would bury real content (e.g. a not-yet-recognized block-banner
-      # variant, confirmed to happen in practice) behind boilerplate. The
-      # generic sentence is only a last resort when there's genuinely
-      # nothing to show.
-      if [[ -n "$PN_MSG_MESSAGE" ]]; then
+      if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
         if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
-          json_deny "${anomaly_prefix}${PN_MSG_MESSAGE}"
+          # Same reasoning as the block) case below: before_prompt already
+          # opened a real record on the server, and afterAgentResponse will
+          # never fire for a denied prompt -- close it out here instead of
+          # leaving it open.
+          pn_plugin_after_agent_response "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "[BLOCKED] ${anomaly_prefix}${PN_PROMPT_MESSAGE}" "$generation_id" "$model"
+          json_deny "${anomaly_prefix}${PN_PROMPT_MESSAGE}"
         else
-          json_allow "${anomaly_prefix}${PN_MSG_MESSAGE}"
+          json_allow "${anomaly_prefix}${PN_PROMPT_MESSAGE}"
         fi
       else
         if [[ "$PROMPT_FAILURE_MODE" == "closed" ]]; then
+          pn_plugin_after_agent_response "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "[BLOCKED] ${anomaly_prefix}The scanning service returned an unexpected response. Prompt blocked." "$generation_id" "$model"
           json_deny "${anomaly_prefix}The scanning service returned an unexpected response. Prompt blocked."
         else
           json_allow "${anomaly_prefix}The scanning service returned an unexpected response. Allowing prompt."
@@ -263,15 +229,17 @@ If you run into any issues during setup, feel free to reach out to customer.supp
       # Markdown formatting (**bold**, blank-line breaks, `inline code`,
       # `### heading`, and `> blockquote`) confirmed rendering correctly
       # in Cursor's UI.
-      #
-      # PN_MSG_MESSAGE is the block banner's own explanation, with only
-      # the confirmed-fixed scaffolding stripped (pn_strip_block_banner
-      # in lib/common.sh) -- no second extraction pass needed here. It's
-      # already a complete explanation in the backend's own words, and
-      # can be either a short phrase-in-a-sentence or a long multi-line
-      # structured report, so the "Concern" section below has to handle
-      # both shapes rather than assuming a short one-liner.
-      local reason="$PN_MSG_MESSAGE"
+      local reason="$PN_PROMPT_MESSAGE"
+      [[ -z "$reason" ]] && reason="A policy violation was detected."
+
+      # A blocked prompt never reaches the agent, so Cursor's
+      # afterAgentResponse hook -- the only thing that normally calls
+      # pn_plugin_after_agent_response -- never fires for this turn. Left
+      # alone, the turn this before_prompt call opened would stay open on
+      # the server forever, with no outcome ever attached, even though we
+      # already know it: it was blocked, for this reason. Close it out here
+      # instead of waiting for a response that will never come.
+      pn_plugin_after_agent_response "$base_url" "$access_token" "$TIMEOUT_SECONDS" "$client_session_id" "$cwd" "$git_repo_url" "$git_branch" "$prompt" "[BLOCKED] $reason" "$generation_id" "$model"
 
       # Preview of the actual prompt that got flagged, capped at 60 words
       # so a long prompt doesn't blow up the message. Collapsed to a
@@ -312,19 +280,21 @@ $concern_section
 > $flagged_preview"
       json_deny "$branded_message"
       ;;
-    *)
-      # "allow" is the only other action pn_parse_messages_response
-      # produces -- there is no "warn" state on this endpoint (see that
-      # function's comment). The backend is also a coding assistant, not
-      # just a scanner, so its reply (PN_MSG_MESSAGE, full text on this
-      # path) is surfaced as user_message rather than discarded -- may be
-      # empty if there was no text content to show. Cursor's own hooks
-      # docs describe user_message as shown "when blocked"; whether it's
-      # actually rendered on an allow too is unconfirmed and being tested
-      # live rather than assumed either way.
+    warn)
+      # Non-blocking: surface the scan's own explanation as a notice and
+      # let the prompt proceed.
       pn_record_successful_scan
-      if [[ -n "$PN_MSG_MESSAGE" ]]; then
-        json_allow "$PN_MSG_MESSAGE"
+      if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
+        json_allow "$PN_PROMPT_MESSAGE"
+      else
+        json_allow
+      fi
+      ;;
+    *)
+      # "allow"
+      pn_record_successful_scan
+      if [[ -n "$PN_PROMPT_MESSAGE" ]]; then
+        json_allow "$PN_PROMPT_MESSAGE"
       else
         json_allow
       fi

@@ -96,6 +96,45 @@ json_merge() {
   echo "$json1" "$json2" | "$JQ_BIN" -s '.[0] * .[1]'
 }
 
+# normalize_hook_model strips Cursor's own "unknown" placeholder (sent
+# verbatim on its .model hook field when the model hasn't resolved yet at
+# hook-fire time -- e.g. Auto model mode) down to an empty string, so it
+# reads as genuinely absent rather than being sent to control-server and
+# persisted in the chatapi collection as if "unknown" were a real model
+# identifier. Case-insensitive since Cursor's own casing for this value is
+# not documented/guaranteed. Confirmed via control-server's raw-payload debug
+# logging (2026-09-22): a real afterAgentResponse payload carried
+# "model":"unknown" -- this is Cursor's own value, not something introduced
+# by this plugin's extraction, so the fix belongs at the point where we read
+# it, not on the server.
+normalize_hook_model() {
+  local model="$1"
+  case "$model" in
+    [Uu][Nn][Kk][Nn][Oo][Ww][Nn])
+      printf ''
+      ;;
+    *)
+      printf '%s' "$model"
+      ;;
+  esac
+}
+
+# resolve_hook_model picks the best available model identifier from a
+# Cursor hook payload: model_id (Cursor's docs: "Structured ID for the
+# selected model, when available" -- optional, newer) when present, falling
+# back to model (Cursor's docs: "Legacy model slug configured for the
+# composer") when model_id is absent -- e.g. an older Cursor build that
+# doesn't send it yet. Whichever value is chosen is passed through
+# normalize_hook_model, since either field could in principle carry the
+# "unknown" placeholder.
+resolve_hook_model() {
+  local model_id="$1"
+  local legacy_model="$2"
+  local chosen="$model_id"
+  [[ -z "$chosen" ]] && chosen="$legacy_model"
+  normalize_hook_model "$chosen"
+}
+
 # HTTP helpers
 
 http_post() {
@@ -119,26 +158,6 @@ http_post() {
     2>/dev/null
 
   return $?
-}
-
-# Same body+status-via-trailing-line contract as http_post_form/
-# http_post_json below (split off with http_post_split_status, which works
-# for any of the three despite its name) -- used for GET /v1/models.
-http_get() {
-  local url="$1"
-  local auth_token="$2"
-  local timeout="${3:-5}"
-
-  local headers=()
-  if [[ -n "$auth_token" ]]; then
-    headers+=(-H "Authorization: Bearer $auth_token")
-  fi
-
-  curl -s -X GET "$url" \
-    "${headers[@]}" \
-    --max-time "$timeout" \
-    -w $'\n%{http_code}' \
-    2>/dev/null
 }
 
 http_post_form() {
@@ -193,10 +212,38 @@ http_post_json() {
     2>/dev/null
 }
 
-# Splits the combined body+status output of http_post_form / http_post_json.
-# Must be called as a plain function call (never via $(...)) so
-# HTTP_POST_BODY/HTTP_POST_STATUS persist in the caller's own shell instead
-# of vanishing with a subshell.
+# http_post_multipart_form <url> <auth_token> <timeout> <curl_form_arg>...
+# Generic multipart/form-data POST for the detections API (lib/detection-
+# client.sh) -- unlike http_post_form above (which always sends exactly one
+# "text" field), the field set here varies per caller (flat form fields plus
+# zero or more repeated file parts), so the caller builds the full list of
+# curl --form-string/-F arguments itself and this function just adds
+# auth/timeout/status-capture around it. Same body+status-via-trailing-line
+# contract as http_post_form/http_post_json (split off with
+# http_post_split_status).
+http_post_multipart_form() {
+  local url="$1"
+  local auth_token="$2"
+  local timeout="$3"
+  shift 3
+
+  local headers=()
+  if [[ -n "$auth_token" ]]; then
+    headers+=(-H "Authorization: Bearer $auth_token")
+  fi
+
+  curl -s -X POST "$url" \
+    "${headers[@]}" \
+    "$@" \
+    --max-time "$timeout" \
+    -w $'\n%{http_code}' \
+    2>/dev/null
+}
+
+# Splits the combined body+status output of http_post_form / http_post_json /
+# http_post_multipart_form. Must be called as a plain function call (never
+# via $(...)) so HTTP_POST_BODY/HTTP_POST_STATUS persist in the caller's own
+# shell instead of vanishing with a subshell.
 http_post_split_status() {
   local raw="$1"
   HTTP_POST_BODY="${raw%$'\n'*}"
@@ -425,132 +472,6 @@ json_session_context() {
   echo "{\"additional_context\": $ctx_json}"
 }
 
-# pn_parse_messages_response <raw_json_response>
-# Classifies a /v1/messages (Anthropic-compatible) response as
-# "allow"/"block"/"anomaly" -- there is no purpose-built status field on
-# this endpoint, only a chat-completion shape, so this is reverse-engineered
-# from observed behavior: a request the platform's guard blocks comes back
-# as a normal 200 with usage.input_tokens/output_tokens both exactly 0 (a
-# real completion is never 0/0) and a "REQUEST BLOCKED" banner injected
-# into a text content block in place of an actual model reply.
-#
-# Deliberately NOT a simple "banner text AND zero usage" check: that fails
-# OPEN (the wrong direction for a security gate) if the banner wording ever
-# changes upstream -- zero usage would still be true, but a text match
-# alone would then read as "allow". Zero usage without the banner text is
-# instead treated as "anomaly", the same posture as an invalid-JSON or
-# non-2xx response: an unrecognized shape must not be silently guessed as
-# "allow" or "block", it needs to fail through the caller's existing
-# FAILURE_MODE/PROMPT_FAILURE_MODE branching. Missing usage numbers or no
-# text content block at all are anomalies for the same reason.
-#
-# Sets globals PN_MSG_ACTION ("allow"|"block"|"anomaly") and PN_MSG_MESSAGE
-# (block: the extracted block reason; allow: the backend's actual reply
-# text; anomaly: the raw text content, if any -- all three in full, never
-# truncated: max_tokens already bounds how large this can get, and
-# clipping a real block/anomaly finding to hide it behind a canned
-# sentence defeats the point of showing it at all). Must be called as a
-# plain function call (never via $(...)), same requirement as
-# http_post_split_status above.
-#
-# This whole function is a stopgap, not a permanent design (P2-1): any
-# upstream change to usage accounting or the block banner's wording turns
-# every scan into "anomaly", which is a silent, complete loss of
-# enforcement under the prompt hook's fail-open default. The real fix is
-# a backend change -- an explicit verdict field or response header on
-# this endpoint, at which point this function becomes a one-line check
-# with this heuristic kept only as a fallback. That request should be
-# tracked as an issue against the backend/control-server team (not
-# something this repo can file on their behalf) and linked here once it
-# exists. In the meantime, pn_record_scan_anomaly/pn_reset_scan_anomaly
-# (below) give a caller a way to escalate a sustained anomaly streak into
-# a loud, visible warning instead of staying silent indefinitely --
-# that's a mitigation, not a fix for the underlying fragility.
-pn_parse_messages_response() {
-  local response="$1"
-
-  PN_MSG_ACTION="allow"
-  PN_MSG_MESSAGE=""
-
-  local input_tokens output_tokens has_text_block text_content
-  input_tokens=$(echo "$response" | "$JQ_BIN" -r '.usage.input_tokens // "missing"')
-  output_tokens=$(echo "$response" | "$JQ_BIN" -r '.usage.output_tokens // "missing"')
-  # Never assume content[0] is the text block -- a thinking-capable model
-  # could put a non-text block first, silently degrading the reason to
-  # empty if indexed positionally instead of by type.
-  has_text_block=$(echo "$response" | "$JQ_BIN" -r '[.content[]? | select(.type == "text")] | length > 0')
-  text_content=$(echo "$response" | "$JQ_BIN" -r '[.content[]? | select(.type == "text") | .text][0] // ""')
-
-  if [[ "$input_tokens" == "missing" ]] || [[ "$output_tokens" == "missing" ]] || [[ "$has_text_block" != "true" ]]; then
-    PN_MSG_ACTION="anomaly"
-    # Best-effort: a missing text block means there's nothing to show
-    # (text_content is already "" in that case), but missing/malformed
-    # usage numbers can still come with real text content worth showing,
-    # in full -- not guessed or trimmed, same reasoning as the zero-usage
-    # anomaly branch below.
-    PN_MSG_MESSAGE="$text_content"
-    return 0
-  fi
-
-  if [[ "$input_tokens" == "0" ]] && [[ "$output_tokens" == "0" ]]; then
-    if [[ "$text_content" == *"REQUEST BLOCKED"* ]]; then
-      PN_MSG_ACTION="block"
-      PN_MSG_MESSAGE="$(pn_strip_block_banner "$text_content")"
-    else
-      PN_MSG_ACTION="anomaly"
-      # Unlike a block, there's no known scaffolding to strip here -- an
-      # anomaly is by definition a shape we don't recognize (e.g. a real,
-      # legitimate block banner variant this heuristic doesn't know about
-      # yet -- confirmed to happen in practice: a "RESPONSE BLOCKED"
-      # post-generation banner, not just "REQUEST BLOCKED"). The raw text
-      # is shown in full rather than guessed at, hidden, or clipped --
-      # the caller decides how to present it, this function just refuses
-      # to throw away real content behind a canned "unexpected response"
-      # sentence.
-      PN_MSG_MESSAGE="$text_content"
-    fi
-  else
-    # Real allow (non-zero usage): the backend is also a coding assistant,
-    # not just a scanner -- on this path its reply can be genuinely useful
-    # content (e.g. working code plus an explanation), not throwaway
-    # filler. Surfaced in full, the same way the block banner's own
-    # explanation is used verbatim rather than clipped -- clipping a
-    # real, useful answer would defeat the point of surfacing it at all.
-    PN_MSG_MESSAGE="$text_content"
-  fi
-}
-
-# pn_strip_block_banner <raw_block_banner_text>
-# The block banner has one confirmed-fixed part -- the "====" divider
-# lines and the "REQUEST BLOCKED" line between them (and the wrapping
-# ``` code fence) -- and one part that varies and cannot be predicted:
-# the actual explanation, which has been observed as both a short phrase
-# ("...security concerns: destructive operation.") and a long, multi-
-# finding structured report (an OWASP Top 10 / ASVS breakdown with
-# severity/category/issue/snippet/fix per finding). Trying to regex-match
-# the varying part's wording broke the moment the backend introduced a
-# second banner shape -- the old pattern only matched the first one, and
-# silently fell back to dumping the entire raw banner (dividers and all)
-# wrapped inside this script's own sentence, producing a doubled, mangled
-# message. Stripping only the confirmed-fixed scaffolding and keeping
-# whatever's left -- short or long -- works regardless of which shape
-# the backend sends, including any future shape not seen yet.
-pn_strip_block_banner() {
-  local text="$1"
-  printf '%s\n' "$text" | awk '
-    /^```/ { next }
-    /^[ \t]*=+[ \t]*$/ { next }
-    /^[ \t]*REQUEST BLOCKED[ \t]*$/ { next }
-    { lines[++n] = $0 }
-    END {
-      start = 1; end = n
-      while (start <= end && lines[start] ~ /^[ \t]*$/) start++
-      while (end >= start && lines[end] ~ /^[ \t]*$/) end--
-      for (i = start; i <= end; i++) print lines[i]
-    }
-  '
-}
-
 # Utility functions
 
 file_read_tail() {
@@ -616,4 +537,41 @@ get_current_turn_text() {
       | [.[] | (.message.content // [])[]? | select(.type == "text") | .text]
       | join("\n\n")
     ' 2>/dev/null
+}
+
+# Same scoping as get_current_turn_text (last user message to end of file),
+# but role-separated into PN_TURN_PROMPT/PN_TURN_RESPONSE instead of one
+# blended blob -- for Code Chain's turn-recording payload (lib/codechain-
+# client.sh), which has distinct Prompt/Response fields. Must be called as a
+# plain statement (see the multi-value-return convention above), never
+# $(...). Both globals are reset to "" up front so a missing/unreadable
+# transcript leaves neither stale from a previous call in the same process.
+get_current_turn_messages() {
+  local transcript_path="$1"
+  local max_lines="${2:-500}"
+
+  PN_TURN_PROMPT=""
+  PN_TURN_RESPONSE=""
+
+  if [[ ! -f "$transcript_path" ]]; then
+    return 0
+  fi
+
+  local combined
+  combined=$(tail -n "$max_lines" "$transcript_path" 2>/dev/null \
+    | "$JQ_BIN" -R -r 'fromjson? | @json' 2>/dev/null \
+    | "$JQ_BIN" -s -r '
+      . as $lines
+      | ([range(0; ($lines | length)) | select($lines[.].role == "user")] | last) as $start
+      | $lines[($start // 0):]
+      | {
+          prompt: ([.[] | select(.role == "user") | (.message.content // [])[]? | select(.type == "text") | .text] | join("\n\n")),
+          response: ([.[] | select(.role == "assistant") | (.message.content // [])[]? | select(.type == "text") | .text] | join("\n\n"))
+        }
+      | @json
+    ' 2>/dev/null)
+
+  [[ -z "$combined" ]] && return 0
+  PN_TURN_PROMPT=$(echo "$combined" | "$JQ_BIN" -r '.prompt // ""' 2>/dev/null)
+  PN_TURN_RESPONSE=$(echo "$combined" | "$JQ_BIN" -r '.response // ""' 2>/dev/null)
 }

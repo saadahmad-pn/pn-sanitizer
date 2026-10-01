@@ -21,12 +21,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source dependencies
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/session-metadata.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 # Drain stdin (hook may send payload)
 if [[ ! -t 0 ]]; then
   stdin_data=$(cat 2>/dev/null)
 fi
+
+# Writes this session's local metadata file (SessionId/Cwd/GitRepoUrl/
+# GitBranch) -- see lib/session-metadata.sh. Previously this recorded a
+# Code Chain session-start marker via the plugins API instead; that call
+# was removed (see this file's header note in git history and design-ideas/
+# Session_Lifecycle_Simplification_And_Contract_Updates.md — the marker had
+# no processing/governance/observability/reporting consumer). This write is
+# purely local -- no login/config needed, unlike the API call it replaces.
+# Never affects this hook's own JSON output/exit code (sessionStart is
+# fire-and-forget context injection regardless).
+write_session_metadata() {
+  [[ -z "$JQ_BIN" ]] && return 0
+  [[ -z "$stdin_data" ]] && return 0
+  echo "$stdin_data" | "$JQ_BIN" empty 2>/dev/null || return 0
+
+  local client_session_id cwd
+  client_session_id=$(echo "$stdin_data" | "$JQ_BIN" -r '.conversation_id // .session_id // ""')
+  cwd=$(echo "$stdin_data" | "$JQ_BIN" -r '.cwd // (.workspace_roots // [])[0] // ""')
+  [[ -z "$client_session_id" ]] && return 0
+
+  local git_repo_url="" git_branch=""
+  if [[ -n "$cwd" ]] && [[ -d "$cwd/.git" ]]; then
+    git_repo_url=$(get_remote_url_or_empty "$cwd")
+    git_branch=$(get_current_branch_or_empty "$cwd")
+  fi
+
+  pn_write_session_metadata "$client_session_id" "$cwd" "$git_repo_url" "$git_branch"
+}
+# Backgrounded, not called inline: this must never delay the login-check
+# message below, which is this hook's actual job.
+write_session_metadata &
 
 # Fail open: any error just returns empty context
 main() {
@@ -64,10 +97,21 @@ EOF
       echo '{}'
     fi
   else
-    # Not configured, ask user to login
+    # Not configured. SCRIPT_DIR is interpolated because the agent cannot
+    # discover it: Cursor exposes no plugin-install env var, and every
+    # command it would use to look (ls/find/Read) is denied while
+    # unconfigured -- so without the literal path here it can never build the
+    # one command login-detection.sh exempts. Unquoted heredoc for that
+    # reason.
     local message
-    read -r -d '' message <<'EOF' || true
-Paradigm Networks is not configured for this workspace. Ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run the paradigmnetworks-login skill to authenticate before relying on Paradigm Networks-gated prompts or tool calls.
+    read -r -d '' message <<EOF || true
+Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.
+
+To fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in:
+
+bash $SCRIPT_DIR/login.sh --base-url <their-base-url>
+
+Run it verbatim. Do NOT search for the script, list directories, read files, or chain anything onto the command -- that path is this plugin's own install directory and is the only one accepted, and every other tool call is blocked until login finishes, so trying to locate it yourself will fail. See the paradigmnetworks-login skill for the rest of the flow.
 EOF
     json_session_context "$message"
   fi
