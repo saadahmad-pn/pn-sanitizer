@@ -135,10 +135,21 @@ function Start-CallbackListener {
 function Wait-ForCallback {
   param(
     [Parameter(Mandatory = $true)][System.Net.Sockets.TcpListener]$Listener,
-    [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+    # Optional: when given, the confirmation page links back to the web console.
+    [string]$BaseUrl = ''
   )
 
-  $responseBody = '<!doctype html><html><head><title>Paradigm Networks login</title></head><body style="font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;"><h2>You''re logged in.</h2></body></html>'
+  # PN-12247: the page is a dead end without the link -- it is the last thing
+  # the user sees, in a tab the plugin opened for them. BaseUrl is already
+  # reduced to scheme://host by ConvertTo-NormalizedBaseUrl, but it is still
+  # user-supplied text landing in markup, so it is escaped.
+  $consoleLink = ''
+  if ($BaseUrl) {
+    $safeUrl = [System.Net.WebUtility]::HtmlEncode($BaseUrl)
+    $consoleLink = '<p style="margin-top: 1.5em;"><a href="' + $safeUrl + '">Go to Paradigm Networks</a></p>'
+  }
+  $responseBody = '<!doctype html><html><head><title>Paradigm Networks login</title></head><body style="font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;"><h2>You''re logged in.</h2><p>You can close this tab and return to your editor.</p>' + $consoleLink + '</body></html>'
   $responseBytes = [System.Text.Encoding]::UTF8.GetBytes($responseBody)
 
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -297,15 +308,13 @@ function Invoke-Main {
   }
 
   Write-ConsoleLine ""
-  Write-ConsoleLine "If that link takes you to the main Paradigm Networks dashboard instead of a 'You're logged in' confirmation,"
-  Write-ConsoleLine "you weren't signed in to Paradigm Networks in that browser yet -- sign in there, then open the exact same link"
-  Write-ConsoleLine "again (no need to re-run this command) to finish."
-  Write-ConsoleLine ""
+  # PN-12247: the "sign in, then re-open the same link" note is gone -- signing
+  # in now finishes the login on the first attempt whichever method the org uses.
   Write-ConsoleLine "Waiting up to ${CallbackTimeoutSeconds}s for you to complete login..."
 
   $callbackResult = $null
   try {
-    $callbackResult = Wait-ForCallback -Listener $listenerInfo.Listener -TimeoutSeconds $CallbackTimeoutSeconds
+    $callbackResult = Wait-ForCallback -Listener $listenerInfo.Listener -TimeoutSeconds $CallbackTimeoutSeconds -BaseUrl $normalizedBaseUrl
   } finally {
     # TcpListener has no Close() method (unlike HttpListener) -- Stop()
     # alone closes the underlying socket and releases the resources.
