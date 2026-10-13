@@ -141,9 +141,23 @@ detect_nc_listen_style() {
   return 1
 }
 
+# Minimal HTML escaping for the one interpolated value on the confirmation
+# page. normalize_base_url has already reduced base_url to scheme://host, but it
+# is still user-supplied text landing in markup.
+#
+# sed rather than ${s//.../...}: bash 5.2 expands an unescaped & in a
+# parameter-substitution replacement to the matched text, so the pure-bash form
+# silently produced "<lt;" instead of "&lt;". sed needs \& too, but that is
+# portable (BSD and GNU alike) where bash 3.2 would take it literally.
+html_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
 wait_for_callback() {
   local port="$1"
   local deadline="$2"
+  # Optional: when given, the confirmation page links back to the web console.
+  local base_url="${3:-}"
 
   CALLBACK_CODE=""
   CALLBACK_STATE=""
@@ -167,8 +181,15 @@ wait_for_callback() {
   }
   _nc_listen_args "$nc_listen_style" "$port"
 
-  # Create response body
-  local response_body="<!doctype html><html><head><title>Paradigm Networks login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2></body></html>"
+  # Create response body. PN-12247: the page is a dead end without the link --
+  # it is the last thing the user sees, in a tab the plugin opened for them.
+  local console_link=""
+  if [[ -n "$base_url" ]]; then
+    local safe_url
+    safe_url=$(html_escape "$base_url")
+    console_link="<p style=\"margin-top: 1.5em;\"><a href=\"${safe_url}\">Go to Paradigm Networks</a></p>"
+  fi
+  local response_body="<!doctype html><html><head><title>Paradigm Networks login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2><p>You can close this tab and return to your editor.</p>${console_link}</body></html>"
   local response_len=${#response_body}
 
   # Build full HTTP response
@@ -437,10 +458,8 @@ main() {
   fi
 
   echo ""
-  echo "If that link takes you to the main Paradigm Networks dashboard instead of a 'You're logged in' confirmation,"
-  echo "you weren't signed in to Paradigm Networks in that browser yet — sign in there, then open the exact same link"
-  echo "again (no need to re-run this command) to finish."
-  echo ""
+  # PN-12247: the "sign in, then re-open the same link" note is gone -- signing
+  # in now finishes the login on the first attempt whichever method the org uses.
   echo "Waiting up to ${CALLBACK_TIMEOUT_SECONDS}s for you to complete login..."
 
   # Wait for callback
@@ -452,7 +471,7 @@ main() {
   # comment for why a space-joined echo/read was wrong: a denied login has
   # no code, and that empty field used to shift the real error message out
   # of place, misreporting a denial as a CSRF state mismatch instead).
-  wait_for_callback "$port" "$deadline" || {
+  wait_for_callback "$port" "$deadline" "$base_url" || {
     echo "error: timed out waiting for login after ${CALLBACK_TIMEOUT_SECONDS}s" >&2
     return 1
   }

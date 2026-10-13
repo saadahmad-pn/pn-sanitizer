@@ -7,11 +7,12 @@
     "cursor": "2.5.0"
   },
   "author": {
-    "name": "Paradigm Networks"
+    "name": "Paradigm Networks",
+    "email": "plugins@paradigmnetworks.ai"
   },
   "publisher": "Paradigm Networks",
-  "homepage": "https://github.com/saadahmad-pn/pn-sanitizer",
-  "repository": "https://github.com/saadahmad-pn/pn-sanitizer",
+  "homepage": "https://github.com/ParadigmNetworks-ai/pn-plugin",
+  "repository": "https://github.com/ParadigmNetworks-ai/pn-plugin",
   "license": "MIT",
   "logo": "assets/logo.png",
   "category": "security",

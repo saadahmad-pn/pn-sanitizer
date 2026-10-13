@@ -348,6 +348,44 @@ reencoded_value=$(urlencode_strict "$decoded_value")
 assert_output_equals "echo '$decoded_value'" "AB+CD" "Decodes back to the true value"
 assert_output_equals "echo '$reencoded_value'" "$wire_value" "Re-encoding the decoded value matches the original wire value (single encoding, not double)"
 
+test_case "html_escape escapes every metacharacter (bash 5.2 & -in-replacement trap)"
+# The pure-bash ${s//</&lt;} form silently produced "<lt;" on bash 5.2, which
+# expands an unescaped & in the replacement to the matched text.
+escaped=$(html_escape 'https://a.test/?x=1&y=2"><script>')
+assert_output_equals "echo '$escaped'" 'https://a.test/?x=1&amp;y=2&quot;&gt;&lt;script&gt;' "Ampersand, quote and angle brackets all escaped"
+
+test_case "wait_for_callback: the confirmation page links back to the web console"
+# PN-12247: the page is the last thing the user sees, in a tab the plugin
+# opened for them, and used to be a dead end.
+callback_port=18766
+callback_deadline=$(($(date +%s) + 10))
+callback_page_file="$TEST_TEMP_DIR/callback-page.html"
+(
+  sleep 0.5
+  curl -s -o "$callback_page_file" "http://127.0.0.1:${callback_port}/callback?code=abc&state=xyz"
+) &
+curl_pid=$!
+wait_for_callback "$callback_port" "$callback_deadline" "https://acme.paradigmnetworks.ai"
+wait "$curl_pid" 2>/dev/null
+
+assert_output_contains "cat '$callback_page_file'" '<a href="https://acme.paradigmnetworks.ai">' "Links back to the deployment the user logged in to"
+assert_output_contains "cat '$callback_page_file'" "You're logged in." "Still confirms the login"
+
+test_case "wait_for_callback: no base URL means no link, not a broken one"
+callback_port=18767
+callback_deadline=$(($(date +%s) + 10))
+callback_page_file="$TEST_TEMP_DIR/callback-page-nolink.html"
+(
+  sleep 0.5
+  curl -s -o "$callback_page_file" "http://127.0.0.1:${callback_port}/callback?code=abc&state=xyz"
+) &
+curl_pid=$!
+wait_for_callback "$callback_port" "$callback_deadline"
+wait "$curl_pid" 2>/dev/null
+
+assert_output_equals "grep -c '<a href' '$callback_page_file' || true" "0" "No anchor rendered when the caller passes no base URL"
+assert_output_contains "cat '$callback_page_file'" "You're logged in." "Still confirms the login"
+
 echo ""
 echo -e "${BLUE}=== Unit Tests: login.sh browser handoff ===${NC}"
 

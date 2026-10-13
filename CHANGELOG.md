@@ -4,6 +4,48 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-03 — Finish the login confirmation page, drop the stale re-open instruction (PN-12247)
+
+Signing in with an email address and password never completed the plugin
+login. The user was dropped on the dashboard, the plugin heard nothing, and it
+sat until its five-minute window expired — then opened a second login link,
+which succeeded immediately because the first attempt had in fact signed them
+in. SSO was unaffected. The cause was in the web console, not here
+(control-server's `?returnUrl` allow-list carried only the MCP OAuth authorize
+path, so `/api/v1/plugin/authorize` was rejected and the browser was never sent
+back); it is fixed there on the same Jira ticket. Two things on this side were
+written around the old behaviour and are now wrong:
+
+The console told users that if the link "takes you to the main Paradigm
+Networks dashboard instead of a 'You're logged in' confirmation," they should
+sign in and then re-open the same link. That instruction described the bug.
+Signing in once now finishes the login on the first attempt whichever method
+the organization uses, so the note is removed from both `scripts/login.sh` and
+`scripts/login.ps1`.
+
+The confirmation page the loopback listener serves was a dead end — a single
+"You're logged in." heading in a tab the plugin had opened for the user, with
+nowhere to go. It now also says the tab can be closed and links back to the
+deployment that was logged in to. `wait_for_callback` / `Wait-ForCallback` take
+the base URL as a new optional last parameter; omitted, the page renders
+exactly as before minus the link, so a caller that does not pass one cannot
+produce a broken anchor.
+
+The URL is HTML-escaped before it reaches the markup. The first attempt at that
+used `${s//</&lt;}` and silently produced `<lt;`: bash 5.2 expands an unescaped
+`&` in a parameter-substitution replacement to the matched text. `html_escape`
+uses `sed` instead, where `\&` is portable across BSD and GNU — bash 3.2, which
+macOS still ships, would take `\&` literally in the parameter form.
+
+Verified with `bash test/run-all-tests.sh` (324/324, up from 319) and
+`shellcheck -S warning -x`. Five new assertions across three tests, driving the
+real listener over a real local HTTP request: that `html_escape` escapes `&`,
+`"`, `<` and `>` (the bash 5.2 trap above), that the page carries the anchor
+when a base URL is passed, and that it carries no anchor at all when one is
+not. `scripts/login.ps1` has no Pester coverage and no PowerShell runtime was
+available here, so its twin change was reviewed by hand against the shell
+version rather than executed.
+
 ## 2026-09-29 — Actually open the browser during login
 
 Login never opened a browser on the path users actually take, so everyone
