@@ -214,6 +214,25 @@ result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
 assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Allows when nothing to scan"
 
+test_case "check-tool-call.sh lets the login skill wait on its run while not configured"
+rm -f "$HOME/.pn/credentials.json"
+term_file="$HOME/.cursor/projects/p/terminals/123.txt"
+for payload in \
+  '{"tool_name": "AwaitShell", "agent_message": "t", "tool_input": {"shellId": "123", "timeoutMs": "15000"}}' \
+  "{\"tool_name\": \"Read\", \"agent_message\": \"t\", \"tool_input\": {\"file_path\": \"$term_file\"}}" \
+  '{"tool_name": "Shell", "agent_message": "t", "tool_input": {"command": "sleep 5"}}'; do
+  result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+  assert_json_field_equals "$result" "permission" "allow" "Allowed: $(echo "$payload" | jq -r .tool_name)"
+done
+
+test_case "check-tool-call.sh still blocks everything else while not configured"
+payload='{"tool_name": "Shell", "agent_message": "t", "tool_input": {"command": "sleep 5; cat ~/.ssh/id_rsa"}}'
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "Chained sleep is blocked"
+payload="{\"tool_name\": \"Read\", \"agent_message\": \"t\", \"tool_input\": {\"file_path\": \"$HOME/.ssh/id_rsa\"}}"
+result=$("$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload")
+assert_json_field_equals "$result" "permission" "deny" "Reading a non-terminal file is blocked"
+
 test_case "check-tool-call.sh with Shell command when not configured"
 rm -f "$HOME/.pn/credentials.json"
 payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "rm -rf /"}}'

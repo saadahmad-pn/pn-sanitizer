@@ -278,6 +278,20 @@ main() {
   # Resolve config
   local config
   config=$(pn_resolve_config) || {
+    # Let the login skill follow its own background login run (wait on it,
+    # read its terminal output, pause between checks) -- see
+    # pn_is_login_wait_call. Not-configured path only.
+    if pn_is_login_wait_call "$tool_name" "$login_check_command" "$file_path"; then
+      audit_log_entry=$("$JQ_BIN" -n \
+        --arg tool_name "$tool_name" \
+        --arg file_path "$file_path" \
+        --arg command "$tool_input_raw" \
+        '{tool_name: $tool_name, file_path: $file_path, command: $command, decision: "allow", reason: "login_wait_unconfigured"}')
+      audit_log "$audit_log_entry" "$AUDIT_LOG_PATH"
+      json_permission_allow
+      return 0
+    fi
+
     local reason="Paradigm Networks not configured — run the paradigmnetworks-login skill"
     audit_log_entry=$("$JQ_BIN" -n \
       --arg tool_name "$tool_name" \
@@ -297,7 +311,7 @@ main() {
       # agent's only feedback once a session's injected context is gone
       # (compaction, a session that started configured), and it cannot look
       # the path up -- see check-session.sh.
-      local recovery="Paradigm Networks is not logged in, so ${action_desc} was blocked. Ask the user for their Paradigm Networks base URL, then run EXACTLY: bash $SCRIPT_DIR/login.sh --base-url <their-base-url> -- verbatim, with nothing chained onto it. Do not retry ${action_desc}, and do not search for the script: every other tool call stays blocked until login completes."
+      local recovery="Paradigm Networks is not logged in, so ${action_desc} was blocked. Ask the user for their Paradigm Networks base URL, then run EXACTLY: bash $SCRIPT_DIR/login.sh --base-url <their-base-url> -- verbatim, with nothing chained onto it, and with network access (required_permissions [\"full_network\"]): it must reach the Paradigm Networks server. Do not retry ${action_desc}, and do not search for the script: every other tool call stays blocked until login completes."
       json_permission_deny "The scanning service is unavailable ($reason). ${action_noun} blocked. $signup_note" "$recovery"
     fi
     return 0

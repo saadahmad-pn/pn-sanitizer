@@ -149,7 +149,7 @@ function Wait-ForCallback {
     $safeUrl = [System.Net.WebUtility]::HtmlEncode($BaseUrl)
     $consoleLink = '<p style="margin-top: 1.5em;"><a href="' + $safeUrl + '">Go to Paradigm Networks</a></p>'
   }
-  $responseBody = '<!doctype html><html><head><title>Paradigm Networks login</title></head><body style="font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;"><h2>You''re logged in.</h2><p>You can close this tab and return to your editor.</p>' + $consoleLink + '</body></html>'
+  $responseBody = '<!doctype html><html><head><title>Paradigm Networks login</title></head><body style="font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;"><h2>Sign-in complete</h2><p>Return to your editor to finish: it confirms there once your login is saved. You can close this tab.</p>' + $consoleLink + '</body></html>'
   $responseBytes = [System.Text.Encoding]::UTF8.GetBytes($responseBody)
 
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -228,12 +228,16 @@ function Invoke-CodeExchange {
   $result = Invoke-HttpPostRaw -Url $tokenUrl -BodyBytes $bodyBytes `
     -ContentType "application/x-www-form-urlencoded" -TimeoutSec $TokenTimeoutSeconds
 
+  # Same hint as login.sh's exchange_code: inside Cursor's agent sandbox,
+  # outbound network is blocked unless the command was granted it.
+  $sandboxHint = "If this ran inside Cursor's agent sandbox, its network access is blocked: re-run this exact command with network access (required_permissions [`"full_network`"]), or run it yourself in a terminal."
+
   if ($result.TimedOut) {
-    [Console]::Error.WriteLine("error: timed out reaching $BaseUrl")
+    [Console]::Error.WriteLine("error: timed out reaching $BaseUrl. $sandboxHint")
     return $null
   }
   if ($result.ConnectionFailed -or -not $result.Body) {
-    [Console]::Error.WriteLine("error: could not reach $BaseUrl")
+    [Console]::Error.WriteLine("error: could not reach $BaseUrl. $sandboxHint")
     return $null
   }
 
@@ -241,7 +245,9 @@ function Invoke-CodeExchange {
   try {
     $response = $result.Body | ConvertFrom-Json -ErrorAction Stop
   } catch {
-    [Console]::Error.WriteLine("error: token exchange returned an invalid response")
+    $snippet = ($result.Body -replace '\s+', ' ')
+    if ($snippet.Length -gt 200) { $snippet = $snippet.Substring(0, 200) }
+    [Console]::Error.WriteLine("error: token exchange failed: unexpected non-JSON response from ${BaseUrl}: $snippet. $sandboxHint")
     return $null
   }
 
