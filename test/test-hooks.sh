@@ -40,6 +40,11 @@ fi
 
 # The command it advertises must be one the exemption actually accepts, or
 # the agent is sent to run something that gets blocked anyway.
+test_case "check-session.sh not-configured context carries the scripts directory"
+rm -f "$HOME/.pn/credentials.json"
+result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
+assert_output_contains 'echo "$result" | jq -r .additional_context' "Paradigm Networks plugin scripts directory: $SCRIPTS_DIR" "Scripts directory line is present while unconfigured"
+
 test_case "check-session.sh advertises a command the login exemption accepts"
 TESTS_RUN=$((TESTS_RUN + 1))
 if pn_login_logout_exempt_reason "Shell" "bash $SCRIPTS_DIR/login.sh --base-url https://acme.paradigmnetworks.ai" "$SCRIPTS_DIR"; then
@@ -78,14 +83,15 @@ mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
 pn_record_successful_scan
 result=$("$SCRIPTS_DIR/check-session.sh" <<< '{}')
 assert_json_valid "$result" "Valid JSON output"
-# Should be empty context when configured and the last scan is recent
-if [[ "$result" == "{}" ]]; then
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${GREEN}✓${NC} Returns empty context when configured with a recent scan"
+# Only the scripts-directory line when configured and the last scan is recent
+expected_ctx="Paradigm Networks plugin scripts directory: $SCRIPTS_DIR"
+actual_ctx=$(echo "$result" | jq -r '.additional_context')
+TESTS_RUN=$((TESTS_RUN + 1))
+if [[ "$actual_ctx" == "$expected_ctx" ]]; then
+  echo -e "  ${GREEN}✓${NC} Carries only the scripts directory when configured with a recent scan"
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
-  TESTS_RUN=$((TESTS_RUN + 1))
-  echo -e "  ${RED}✗${NC} Should return empty context when configured with a recent scan (got: $result)"
+  echo -e "  ${RED}✗${NC} Should carry only the scripts directory when configured with a recent scan (got: $actual_ctx)"
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 

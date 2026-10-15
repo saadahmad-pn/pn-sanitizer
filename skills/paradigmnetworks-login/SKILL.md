@@ -35,52 +35,61 @@ script (step 4) — there's no environment variable that tells you where the
 plugin is installed, so path-guessing isn't reliable; locate it once here
 and reuse the result.
 
-**First, check your existing context for the path — do not search when it is
-already there.** When Paradigm Networks is not configured, the sessionStart
-hook injects a notice containing the exact command to run, with this
-installation's own absolute path already filled in:
+**Read the path from your context — do not search when it is there.** The
+`sessionStart` hook injects this line into every session, logged in or not:
+
+```
+Paradigm Networks plugin scripts directory: <scripts-dir>
+```
+
+`<scripts-dir>` is this installation's own path, so it is correct even when
+several copies of the plugin are installed (a local copy plus marketplace
+copies, or several cached marketplace versions). Use it as given.
+
+When Paradigm Networks is not configured, the hook's notice also contains
+the exact login command with that path already filled in:
 
 ```
 bash <scripts-dir>/login.sh --base-url <their-base-url>
 ```
 
-If you have that, you already have the scripts directory. Skip straight to
-step 3 (get the base URL) and then step 4, using that exact path. Skip
-step 2 as well: the notice only appears when Paradigm Networks is not
-configured, so the answer is already known.
+If you have that notice, skip straight to step 3 (get the base URL) and then
+step 4, using that exact path. Skip step 2 as well: the notice only appears
+when Paradigm Networks is not configured, so the answer is already known.
 
 This matters because **while Paradigm Networks is unconfigured, every tool
-call except the login/logout/check-configured commands is denied** — so the
-search commands below are themselves blocked, and running them first is the
-one way to get stuck. The deny message you receive also repeats the same
-login command, so if you have already been blocked, take the path from
-there rather than searching again.
+call except the login/logout/check-configured commands is denied** — so
+search commands are themselves blocked, and running them first is the one
+way to get stuck. The deny message you receive also repeats the same login
+command, so if you have already been blocked, take the path from there
+rather than searching again.
 
-Only fall back to searching when neither the injected notice nor a deny
-message gave you a path — for example a switch-organization re-login, where
-Paradigm Networks is already configured and tool calls are not blocked. Use
-whichever command matches the shell you're actually running in — a Windows
-machine without WSL/Git Bash can't run the bash `find` command, and vice
-versa:
+Only fall back to searching when neither the injected line, the notice nor
+a deny message gave you a path. Use whichever command matches the shell
+you're actually running in — a Windows machine without WSL/Git Bash can't
+run the bash `find` command, and vice versa. These patterns match both local
+installs (`~/.cursor/plugins/local/paradigm-scanner/scripts/`) and
+marketplace installs
+(`~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<version>/scripts/`):
 
 macOS/Linux:
 
 ```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/check-configured.sh" 2>/dev/null
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/check-configured.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/login.sh" 2>/dev/null
 ```
 
 Windows (PowerShell):
 
 ```powershell
 Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\check-configured.ps1" -or $_.FullName -like "*\paradigm-scanner\scripts\login.ps1" } |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\*scripts\check-configured.ps1" -or $_.FullName -like "*\paradigm-scanner\*scripts\login.ps1" } |
   Select-Object -ExpandProperty FullName
 ```
 
-This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
-installs (`~/.cursor/plugins/local/`). If both come back for a platform,
-prefer `local/`.
+If more than one copy comes back, the search cannot tell which one is
+running. Prefer one under `local/`; otherwise use the most recently modified
+one, and take both scripts from the same directory.
 
 ### 2. Check whether login is actually needed
 
