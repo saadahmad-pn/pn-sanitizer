@@ -183,13 +183,16 @@ wait_for_callback() {
 
   # Create response body. PN-12247: the page is a dead end without the link --
   # it is the last thing the user sees, in a tab the plugin opened for them.
+  # It is served before the token exchange in main(), which can still fail
+  # (e.g. no network inside Cursor's agent sandbox), so it must not claim the
+  # login is done -- the editor reports the real outcome.
   local console_link=""
   if [[ -n "$base_url" ]]; then
     local safe_url
     safe_url=$(html_escape "$base_url")
     console_link="<p style=\"margin-top: 1.5em;\"><a href=\"${safe_url}\">Go to Paradigm Networks</a></p>"
   fi
-  local response_body="<!doctype html><html><head><title>Paradigm Networks login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>You're logged in.</h2><p>You can close this tab and return to your editor.</p>${console_link}</body></html>"
+  local response_body="<!doctype html><html><head><title>Paradigm Networks login</title></head><body style=\"font-family: -apple-system, sans-serif; text-align: center; margin-top: 15vh;\"><h2>Sign-in complete</h2><p>Return to your editor to finish: it confirms there once your login is saved. You can close this tab.</p>${console_link}</body></html>"
   local response_len=${#response_body}
 
   # Build full HTTP response
@@ -294,8 +297,14 @@ exchange_code() {
     --data-raw "$body" \
     --max-time "$TOKEN_TIMEOUT_SECONDS" 2>/dev/null)
 
+  # Inside Cursor's agent sandbox, outbound network is blocked unless the
+  # command was granted it -- curl then gets nothing at all (HTTPS), or the
+  # sandbox proxy's own non-JSON reply (plain HTTP). Both look like a server
+  # problem without this hint, and the browser step has already succeeded.
+  local sandbox_hint="If this ran inside Cursor's agent sandbox, its network access is blocked: re-run this exact command with network access (required_permissions [\"full_network\"]), or run it yourself in a terminal."
+
   if [[ -z "$response" ]]; then
-    echo "error: could not reach $base_url" >&2
+    echo "error: could not reach $base_url. $sandbox_hint" >&2
     return 1
   fi
 
@@ -303,6 +312,13 @@ exchange_code() {
   if ! echo "$response" | "$JQ_BIN" -e '.access_token' >/dev/null 2>&1; then
     local error_msg
     error_msg=$(echo "$response" | "$JQ_BIN" -r '.error_description // .error // "unknown error"' 2>/dev/null)
+    if [[ -z "$error_msg" ]]; then
+      # Not JSON at all -- show what came back instead of an empty reason.
+      local snippet
+      snippet=$(printf '%s' "$response" | tr -s '[:space:]' ' ' | cut -c1-200)
+      echo "error: token exchange failed: unexpected non-JSON response from $base_url: $snippet. $sandbox_hint" >&2
+      return 1
+    fi
     echo "error: token exchange failed: $error_msg" >&2
     return 1
   fi

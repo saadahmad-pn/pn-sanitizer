@@ -61,6 +61,11 @@ try {
   # Never let this delay or fail the login-check logic below.
 }
 
+# Sent in every session, configured or not -- same rationale as
+# check-session.sh: the agent has no other reliable way to learn this
+# install's path. The login/logout skills and pn-login-check rule read it.
+$scriptsDirLine = "Paradigm Networks plugin scripts directory: $ScriptDir"
+
 try {
   if (Test-PnConfigured) {
     if (Test-PnScanStale) {
@@ -72,17 +77,17 @@ try {
       # See scripts/check-prompt.ps1 for the fuller comment.
       $warningSign = "$([char]0x26A0)$([char]0xFE0F)"
       $staleMessage = "$warningSign Paradigm Networks security scanning hasn't completed a successful scan in over an hour (or hasn't completed one yet this session). Prompts and file writes may currently be going through unscanned. Check your network connection and Paradigm Networks login status; if this continues, contact your administrator."
-      Write-JsonSessionContext -Context $staleMessage
+      Write-JsonSessionContext -Context "$staleMessage`n`n$scriptsDirLine"
     } else {
-      Write-Output "{}"
+      Write-JsonSessionContext -Context $scriptsDirLine
     }
   } else {
     # $ScriptDir is interpolated for the same reason as check-session.sh: the
     # agent cannot discover the plugin's install path, and every command it
     # would use to look is blocked while unconfigured.
     $loginScript = Join-Path $ScriptDir "login.ps1"
-    $message = "Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.`n`nTo fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in:`n`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$loginScript`" --base-url <their-base-url>`n`nRun it verbatim. Do NOT search for the script, list directories, read files, or chain anything onto the command -- that path is this plugin's own install directory and is the only one accepted, and every other tool call is blocked until login finishes, so trying to locate it yourself will fail. See the paradigmnetworks-login skill for the rest of the flow."
-    Write-JsonSessionContext -Context $message
+    $message = "Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.`n`nTo fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in, with network access (required_permissions [`"full_network`"]) since it must reach the Paradigm Networks server:`n`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$loginScript`" --base-url <their-base-url>`n`nRun it verbatim. Do NOT search for the script, list directories, read files, or chain anything onto the command -- that path is this plugin's own install directory and is the only one accepted, and every other tool call is blocked until login finishes, so trying to locate it yourself will fail. See the paradigmnetworks-login skill for the rest of the flow."
+    Write-JsonSessionContext -Context "$message`n`n$scriptsDirLine"
   }
 } catch {
   Write-Output "{}"

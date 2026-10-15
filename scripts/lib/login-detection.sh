@@ -161,3 +161,41 @@ pn_login_logout_exempt_reason() {
 
   return 1
 }
+
+# pn_is_login_wait_call <tool_name> <command> <file_path>
+# The tool calls the login skill needs to follow its own background login
+# run while Paradigm Networks is still unconfigured (every other tool call is
+# denied then): Cursor's AwaitShell, a Read of a Cursor terminal output file
+# (~/.cursor/projects/<project>/terminals/<id>.txt), and a bare
+# `sleep <seconds>` between checks. Without these the agent cannot see the
+# login's own result -- confirmed directly: it was left polling
+# check-configured.sh, reporting "still waiting" long after login.sh had
+# already exited with an error. None carries user-authored content.
+#
+# Only consulted on the not-configured path in check-tool-call.sh; a
+# configured session scans these like any other call. Same anchored-grammar
+# discipline as above: a terminal path must be exactly that shape (no "..")
+# and a sleep must be the whole command, so nothing can be chained on.
+pn_is_login_wait_call() {
+  local tool_name="$1"
+  local command="$2"
+  local file_path="$3"
+
+  case "$tool_name" in
+    AwaitShell)
+      return 0
+      ;;
+    Read)
+      [[ -n "$file_path" && -n "$HOME" ]] || return 1
+      [[ "$file_path" != *..* ]] || return 1
+      [[ "$file_path" == "$HOME/.cursor/projects/"* ]] || return 1
+      [[ "${file_path#"$HOME/.cursor/projects/"}" =~ ^[A-Za-z0-9._-]+/terminals/[0-9]+\.txt$ ]]
+      ;;
+    Shell)
+      [[ "$command" =~ ^[[:space:]]*sleep[[:space:]]+[0-9]{1,3}(\.[0-9]+)?[[:space:]]*$ ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}

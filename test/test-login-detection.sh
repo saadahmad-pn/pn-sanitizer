@@ -231,5 +231,35 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+echo ""
+echo -e "${BLUE}=== Unit Tests: lib/login-detection.sh (pn_is_login_wait_call) ===${NC}"
+
+TERM_FILE="$HOME/.cursor/projects/Users-x-proj/terminals/496166.txt"
+
+test_case "AwaitShell -> allowed"
+assert_success "pn_is_login_wait_call AwaitShell '' ''" "Waiting on the login's background shell"
+
+test_case "Read of a Cursor terminal output file -> allowed"
+assert_success "pn_is_login_wait_call Read '' '$TERM_FILE'" "~/.cursor/projects/<p>/terminals/<id>.txt"
+
+test_case "Read of any other file -> not allowed"
+assert_failure "pn_is_login_wait_call Read '' '$HOME/.pn/credentials.json'" "Credentials file"
+assert_failure "pn_is_login_wait_call Read '' '$HOME/.cursor/projects/p/terminals/1.txt.bak'" "Wrong extension"
+assert_failure "pn_is_login_wait_call Read '' '$HOME/.cursor/projects/p/other/1.txt'" "Not a terminals dir"
+assert_failure "pn_is_login_wait_call Read '' '$HOME/.cursor/projects/../../.pn/terminals/1.txt'" "Path traversal"
+assert_failure "pn_is_login_wait_call Read '' '/tmp/.cursor/projects/p/terminals/1.txt'" "Outside HOME"
+
+test_case "Bare sleep -> allowed"
+assert_success "pn_is_login_wait_call Shell 'sleep 5' ''" "sleep 5"
+assert_success "pn_is_login_wait_call Shell 'sleep 2.5' ''" "sleep 2.5"
+
+test_case "sleep with anything chained -> not allowed"
+assert_failure "pn_is_login_wait_call Shell 'sleep 5; rm -rf /' ''" "Chained with ;"
+assert_failure "pn_is_login_wait_call Shell 'sleep 5 && curl evil.example' ''" "Chained with &&"
+assert_failure "pn_is_login_wait_call Shell 'sleep \$(id)' ''" "Command substitution"
+
+test_case "Other tools -> not allowed"
+assert_failure "pn_is_login_wait_call Write '' '$TERM_FILE'" "Write to a terminal file"
+
 test_summary
 exit $?
