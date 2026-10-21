@@ -72,7 +72,7 @@ try {
   $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
 
   # Repo/branch context injection -- see check-prompt.sh. Never gates.
-  $workspaceRoots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
+  $workspaceRoots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @() | ForEach-Object { ConvertTo-PnLocalPath -Path ([string]$_) })
   if ($workspaceRoots.Count -gt 0) {
     Start-PnRepoContextRefresh -Roots $workspaceRoots
   }
@@ -84,11 +84,7 @@ try {
   if (-not $clientSessionId) {
     $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "session_id" -Default "")
   }
-  $cwd = [string](Get-JsonProperty -InputObject $parsedPayload -Name "cwd" -Default "")
-  if (-not $cwd) {
-    $roots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
-    if ($roots.Count -gt 0) { $cwd = $roots[0] }
-  }
+  $cwd = Get-PnPayloadCwd -Payload $parsedPayload
   # Cursor's own generation_id -- changes per user turn, unlike
   # conversation_id. See lib/plugins-client.sh's header.
   $generationId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "generation_id" -Default "")
@@ -101,7 +97,7 @@ try {
   $model = Resolve-HookModel -ModelId $modelId -LegacyModel $modelLegacy
   $gitRepoUrl = ""
   $gitBranch = ""
-  if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+  if ($cwd -and (Test-PnGitRepo -Path $cwd)) {
     $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
     $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
   }

@@ -112,7 +112,10 @@ function Get-JsonProperty {
     $Default = $null
   )
   if ($null -eq $InputObject) { return $Default }
-  if ($InputObject.PSObject.Properties.Name -contains $Name) {
+  # The indexer, not .Properties.Name: on an object with no properties at
+  # all (a "{}" payload), member access on the empty collection throws
+  # under Set-StrictMode instead of returning nothing.
+  if ($null -ne $InputObject.PSObject.Properties[$Name]) {
     $value = $InputObject.$Name
     if ($null -eq $value) { return $Default }
     return $value
@@ -660,4 +663,55 @@ function Write-JsonPermissionDeny {
 function Write-JsonSessionContext {
   param([Parameter(Mandatory = $true)][string]$Context)
   Write-Output (ConvertTo-CompactJson @{ additional_context = $Context })
+}
+
+# --- Paths from Cursor's hook payloads ---
+
+# ConvertTo-PnLocalPath -Path <path>
+# Cursor on Windows reports cwd and workspace_roots in URI style
+# ("/c:/Users/me/proj"), which PowerShell's path cmdlets read as a drive
+# named "/c" and reject ("Cannot find drive. A drive with the name '/c' does
+# not exist") -- observed on a real Windows machine. Converts that form (and
+# a file:// URI) to a normal local path ("c:\Users\me\proj"); every other
+# path is returned unchanged, so macOS/Linux paths are unaffected.
+function ConvertTo-PnLocalPath {
+  param([string]$Path)
+  if (-not $Path) { return "" }
+  $p = $Path
+  if ($p -match '^file:') {
+    try { $p = ([System.Uri]$p).LocalPath } catch { }
+  }
+  if ($p -match '^/([A-Za-z]):(.*)$') {
+    $p = "$($Matches[1]):$($Matches[2])"
+  }
+  if ($p -match '^[A-Za-z]:') {
+    $p = $p -replace '/', '\'
+  }
+  return $p
+}
+
+# Get-PnPayloadCwd -Payload <parsed hook payload>
+# The payload's cwd, falling back to its first workspace root -- same as the
+# bash side's `.cwd // (.workspace_roots // [])[0]` -- as a local path.
+function Get-PnPayloadCwd {
+  param($Payload)
+  $cwd = [string](Get-JsonProperty -InputObject $Payload -Name "cwd" -Default "")
+  if (-not $cwd) {
+    $roots = @(Get-JsonProperty -InputObject $Payload -Name "workspace_roots" -Default @())
+    if ($roots.Count -gt 0) { $cwd = [string]$roots[0] }
+  }
+  return (ConvertTo-PnLocalPath -Path $cwd)
+}
+
+# Test-PnGitRepo -Path <dir>
+# True when <dir>\.git exists. Never throws: a path PowerShell can't parse
+# is simply not a repo, rather than an error that fails the hook.
+function Test-PnGitRepo {
+  param([string]$Path)
+  if (-not $Path) { return $false }
+  try {
+    return (Test-Path -LiteralPath ([System.IO.Path]::Combine($Path, ".git")))
+  } catch {
+    return $false
+  }
 }

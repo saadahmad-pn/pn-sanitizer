@@ -37,6 +37,14 @@ instead of its own hooks.json entry), `check-turn-complete.ps1`
 (`after_agent_response`), and `check-session.ps1` / `check-session-end.ps1`
 (local session metadata instead of the removed session markers).
 
+Found in the first real Windows test: Cursor on Windows reports `cwd` and
+`workspace_roots` as `/c:/Users/...`, which PowerShell's path cmdlets read as
+a drive named `/c` ("Cannot find drive"), making check-tool-call.ps1 fail
+closed. Every Windows hook now converts those paths first
+(`ConvertTo-PnLocalPath` / `Get-PnPayloadCwd` / `Test-PnGitRepo` in
+`lib/common.ps1`). `Get-JsonProperty` also no longer throws on an empty `{}`
+payload.
+
 Removed, with no remaining callers: `check-write.ps1`, `lib/scan-client.ps1`,
 `lib/codechain-client.ps1`, `lib/detection-client.ps1`, and
 `test/pester/ConvertFrom-PnMessagesResponse.Tests.ps1`, whose 13 tests were
@@ -46,7 +54,7 @@ Verified on macOS with PowerShell 7 against a local mock server: for the same
 input, the Windows and bash hooks send byte-for-byte identical request bodies
 for before_tool_call (including attached files), after_tool_call,
 before_prompt and its blocked-prompt close-out, and after_agent_response.
-`bash test/run-all-tests.sh` now also runs Pester: 416/416, of which 68 are
+`bash test/run-all-tests.sh` now also runs Pester: 430/430, of which 82 are
 new Pester tests (login grammar, the client with the network mocked, and the
 hook scripts end to end as separate processes). Not yet verified: Windows
 PowerShell 5.1 on a real Windows machine, and PSScriptAnalyzer, which was not

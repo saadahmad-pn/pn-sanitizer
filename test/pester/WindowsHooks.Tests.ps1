@@ -56,7 +56,7 @@ BeforeAll {
     $p.StandardInput.Write($Payload)
     $p.StandardInput.Close()
     $out = $p.StandardOutput.ReadToEnd()
-    $null = $p.StandardError.ReadToEnd()
+    $Script:LastStderr = $p.StandardError.ReadToEnd()
     $p.WaitForExit()
     return $out.Trim()
   }
@@ -173,6 +173,12 @@ Describe "check-tool-call.ps1 while logged out" {
   It "blocks a chained sleep and a read of any other file" {
     (Invoke-Hook -Name "check-tool-call" -Payload (New-Payload @{ tool_name = "Shell"; tool_input = @{ command = "Start-Sleep 5; Get-Content x" } }) | ConvertFrom-Json).permission | Should -Be "deny"
     (Invoke-Hook -Name "check-tool-call" -Payload (New-Payload @{ tool_name = "Read"; tool_input = @{ file_path = (Join-Path $Script:TestHome ".pn/credentials.json") } }) | ConvertFrom-Json).permission | Should -Be "deny"
+  }
+
+  It "handles Cursor's Windows-style cwd (/c:/...) without an error" {
+    $r = Invoke-Hook -Name "check-tool-call" -Payload (New-Payload @{ tool_name = "AwaitShell"; tool_input = @{ shellId = "1" }; cwd = "/c:/Users/shoaib/proj"; workspace_roots = @("/c:/Users/shoaib/proj") }) | ConvertFrom-Json
+    $r.permission | Should -Be "allow"
+    $Script:LastStderr | Should -BeNullOrEmpty
   }
 
   It "allows a payload that is not valid JSON" {

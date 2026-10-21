@@ -107,6 +107,7 @@ try {
     $workspaceRoots = @(Get-JsonProperty -InputObject $payload -Name "workspace_roots" -Default @())
   }
   if ($workspaceRoots.Count -eq 0) { throw "no workspace_roots" }
+  $workspaceRoots = @($workspaceRoots | ForEach-Object { ConvertTo-PnLocalPath -Path ([string]$_) })
 
   if (-not (Test-Path $CacheDir)) {
     # SilentlyContinue: if this fails, the cache-skip optimization below
@@ -118,10 +119,10 @@ try {
 
   foreach ($root in $workspaceRoots) {
     if (-not $root) { continue }
-    if (-not (Test-Path $root -PathType Container)) { continue }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
     if (-not (Test-SafeWorkspaceRoot -RootPath $root)) { continue }
 
-    $root = (Resolve-Path $root -ErrorAction SilentlyContinue).Path
+    $root = (Resolve-Path -LiteralPath $root -ErrorAction SilentlyContinue).Path
     if (-not $root) { continue }
     if (-not (Test-SafeWorkspaceRoot -RootPath $root)) { continue }
 

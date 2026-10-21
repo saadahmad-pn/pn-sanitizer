@@ -140,11 +140,7 @@ try {
   if (-not $clientSessionId) {
     $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "session_id" -Default "")
   }
-  $cwd = [string](Get-JsonProperty -InputObject $parsedPayload -Name "cwd" -Default "")
-  if (-not $cwd) {
-    $roots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
-    if ($roots.Count -gt 0) { $cwd = [string]$roots[0] }
-  }
+  $cwd = Get-PnPayloadCwd -Payload $parsedPayload
   $generationId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "generation_id" -Default "")
   $modelId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "model_id" -Default "")
   $modelLegacy = [string](Get-JsonProperty -InputObject $parsedPayload -Name "model" -Default "")
@@ -153,7 +149,7 @@ try {
   $gitRepoUrl = ""
   $gitBranch = ""
   $files = @()
-  if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+  if ($cwd -and (Test-PnGitRepo -Path $cwd)) {
     $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
     $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
     if ($gitEventType) {

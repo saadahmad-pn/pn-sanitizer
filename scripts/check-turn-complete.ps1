@@ -24,11 +24,7 @@ try {
     $payload = $stdinText | ConvertFrom-Json -ErrorAction Stop
 
     $transcriptPath = Get-JsonProperty -InputObject $payload -Name "transcript_path" -Default ""
-    $cwd = [string](Get-JsonProperty -InputObject $payload -Name "cwd" -Default "")
-    if (-not $cwd) {
-      $roots = @(Get-JsonProperty -InputObject $payload -Name "workspace_roots" -Default @())
-      if ($roots.Count -gt 0) { $cwd = [string]$roots[0] }
-    }
+    $cwd = Get-PnPayloadCwd -Payload $payload
     $clientSessionId = Get-JsonProperty -InputObject $payload -Name "conversation_id" -Default ""
     if (-not $clientSessionId) {
       $clientSessionId = Get-JsonProperty -InputObject $payload -Name "session_id" -Default ""
@@ -70,7 +66,7 @@ try {
 
           $gitRepoUrl = ""
           $gitBranch = ""
-          if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+          if ($cwd -and (Test-PnGitRepo -Path $cwd)) {
             $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
             $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
           }

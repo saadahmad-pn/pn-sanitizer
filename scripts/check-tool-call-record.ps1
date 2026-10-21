@@ -40,11 +40,7 @@ try {
       if (-not $clientSessionId) {
         $clientSessionId = [string](Get-JsonProperty -InputObject $payload -Name "session_id" -Default "")
       }
-      $cwd = [string](Get-JsonProperty -InputObject $payload -Name "cwd" -Default "")
-      if (-not $cwd) {
-        $roots = @(Get-JsonProperty -InputObject $payload -Name "workspace_roots" -Default @())
-        if ($roots.Count -gt 0) { $cwd = [string]$roots[0] }
-      }
+      $cwd = Get-PnPayloadCwd -Payload $payload
       $generationId = [string](Get-JsonProperty -InputObject $payload -Name "generation_id" -Default "")
       $toolName = [string](Get-JsonProperty -InputObject $payload -Name "tool_name" -Default "")
       $toolInput = Get-JsonProperty -InputObject $payload -Name "tool_input" -Default $null
@@ -71,7 +67,7 @@ try {
 
           $gitRepoUrl = ""
           $gitBranch = ""
-          if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+          if ($cwd -and (Test-PnGitRepo -Path $cwd)) {
             $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
             $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
           }
