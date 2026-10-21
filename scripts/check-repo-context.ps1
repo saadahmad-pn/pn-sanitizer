@@ -6,6 +6,15 @@
 # consumer only needs the first <GIT> tag).
 #
 # This hook has nothing to gate -- it never blocks prompt submission.
+#
+# No longer registered in hooks.json: check-prompt.ps1 starts this script
+# as a detached background process (the Windows equivalent of
+# check-prompt.sh's `write_repo_context_rules ... &`), passing the
+# workspace roots as -RootsBase64 (base64 of a JSON array) so paths with
+# spaces survive Start-Process argument joining. Reading the hook payload
+# from stdin still works for a direct invocation.
+
+param([string]$RootsBase64 = "")
 
 Set-StrictMode -Version Latest
 # "Continue" (not "Stop"): a hiccup on one repo/root should not abort
@@ -14,6 +23,10 @@ Set-StrictMode -Version Latest
 # actually guarantees {"continue": true} always gets printed, regardless
 # of this setting.
 $ErrorActionPreference = "Continue"
+# Started in the background by check-prompt.ps1: print nothing at all, not
+# even errors -- the process can share the hook's output stream (it does on
+# macOS/Linux), and anything extra there would corrupt the hook's JSON.
+if ($RootsBase64) { $ErrorActionPreference = "SilentlyContinue" }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
@@ -81,10 +94,18 @@ function Get-CacheKeyForRoot {
 }
 
 try {
-  $rawInput = Get-StdinText
-  if (-not $rawInput) { throw "no input" }
-  $payload = $rawInput | ConvertFrom-Json -ErrorAction Stop
-  $workspaceRoots = @(Get-JsonProperty -InputObject $payload -Name "workspace_roots" -Default @())
+  if ($RootsBase64) {
+    $rootsJson = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($RootsBase64))
+    # ForEach-Object unrolls the array: Windows PowerShell 5.1's
+    # ConvertFrom-Json emits a JSON array as one object, so @(...) alone
+    # would give a one-element array holding the whole list.
+    $workspaceRoots = @($rootsJson | ConvertFrom-Json -ErrorAction Stop | ForEach-Object { $_ })
+  } else {
+    $rawInput = Get-StdinText
+    if (-not $rawInput) { throw "no input" }
+    $payload = $rawInput | ConvertFrom-Json -ErrorAction Stop
+    $workspaceRoots = @(Get-JsonProperty -InputObject $payload -Name "workspace_roots" -Default @())
+  }
   if ($workspaceRoots.Count -eq 0) { throw "no workspace_roots" }
 
   if (-not (Test-Path $CacheDir)) {
@@ -181,5 +202,5 @@ try {
 } catch {
   # Fail open, always -- this hook has nothing to gate.
 } finally {
-  Write-Output '{"continue": true}'
+  if (-not $RootsBase64) { Write-Output '{"continue": true}' }
 }

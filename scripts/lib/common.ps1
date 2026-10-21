@@ -354,11 +354,10 @@ function Write-AuditLog {
 
 # Anomaly-streak tracking. Mirrors pn_record_scan_anomaly/
 # pn_record_successful_scan in common.sh -- see that comment for the full
-# rationale: ConvertFrom-PnMessagesResponse's block/allow verdict is a
-# reverse-engineered heuristic with no real structured field from the
-# backend yet, so a silent, complete loss of enforcement (every scan
-# landing on "anomaly") needs a loud signal past a threshold instead of
-# staying invisible. Scoped narrowly to that classification, not
+# rationale: a scan response with no recognized action_to_take is neither
+# an allow nor a block, so a silent, complete loss of enforcement (every
+# scan landing on "anomaly") needs a loud signal past a threshold instead
+# of staying invisible. Scoped narrowly to that classification, not
 # transport-level failures, same as the bash side.
 $Script:PnAnomalyStatePath = Join-Path $HOME ".paradigm-scanner\anomaly_state.json"
 $Script:PnAnomalyWarningThreshold = 3
@@ -557,7 +556,7 @@ function Get-CurrentTurnText {
 # Same scoping as Get-CurrentTurnText (last user message to end of file),
 # but role-separated into $Script:PnTurnPrompt/$Script:PnTurnResponse
 # instead of one blended string -- for Code Chain's turn-recording payload
-# (lib/codechain-client.ps1), which has distinct Prompt/Response fields.
+# (check-turn-complete.ps1's after_agent_response call), which has distinct Prompt/Response fields.
 # Both globals are reset to "" up front so a missing/unreadable transcript
 # leaves neither stale from a previous call in the same process.
 function Get-CurrentTurnMessages {

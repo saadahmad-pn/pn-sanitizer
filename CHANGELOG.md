@@ -4,6 +4,54 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-21 — Bring the Windows hooks back in line with macOS/Linux (PN-12431)
+
+The September hook consolidation (PN-11847) moved the bash scripts to the
+standardized `/api/v1/plugins/sessions/{id}/*` API and to two generic
+tool-call hooks, but the Windows side was never moved with them. On Windows,
+`hooks.json` called `check-tool-call.ps1` and `check-tool-call-record.ps1`,
+neither of which existed, and every remaining PowerShell hook still called
+`/api/v1/plugin/codechain/...` endpoints control-server no longer serves. The
+start-up notice also told the agent to run `login.ps1 --base-url`, which
+PowerShell rejects ("A positional parameter cannot be found") since the
+script's parameter is `-BaseUrl`. Raised in review on PR #25.
+
+New, mirroring their bash counterparts:
+
+- `scripts/check-tool-call.ps1` — the preToolUse gate. Exempts this
+  install's own `login.ps1` / `logout.ps1` / `check-configured.ps1`
+  invocations from the scan with the same fully anchored grammar as the bash
+  side (no chaining, no other install's copy, base URL scheme+host only, the
+  interpreter a bare name or the exact Windows PowerShell path), lets the
+  login skill wait on its own run while logged out, and otherwise scans the
+  call via `before_tool_call`, including git push/commit file attachment.
+- `scripts/check-tool-call-record.ps1` — the postToolUse recorder
+  (`after_tool_call`).
+- `scripts/lib/plugins-client.ps1`, `login-detection.ps1`,
+  `session-metadata.ps1` — the PowerShell libraries behind them.
+
+Moved to the standardized API: `check-prompt.ps1` (`before_prompt`, plus
+closing out a blocked prompt's turn, plus the repo-context rule refresh,
+which `check-repo-context.ps1` now does as a detached background process
+instead of its own hooks.json entry), `check-turn-complete.ps1`
+(`after_agent_response`), and `check-session.ps1` / `check-session-end.ps1`
+(local session metadata instead of the removed session markers).
+
+Removed, with no remaining callers: `check-write.ps1`, `lib/scan-client.ps1`,
+`lib/codechain-client.ps1`, `lib/detection-client.ps1`, and
+`test/pester/ConvertFrom-PnMessagesResponse.Tests.ps1`, whose 13 tests were
+already failing because the function they covered no longer existed.
+
+Verified on macOS with PowerShell 7 against a local mock server: for the same
+input, the Windows and bash hooks send byte-for-byte identical request bodies
+for before_tool_call (including attached files), after_tool_call,
+before_prompt and its blocked-prompt close-out, and after_agent_response.
+`bash test/run-all-tests.sh` now also runs Pester: 416/416, of which 68 are
+new Pester tests (login grammar, the client with the network mocked, and the
+hook scripts end to end as separate processes). Not yet verified: Windows
+PowerShell 5.1 on a real Windows machine, and PSScriptAnalyzer, which was not
+installed here.
+
 ## 2026-10-03 — Finish the login confirmation page, drop the stale re-open instruction (PN-12247)
 
 Signing in with an email address and password never completed the plugin

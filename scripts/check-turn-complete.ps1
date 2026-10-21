@@ -1,5 +1,5 @@
 # afterAgentResponse hook (Windows): records the just-completed turn (user
-# prompt + assistant response) to Code Chain. Mirrors
+# prompt + assistant response) via the plugins API (after_agent_response). Mirrors
 # scripts/check-turn-complete.sh -- see that file's header for the full
 # rationale, including why this is wired to afterAgentResponse and not
 # "stop" (stop fires at agent-loop end, not per turn, and never carries the
@@ -11,7 +11,7 @@ $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "lib\git-utils.ps1")
-. (Join-Path $ScriptDir "lib\codechain-client.ps1")
+. (Join-Path $ScriptDir "lib\plugins-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $CodechainTimeoutSec = if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) { [int]$env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT } else { 10 }
@@ -24,18 +24,22 @@ try {
     $payload = $stdinText | ConvertFrom-Json -ErrorAction Stop
 
     $transcriptPath = Get-JsonProperty -InputObject $payload -Name "transcript_path" -Default ""
-    $cwd = Get-JsonProperty -InputObject $payload -Name "cwd" -Default ""
+    $cwd = [string](Get-JsonProperty -InputObject $payload -Name "cwd" -Default "")
+    if (-not $cwd) {
+      $roots = @(Get-JsonProperty -InputObject $payload -Name "workspace_roots" -Default @())
+      if ($roots.Count -gt 0) { $cwd = [string]$roots[0] }
+    }
     $clientSessionId = Get-JsonProperty -InputObject $payload -Name "conversation_id" -Default ""
     if (-not $clientSessionId) {
       $clientSessionId = Get-JsonProperty -InputObject $payload -Name "session_id" -Default ""
     }
     $responseText = Get-JsonProperty -InputObject $payload -Name "text" -Default ""
     # Cursor's own generation_id -- changes per user turn, unlike
-    # conversation_id (stable for the whole chat). See lib/codechain-client.ps1's
+    # conversation_id (stable for the whole chat). See lib/plugins-client.sh's
     # header. Not confirmed present on every hook payload in every Cursor
     # build; the server degrades gracefully when empty.
     $generationId = Get-JsonProperty -InputObject $payload -Name "generation_id" -Default ""
-    # Cursor's own hook-reported model name -- see lib/codechain-client.ps1's header.
+    # Cursor's own hook-reported model name -- see lib/plugins-client.sh's header.
     # ModelId ("Structured ID for the selected model, when available", per
     # Cursor's hooks docs) is preferred over the legacy model slug (confirmed
     # sending the literal "unknown" placeholder on this hook's payload,
@@ -60,8 +64,9 @@ try {
       if (-not $responseText) { $responseText = $responseFromTranscript }
 
       if ($promptText -or $responseText) {
-        if (Test-PnConfigured) {
-          $config = Resolve-PnConfig
+        $config = $null
+        if (Test-PnConfigured) { $config = Resolve-PnConfig }
+        if ($null -ne $config) {
 
           $gitRepoUrl = ""
           $gitBranch = ""
@@ -70,7 +75,7 @@ try {
             $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
           }
 
-          Send-CodechainTurn -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
+          Invoke-PnPluginAfterAgentResponse -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $CodechainTimeoutSec `
             -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch `
             -Prompt $promptText -Response $responseText -GenerationId $generationId -Model $model
         }
