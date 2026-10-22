@@ -45,29 +45,45 @@ writes. Proceed?"). Only continue on a clear yes.
 
 ### 2. Locate the logout script
 
-Same reasoning as the login/models skills: there's no environment variable
-that tells you where the plugin is installed, so don't guess the path. Use
+There's no environment variable that tells you where the plugin is
+installed, so don't guess the path. Instead, read it from your context: the
+`sessionStart` hook injects this line into every session:
+
+```
+Paradigm Networks plugin scripts directory: <scripts-dir>
+```
+
+`<scripts-dir>` is this installation's own path, so it is correct even when
+several copies of the plugin are installed (a local copy plus marketplace
+copies, or several cached marketplace versions). The logout script is
+`<scripts-dir>/logout.sh` (macOS/Linux) or `<scripts-dir>\logout.ps1`
+(Windows). **Do not search for it when that line is present.**
+
+Only if that line is not in your context, fall back to searching. Use
 whichever command matches the shell you're actually running in — a Windows
 machine without WSL/Git Bash can't run the bash `find` command, and vice
-versa:
+versa. These patterns match both local installs
+(`~/.cursor/plugins/local/paradigm-scanner/scripts/`) and marketplace
+installs
+(`~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<version>/scripts/`):
 
 macOS/Linux:
 
 ```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/logout.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/logout.sh" 2>/dev/null
 ```
 
 Windows (PowerShell):
 
 ```powershell
 Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\logout.ps1" } |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\*scripts\logout.ps1" } |
   Select-Object -ExpandProperty FullName
 ```
 
-This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
-installs (`~/.cursor/plugins/local/`). If both come back for a platform,
-prefer `local/`.
+If more than one copy comes back, the search cannot tell which one is
+running. Prefer one under `local/`; otherwise use the most recently modified
+one.
 
 ### 3. Run it
 

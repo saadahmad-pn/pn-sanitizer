@@ -15,10 +15,21 @@ context), so this rule is the backstop.
 ## What to do
 
 On the **first user message of a session**, before doing anything else,
-check whether Paradigm Networks is already configured. Locate the plugin's
-own `scripts/` directory (it can be installed anywhere and there's no
-environment variable that tells you where, so path-guessing is unreliable)
-and run `check-configured.sh`/`check-configured.ps1` from it.
+check whether Paradigm Networks is already configured by running
+`check-configured.sh`/`check-configured.ps1` from the plugin's own
+`scripts/` directory.
+
+To find that directory, look in your context for the line the
+`sessionStart` hook injects into every session:
+
+```
+Paradigm Networks plugin scripts directory: <scripts-dir>
+```
+
+Use `<scripts-dir>` exactly as given. It is this installation's own path, so
+it is correct even when several copies of the plugin are installed (a local
+copy plus marketplace copies, or several cached marketplace versions).
+**Do not search for the scripts when that line is present.**
 
 **Don't hand-write your own file-existence check** (e.g. `test -f
 ~/.pn/credentials.json` or `Test-Path "$HOME\.pn\credentials.json"`) instead
@@ -29,35 +40,37 @@ literally the first message of every single session, since this rule runs
 every time. `check-configured.sh`/`.ps1` takes no arguments and its own
 invocation names no path, so there's nothing for that finding to point at.
 
-macOS/Linux:
+Then run, macOS/Linux:
 
 ```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/check-configured.sh" 2>/dev/null
-```
-
-then, using the path that came back:
-
-```bash
-bash <path-to-check-configured.sh>
+bash <scripts-dir>/check-configured.sh
 ```
 
 Windows (PowerShell):
 
+```
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\check-configured.ps1"
+```
+
+Only if that line is not in your context (the `sessionStart` injection can
+race the first message), fall back to searching. These patterns match both
+local installs (`~/.cursor/plugins/local/paradigm-scanner/scripts/`) and
+marketplace installs
+(`~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<version>/scripts/`):
+
+```bash
+find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/check-configured.sh" 2>/dev/null
+```
+
 ```powershell
 Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\check-configured.ps1" } |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\*scripts\check-configured.ps1" } |
   Select-Object -ExpandProperty FullName
 ```
 
-then:
-
-```
-& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<path-to-check-configured.ps1>"
-```
-
-Both cover marketplace installs (`~/.cursor/plugins/cache/`) and local
-installs (`~/.cursor/plugins/local/`). If both come back for a platform,
-prefer `local/`.
+If more than one path comes back, several copies are installed and the
+search cannot tell which one is running. Prefer one under `local/`;
+otherwise use the most recently modified one.
 
 Run the check-configured command **exactly as shown and nothing else** —
 don't combine it with `cd`, `&&`, `;`, or any other command, and don't add
@@ -71,9 +84,8 @@ Paradigm Networks' own security scanning recognize it and skip scanning it.
 - `NOT_CONFIGURED` → run the `paradigmnetworks-login` skill before
   proceeding with the user's original request. That skill owns the
   entire flow (asking for the base URL, running the login script,
-  relaying the result) — don't duplicate any of it here, and don't bother
-  passing along the scripts-directory path you found above; the skill
-  locates it again itself.
+  relaying the result) — don't duplicate any of it here, and the skill reads
+  the scripts directory from the same injected line.
 
 Do not treat an allowed prompt or a "Paradigm Networks unreachable"
 message as proof that Paradigm Networks is configured — both hooks fail

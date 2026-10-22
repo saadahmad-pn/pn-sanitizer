@@ -84,6 +84,13 @@ EOF
     return 0
   fi
 
+  # Sent in every session, configured or not: the agent has no other
+  # reliable way to learn this install's path (Cursor exposes no
+  # plugin-install env var, and searching ~/.cursor/plugins can match
+  # several cached copies). The login/logout skills and pn-login-check rule
+  # read it from here.
+  local scripts_dir_line="Paradigm Networks plugin scripts directory: $SCRIPT_DIR"
+
   # Check if Paradigm Networks is configured
   if pn_is_configured; then
     pn_check_scan_staleness
@@ -92,9 +99,9 @@ EOF
       read -r -d '' stale_message <<'EOF' || true
 ⚠️ Paradigm Networks security scanning hasn't completed a successful scan in over an hour (or hasn't completed one yet this session). Prompts and file writes may currently be going through unscanned. Check your network connection and Paradigm Networks login status; if this continues, contact your administrator.
 EOF
-      json_session_context "$stale_message"
+      json_session_context "$stale_message"$'\n\n'"$scripts_dir_line"
     else
-      echo '{}'
+      json_session_context "$scripts_dir_line"
     fi
   else
     # Not configured. SCRIPT_DIR is interpolated because the agent cannot
@@ -107,13 +114,13 @@ EOF
     read -r -d '' message <<EOF || true
 Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.
 
-To fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in:
+To fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in, with network access (required_permissions ["full_network"]) since it must reach the Paradigm Networks server:
 
 bash $SCRIPT_DIR/login.sh --base-url <their-base-url>
 
 Run it verbatim. Do NOT search for the script, list directories, read files, or chain anything onto the command -- that path is this plugin's own install directory and is the only one accepted, and every other tool call is blocked until login finishes, so trying to locate it yourself will fail. See the paradigmnetworks-login skill for the rest of the flow.
 EOF
-    json_session_context "$message"
+    json_session_context "$message"$'\n\n'"$scripts_dir_line"
   fi
 
   return 0
