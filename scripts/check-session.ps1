@@ -13,48 +13,35 @@ $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "lib\git-utils.ps1")
-. (Join-Path $ScriptDir "lib\codechain-client.ps1")
+. (Join-Path $ScriptDir "lib\session-metadata.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
-
-$CodechainTimeoutSec = if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) { [int]$env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT } else { 5 }
 
 $stdinText = Get-StdinText
 
-# Best-effort Code Chain session-start marker, run as a background job so it
-# never delays the login-check message below -- see
-# design-ideas/Codechain_Plugin_Hooks_Design.md and check-session.sh's
-# identical rationale. If this fails or never completes before the process
-# exits, later hooks (check-git-event-record, check-turn-complete) still
-# record fine on their own -- they use the same client-supplied session id
-# directly and don't depend on this call.
+# Writes this session's local metadata file (SessionId/Cwd/GitRepoUrl/
+# GitBranch) -- see lib/session-metadata.ps1. Replaces the Code Chain
+# session-start marker this used to send, whose endpoint control-server no
+# longer serves (see check-session.sh). Purely local, no login needed, and
+# never affects this hook's own output. Run inline rather than as a
+# background job: it is a small local write, and a Start-Job child is
+# killed when this process exits anyway.
 try {
   if ($stdinText) {
     $sessionPayload = $stdinText | ConvertFrom-Json -ErrorAction Stop
-    $clientSessionId = Get-JsonProperty -InputObject $sessionPayload -Name "conversation_id" -Default ""
+    $clientSessionId = [string](Get-JsonProperty -InputObject $sessionPayload -Name "conversation_id" -Default "")
     if (-not $clientSessionId) {
-      $clientSessionId = Get-JsonProperty -InputObject $sessionPayload -Name "session_id" -Default ""
+      $clientSessionId = [string](Get-JsonProperty -InputObject $sessionPayload -Name "session_id" -Default "")
     }
-    $cwd = Get-JsonProperty -InputObject $sessionPayload -Name "cwd" -Default ""
-    if (-not $cwd) {
-      $roots = @(Get-JsonProperty -InputObject $sessionPayload -Name "workspace_roots" -Default @())
-      if ($roots.Count -gt 0) { $cwd = $roots[0] }
-    }
+    $cwd = Get-PnPayloadCwd -Payload $sessionPayload
 
-    if ($clientSessionId -and (Test-PnConfigured)) {
-      $config = Resolve-PnConfig
+    if ($clientSessionId) {
       $gitRepoUrl = ""
       $gitBranch = ""
-      if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+      if ($cwd -and (Test-PnGitRepo -Path $cwd)) {
         $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
         $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
       }
-      Start-Job -ScriptBlock {
-        param($ScriptDir, $BaseUrl, $AccessToken, $Timeout, $SessionId, $Cwd, $GitRepoUrl, $GitBranch)
-        . (Join-Path $ScriptDir "lib\common.ps1")
-        . (Join-Path $ScriptDir "lib\codechain-client.ps1")
-        Register-CodechainSession -BaseUrl $BaseUrl -AccessToken $AccessToken -TimeoutSec $Timeout `
-          -SessionId $SessionId -Cwd $Cwd -GitRepoUrl $GitRepoUrl -GitBranch $GitBranch
-      } -ArgumentList $ScriptDir, $config.BaseUrl, $config.AccessToken, $CodechainTimeoutSec, $clientSessionId, $cwd, $gitRepoUrl, $gitBranch | Out-Null
+      Write-PnSessionMetadata -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch
     }
   }
 } catch {
@@ -86,7 +73,7 @@ try {
     # agent cannot discover the plugin's install path, and every command it
     # would use to look is blocked while unconfigured.
     $loginScript = Join-Path $ScriptDir "login.ps1"
-    $message = "Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.`n`nTo fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in, with network access (required_permissions [`"full_network`"]) since it must reach the Paradigm Networks server:`n`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$loginScript`" --base-url <their-base-url>`n`nRun it verbatim. Do NOT search for the script, list directories, read files, or chain anything onto the command -- that path is this plugin's own install directory and is the only one accepted, and every other tool call is blocked until login finishes, so trying to locate it yourself will fail. See the paradigmnetworks-login skill for the rest of the flow."
+    $message = "Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.`n`nTo fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in, with network access (required_permissions [`"full_network`"]) since it must reach the Paradigm Networks server:`n`n& `"`$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -ExecutionPolicy Bypass -File `"$loginScript`" -BaseUrl <their-base-url>`n`nRun it verbatim. Do NOT search for the script, list directories, read files, or chain anything onto the command -- that path is this plugin's own install directory and is the only one accepted, and every other tool call is blocked until login finishes, so trying to locate it yourself will fail. See the paradigmnetworks-login skill for the rest of the flow."
     Write-JsonSessionContext -Context "$message`n`n$scriptsDirLine"
   }
 } catch {

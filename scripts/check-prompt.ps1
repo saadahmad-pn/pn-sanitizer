@@ -10,7 +10,7 @@ $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "lib\git-utils.ps1")
-. (Join-Path $ScriptDir "lib\scan-client.ps1")
+. (Join-Path $ScriptDir "lib\plugins-client.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 $TimeoutSeconds = 60
@@ -21,6 +21,30 @@ if ($env:PARADIGM_NETWORKS_TIMEOUT) {
   }
 }
 $DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
+
+# Start-PnRepoContextRefresh -Roots <workspace roots>
+# Windows equivalent of check-prompt.sh's backgrounded
+# write_repo_context_rules: starts check-repo-context.ps1 as a detached
+# process so it never delays this hook's gate (a Start-Job child would be
+# killed when this process exits). Roots travel as base64 JSON so paths
+# with spaces survive Start-Process's argument joining. Never throws.
+function Start-PnRepoContextRefresh {
+  param([object[]]$Roots)
+  try {
+    $rootsJson = ConvertTo-Json -InputObject @($Roots | ForEach-Object { [string]$_ }) -Compress
+    $rootsB64 = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($rootsJson))
+    $worker = Join-Path $ScriptDir "check-repo-context.ps1"
+    $argList = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "`"$worker`"", "-RootsBase64", $rootsB64)
+    $exe = (Get-Process -Id $PID).Path
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+      Start-Process -FilePath $exe -ArgumentList $argList -WindowStyle Hidden | Out-Null
+    } else {
+      Start-Process -FilePath $exe -ArgumentList $argList | Out-Null
+    }
+  } catch {
+    Write-DebugLog -Message "Repo context refresh not started | $($_.Exception.Message)" -LogPath $DebugLogPath
+  }
+}
 
 $rawMode = $env:PARADIGM_NETWORKS_PROMPT_FAILURE_MODE
 if (-not $rawMode) { $rawMode = "allow" }
@@ -47,22 +71,24 @@ try {
 
   $prompt = [string](Get-JsonProperty -InputObject $parsedPayload -Name "prompt" -Default "")
 
+  # Repo/branch context injection -- see check-prompt.sh. Never gates.
+  $workspaceRoots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @() | ForEach-Object { ConvertTo-PnLocalPath -Path ([string]$_) })
+  if ($workspaceRoots.Count -gt 0) {
+    Start-PnRepoContextRefresh -Roots $workspaceRoots
+  }
+
   # Session id + cwd (for the scan call's chatapi join and context -- see
-  # lib/scan-client.ps1's header) and derive git context from cwd the same
+  # lib/plugins-client.sh's header) and derive git context from cwd the same
   # way every other hook here does.
   $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "conversation_id" -Default "")
   if (-not $clientSessionId) {
     $clientSessionId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "session_id" -Default "")
   }
-  $cwd = [string](Get-JsonProperty -InputObject $parsedPayload -Name "cwd" -Default "")
-  if (-not $cwd) {
-    $roots = @(Get-JsonProperty -InputObject $parsedPayload -Name "workspace_roots" -Default @())
-    if ($roots.Count -gt 0) { $cwd = $roots[0] }
-  }
+  $cwd = Get-PnPayloadCwd -Payload $parsedPayload
   # Cursor's own generation_id -- changes per user turn, unlike
-  # conversation_id. See lib/scan-client.ps1's header.
+  # conversation_id. See lib/plugins-client.sh's header.
   $generationId = [string](Get-JsonProperty -InputObject $parsedPayload -Name "generation_id" -Default "")
-  # Cursor's own hook-reported model name -- see lib/scan-client.ps1's header.
+  # Cursor's own hook-reported model name -- see lib/plugins-client.sh's header.
   # ModelId ("Structured ID for the selected model, when available", per
   # Cursor's hooks docs) is preferred over the legacy model slug -- see
   # Resolve-HookModel's header comment in lib/common.ps1.
@@ -71,7 +97,7 @@ try {
   $model = Resolve-HookModel -ModelId $modelId -LegacyModel $modelLegacy
   $gitRepoUrl = ""
   $gitBranch = ""
-  if ($cwd -and (Test-Path (Join-Path $cwd ".git"))) {
+  if ($cwd -and (Test-PnGitRepo -Path $cwd)) {
     $gitRepoUrl = Get-GitRemoteUrlOrEmpty -RepoPath $cwd
     $gitBranch = Get-GitCurrentBranchOrEmpty -RepoPath $cwd
   }
@@ -86,13 +112,22 @@ try {
 
   Write-DebugLog -Message "Scanning prompt | base_url=$($config.BaseUrl) | prompt_len=$($prompt.Length) | timeout=${TimeoutSeconds}s" -LogPath $DebugLogPath
 
-  # Invoke-PnScanText (lib/scan-client.ps1) posts to the composite
-  # PromptGuard+PolicyEngine+CodeDefense scan endpoint -- no model
-  # invocation, a real structured Action verdict instead of the old
-  # /v1/messages zero-usage/banner-text heuristic.
+  # Invoke-PnPluginBeforePrompt (lib/plugins-client.ps1) posts to the
+  # standardized prompts domain (Action=before_prompt) -- the composite
+  # PromptGuard+PolicyEngine+CodeDefense scan, a structured verdict.
   $callStart = Get-Date
-  $scanResult = Invoke-PnScanText -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds `
-    -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Text $prompt -Kind "prompt" -GenerationId $generationId -Model $model
+  $scanResult = Invoke-PnPluginBeforePrompt -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds `
+    -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch -Text $prompt -GenerationId $generationId -Model $model
+
+  # A denied prompt never reaches the agent, so afterAgentResponse never
+  # fires for this turn: close out the turn before_prompt opened here
+  # instead of leaving it open on the server forever -- see check-prompt.sh.
+  function Close-DeniedPrompt {
+    param([string]$Outcome)
+    Invoke-PnPluginAfterAgentResponse -BaseUrl $config.BaseUrl -AccessToken $config.AccessToken -TimeoutSec $TimeoutSeconds `
+      -SessionId $clientSessionId -Cwd $cwd -GitRepoUrl $gitRepoUrl -GitBranch $gitBranch `
+      -Prompt $prompt -Response $Outcome -GenerationId $generationId -Model $model
+  }
   $elapsedMs = [int]((Get-Date) - $callStart).TotalMilliseconds
   Write-DebugLog -Message "Scan returned after ${elapsedMs}ms | Status=$($scanResult.Status) | Action=$($scanResult.Action)" -LogPath $DebugLogPath
 
@@ -154,12 +189,14 @@ try {
       }
       if ($scanResult.Message) {
         if ($PromptFailureMode -eq "closed") {
+          Close-DeniedPrompt -Outcome "[BLOCKED] ${anomalyPrefix}$($scanResult.Message)"
           Write-JsonDeny -Message "${anomalyPrefix}$($scanResult.Message)"
         } else {
           Write-JsonAllow -Message "${anomalyPrefix}$($scanResult.Message)"
         }
       } else {
         if ($PromptFailureMode -eq "closed") {
+          Close-DeniedPrompt -Outcome "[BLOCKED] ${anomalyPrefix}The scanning service returned an unexpected response. Prompt blocked."
           Write-JsonDeny -Message "${anomalyPrefix}The scanning service returned an unexpected response. Prompt blocked."
         } else {
           Write-JsonAllow -Message "${anomalyPrefix}The scanning service returned an unexpected response. Allowing prompt."
@@ -171,6 +208,7 @@ try {
       # Markdown formatting confirmed rendering correctly in Cursor's UI.
       $reason = $scanResult.Message
       if (-not $reason) { $reason = "A policy violation was detected." }
+      Close-DeniedPrompt -Outcome "[BLOCKED] $reason"
 
       # Preview of the actual prompt that got flagged, capped at 60 words.
       $flaggedPreview = ($prompt -replace '\s+', ' ').Trim()
