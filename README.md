@@ -107,6 +107,9 @@ organization's agreement with Paradigm Networks. See our
 [Privacy Policy](https://paradigmnetworks.ai/privacy-policy/) and
 [Terms of Service](https://paradigmnetworks.ai/terms/).
 
+Paradigm Networks does not use data collected through this plugin to train
+its AI models.
+
 ## Try it
 
 1. Install the plugin and log in.
