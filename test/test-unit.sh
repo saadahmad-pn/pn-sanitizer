@@ -369,7 +369,7 @@ wait_for_callback "$callback_port" "$callback_deadline" "https://acme.paradigmne
 wait "$curl_pid" 2>/dev/null
 
 assert_output_contains "cat '$callback_page_file'" '<a href="https://acme.paradigmnetworks.ai">' "Links back to the deployment the user logged in to"
-assert_output_contains "cat '$callback_page_file'" "You're logged in." "Still confirms the login"
+assert_output_contains "cat '$callback_page_file'" "Return to your editor to finish" "Sends the user back to the editor for the real outcome"
 
 test_case "wait_for_callback: no base URL means no link, not a broken one"
 callback_port=18767
@@ -384,7 +384,25 @@ wait_for_callback "$callback_port" "$callback_deadline"
 wait "$curl_pid" 2>/dev/null
 
 assert_output_equals "grep -c '<a href' '$callback_page_file' || true" "0" "No anchor rendered when the caller passes no base URL"
-assert_output_contains "cat '$callback_page_file'" "You're logged in." "Still confirms the login"
+assert_output_contains "cat '$callback_page_file'" "Return to your editor to finish" "Sends the user back to the editor for the real outcome"
+
+test_case "exchange_code: no response at all points at the sandbox"
+curl() { :; }
+out=$(exchange_code "https://acme.paradigmnetworks.ai" "c" "v" "http://127.0.0.1:8000/callback" 2>&1 >/dev/null)
+assert_output_contains "echo \"\$out\"" "could not reach https://acme.paradigmnetworks.ai" "Says the server was not reached"
+assert_output_contains "echo \"\$out\"" "full_network" "Says how to fix it (network access)"
+
+test_case "exchange_code: non-JSON response is shown, not an empty reason"
+curl() { echo "<html>Blocked by proxy</html>"; }
+out=$(exchange_code "https://acme.paradigmnetworks.ai" "c" "v" "http://127.0.0.1:8000/callback" 2>&1 >/dev/null)
+assert_output_contains "echo \"\$out\"" "unexpected non-JSON response" "Names the problem"
+assert_output_contains "echo \"\$out\"" "Blocked by proxy" "Shows what came back"
+
+test_case "exchange_code: JSON error is still reported as before"
+curl() { echo '{"error":"invalid_grant","error_description":"authorization code was not found or has expired"}'; }
+out=$(exchange_code "https://acme.paradigmnetworks.ai" "c" "v" "http://127.0.0.1:8000/callback" 2>&1 >/dev/null)
+assert_output_contains "echo \"\$out\"" "token exchange failed: authorization code was not found or has expired" "Server's own reason"
+unset -f curl
 
 echo ""
 echo -e "${BLUE}=== Unit Tests: login.sh browser handoff ===${NC}"

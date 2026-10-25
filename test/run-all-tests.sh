@@ -25,7 +25,7 @@ TOTAL_FAILED=0
 FAILED_SUITES=()
 
 # Test Suite 1: Unit Tests
-echo -e "${BLUE}[1/9]${NC} Running Unit Tests..."
+echo -e "${BLUE}[1/10]${NC} Running Unit Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-unit.sh" > /tmp/unit-test.log 2>&1
 unit_status=$?
@@ -48,7 +48,7 @@ fi
 echo ""
 
 # Test Suite 2: Integration Tests
-echo -e "${BLUE}[2/9]${NC} Running Integration Tests..."
+echo -e "${BLUE}[2/10]${NC} Running Integration Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-hooks.sh" > /tmp/integration-test.log 2>&1
 int_status=$?
@@ -70,7 +70,7 @@ echo ""
 # lib/plugins-client.sh's pn_build_git_diff_files_json -- the changed-file
 # collection folded into check-tool-call.sh's before_tool_call gate; see
 # design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md)
-echo -e "${BLUE}[3/9]${NC} Running Git Utils Tests..."
+echo -e "${BLUE}[3/10]${NC} Running Git Utils Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-git-utils.sh" > /tmp/git-utils-test.log 2>&1
 gitevent_status=$?
@@ -90,7 +90,7 @@ echo ""
 
 # Test Suite 3b: Code Chain Recording Tests (lib/plugins-client.sh's
 # session-lifecycle + after_* recording functions, get_current_turn_messages)
-echo -e "${BLUE}[4/9]${NC} Running Code Chain Recording Tests..."
+echo -e "${BLUE}[4/10]${NC} Running Code Chain Recording Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-codechain-client.sh" > /tmp/codechain-client-test.log 2>&1
 codechain_status=$?
@@ -112,7 +112,7 @@ echo ""
 # local, purely-client-side session-lifecycle mechanism that replaced the
 # session-start/session-end plugins API calls; see design-ideas/
 # Session_Lifecycle_Simplification_And_Contract_Updates.md)
-echo -e "${BLUE}[5/9]${NC} Running Session Metadata Tests..."
+echo -e "${BLUE}[5/10]${NC} Running Session Metadata Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-session-metadata.sh" > /tmp/session-metadata-test.log 2>&1
 sessmeta_status=$?
@@ -132,7 +132,7 @@ echo ""
 
 # Test Suite 4b: Scan Client Tests (lib/plugins-client.sh's before_prompt/
 # before_tool_call gating, used by check-prompt.sh/check-tool-call.sh)
-echo -e "${BLUE}[6/9]${NC} Running Scan Client Tests..."
+echo -e "${BLUE}[6/10]${NC} Running Scan Client Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-scan-client.sh" > /tmp/scan-client-test.log 2>&1
 scan_status=$?
@@ -153,7 +153,7 @@ echo ""
 # Test Suite 4d: Login Detection Tests (lib/login-detection.sh's
 # pn_is_login_initiation_command -- PN-12153's scan exemption for the login
 # skill's own `bash <path>/login.sh --base-url <url>` tool call)
-echo -e "${BLUE}[7/9]${NC} Running Login Detection Tests..."
+echo -e "${BLUE}[7/10]${NC} Running Login Detection Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-login-detection.sh" > /tmp/login-detection-test.log 2>&1
 logindetect_status=$?
@@ -172,7 +172,7 @@ fi
 echo ""
 
 # Test Suite 5: Error Scenario Tests
-echo -e "${BLUE}[8/9]${NC} Running Error Scenario Tests..."
+echo -e "${BLUE}[8/10]${NC} Running Error Scenario Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-errors.sh" > /tmp/error-test.log 2>&1
 err_status=$?
@@ -190,8 +190,35 @@ else
 fi
 echo ""
 
+# Windows (PowerShell) suite: the scripts/*.ps1 hooks and libraries, via
+# Pester. Needs pwsh with Pester 5+; reported as skipped (not passed) when
+# either is missing, so a machine without them can't look fully green.
+echo -e "${BLUE}[9/10]${NC} Running Windows (Pester) Tests..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+pester_total=0
+if command -v pwsh &>/dev/null && pwsh -NoProfile -Command 'if (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -ge 5 }) { exit 0 } else { exit 1 }' &>/dev/null; then
+  (cd "$PROJECT_DIR" && pwsh -NoProfile -Command '$r = Invoke-Pester -Path test/pester -Output Detailed -PassThru; "Total: $($r.TotalCount)"; "Passed: $($r.PassedCount)"; "Failed: $($r.FailedCount)"; exit $r.FailedCount') > /tmp/pester-test.log 2>&1
+  pester_status=$?
+  pester_passed=$(grep "^Passed:" /tmp/pester-test.log | awk '{print $2}')
+  pester_total=$(grep "^Total:" /tmp/pester-test.log | awk '{print $2}')
+  pester_failed=$(grep "^Failed:" /tmp/pester-test.log | awk '{print $2}')
+  TOTAL_TESTS=$((TOTAL_TESTS + ${pester_total:-0}))
+  TOTAL_PASSED=$((TOTAL_PASSED + ${pester_passed:-0}))
+  TOTAL_FAILED=$((TOTAL_FAILED + ${pester_failed:-0}))
+  if [[ $pester_status -eq 0 ]]; then
+    echo -e "${GREEN}✓ Windows (Pester) Tests: $pester_passed/$pester_total passed${NC}"
+  else
+    [[ -z "$pester_failed" || "$pester_failed" -eq 0 ]] && TOTAL_FAILED=$((TOTAL_FAILED + 1))
+    echo -e "${RED}✗ Windows (Pester) Tests failed ($pester_passed/$pester_total passed) -- see /tmp/pester-test.log${NC}"
+    FAILED_SUITES+=("Windows (Pester) Tests")
+  fi
+else
+  echo -e "${YELLOW}⚠ Windows (Pester) Tests SKIPPED: needs pwsh with Pester 5+ (Install-Module Pester)${NC}"
+fi
+echo ""
+
 # Suite 6: Dependency Check
-echo -e "${BLUE}[9/9]${NC} Checking Dependencies..."
+echo -e "${BLUE}[10/10]${NC} Checking Dependencies..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 DEPS_OK=true
 DEPS_FOUND=()
@@ -238,6 +265,7 @@ if [[ $TOTAL_FAILED -eq 0 ]]; then
   echo "  • Scan Client:             ${scan_total} tests (lib/plugins-client.sh gating, POST /api/v1/plugins/sessions/{id}/*)"
   echo "  • Login Detection:         ${logindetect_total} tests (lib/login-detection.sh, PN-12153 login-initiation scan exemption)"
   echo "  • Error Scenarios:         ${err_total} tests (edge cases, malformed input, file system errors)"
+  echo "  • Windows (Pester):        ${pester_total} tests (scripts/*.ps1 hooks, lib/*.ps1, pn_config.ps1)"
   echo ""
   echo "Dependencies:"
   echo "  Found:   ${#DEPS_FOUND[@]} (${DEPS_FOUND[*]})"

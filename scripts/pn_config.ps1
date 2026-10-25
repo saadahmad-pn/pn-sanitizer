@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $Script:PnClientId = "cursor-plugin"
 $Script:PnCredDir = Join-Path $HOME ".pn"
 $Script:PnCredPath = Join-Path $Script:PnCredDir "credentials.json"
-# 60s, matching the bash side and check-prompt.ps1/check-write.ps1 -- this
+# 60s, matching the bash side and check-prompt.ps1/check-tool-call.ps1 -- this
 # hits the same host, and establishing the HTTPS connection alone has been
 # observed to take ~20-25s on a real Windows target (likely a slow/blocked
 # certificate revocation check). This is the silent, on-the-critical-path

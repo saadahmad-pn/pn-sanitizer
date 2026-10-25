@@ -35,52 +35,61 @@ script (step 4) — there's no environment variable that tells you where the
 plugin is installed, so path-guessing isn't reliable; locate it once here
 and reuse the result.
 
-**First, check your existing context for the path — do not search when it is
-already there.** When Paradigm Networks is not configured, the sessionStart
-hook injects a notice containing the exact command to run, with this
-installation's own absolute path already filled in:
+**Read the path from your context — do not search when it is there.** The
+`sessionStart` hook injects this line into every session, logged in or not:
+
+```
+Paradigm Networks plugin scripts directory: <scripts-dir>
+```
+
+`<scripts-dir>` is this installation's own path, so it is correct even when
+several copies of the plugin are installed (a local copy plus marketplace
+copies, or several cached marketplace versions). Use it as given.
+
+When Paradigm Networks is not configured, the hook's notice also contains
+the exact login command with that path already filled in:
 
 ```
 bash <scripts-dir>/login.sh --base-url <their-base-url>
 ```
 
-If you have that, you already have the scripts directory. Skip straight to
-step 3 (get the base URL) and then step 4, using that exact path. Skip
-step 2 as well: the notice only appears when Paradigm Networks is not
-configured, so the answer is already known.
+If you have that notice, skip straight to step 3 (get the base URL) and then
+step 4, using that exact path. Skip step 2 as well: the notice only appears
+when Paradigm Networks is not configured, so the answer is already known.
 
 This matters because **while Paradigm Networks is unconfigured, every tool
-call except the login/logout/check-configured commands is denied** — so the
-search commands below are themselves blocked, and running them first is the
-one way to get stuck. The deny message you receive also repeats the same
-login command, so if you have already been blocked, take the path from
-there rather than searching again.
+call except the login/logout/check-configured commands is denied** — so
+search commands are themselves blocked, and running them first is the one
+way to get stuck. The deny message you receive also repeats the same login
+command, so if you have already been blocked, take the path from there
+rather than searching again.
 
-Only fall back to searching when neither the injected notice nor a deny
-message gave you a path — for example a switch-organization re-login, where
-Paradigm Networks is already configured and tool calls are not blocked. Use
-whichever command matches the shell you're actually running in — a Windows
-machine without WSL/Git Bash can't run the bash `find` command, and vice
-versa:
+Only fall back to searching when neither the injected line, the notice nor
+a deny message gave you a path. Use whichever command matches the shell
+you're actually running in — a Windows machine without WSL/Git Bash can't
+run the bash `find` command, and vice versa. These patterns match both local
+installs (`~/.cursor/plugins/local/paradigm-scanner/scripts/`) and
+marketplace installs
+(`~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<version>/scripts/`):
 
 macOS/Linux:
 
 ```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/check-configured.sh" 2>/dev/null
-find ~/.cursor/plugins -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/check-configured.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/login.sh" 2>/dev/null
 ```
 
 Windows (PowerShell):
 
 ```powershell
 Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\scripts\check-configured.ps1" -or $_.FullName -like "*\paradigm-scanner\scripts\login.ps1" } |
+  Where-Object { $_.FullName -like "*\paradigm-scanner\*scripts\check-configured.ps1" -or $_.FullName -like "*\paradigm-scanner\*scripts\login.ps1" } |
   Select-Object -ExpandProperty FullName
 ```
 
-This covers both marketplace installs (`~/.cursor/plugins/cache/`) and local
-installs (`~/.cursor/plugins/local/`). If both come back for a platform,
-prefer `local/`.
+If more than one copy comes back, the search cannot tell which one is
+running. Prefer one under `local/`; otherwise use the most recently modified
+one, and take both scripts from the same directory.
 
 ### 2. Check whether login is actually needed
 
@@ -175,6 +184,15 @@ scanning recognize it as the login step and skip scanning it (it carries no
 user-authored content, only the base URL); anything else about the command
 line falls back to being scanned like any other tool call.
 
+**Run it with network access.** In Cursor's Shell tool, pass
+`required_permissions: ["full_network"]` on this call. After the browser
+step, the script itself must reach the Paradigm Networks server to collect
+the login token. Cursor's agent sandbox blocks network access by default,
+so without this the browser sign-in succeeds but the script then fails with
+`could not reach <base-url>` or `unexpected non-JSON response`, and the
+user is never logged in. This only changes how Cursor runs the command, not
+the command text, so the shape rule above still holds.
+
 Run it in the background rather than blocking the turn on it — it can take
 up to five minutes. **Poll its output every second or two, specifically
 looking for the URL/browser-opened line, rather than checking once and
@@ -192,9 +210,10 @@ of those happened. Just relay whatever it printed verbatim; don't add your
 own caveats about browsers possibly failing to open, and don't try alternate
 ways to launch a browser yourself.
 
-Each run binds a fresh local port and generates a new URL — a URL from an
-earlier (timed-out or killed) run will not work. If you retry, always relay
-the newest URL.
+Each run generates a new URL, and every run listens on the same local port,
+so a URL from an earlier (finished, failed or killed) run will not work: if
+the user opens one, the current run rejects it with a state mismatch. If you
+retry, relay only the newest URL and tell the user not to use earlier ones.
 
 ### 5. Wait for the result
 
@@ -204,14 +223,33 @@ starting almost immediately, and stop the moment it has — most logins
 complete in well under five minutes once the user clicks through, and
 there's no reason to sit idle after it's already done. Five minutes is only
 the outer bound for giving up, not a wait you should run out every time.
-Once it's finished, check the script's actual exit code — don't infer
-success just because the user says "done," since the local callback
-server has to actually receive the redirect.
+
+While Paradigm Networks is unconfigured, every tool call except the
+login/logout/check-configured scripts is denied, apart from the three you
+need here: waiting on the login's background shell (`AwaitShell`), reading
+its terminal output file, and a bare `sleep <seconds>` between checks. Use
+those. Don't run anything else in between, and don't rely on
+`check-configured.sh` alone: it only says `NOT_CONFIGURED`, which is also
+what it says after the login has already failed.
+
+**Judge the result from the script's own output and exit code**, not from
+`check-configured.sh`, and not from what the user says ("done", or "the
+browser says I'm signed in"): the browser page appears before the script
+collects the token, so it can show sign-in complete even when the login
+then fails.
 
 ### 6. Relay the outcome
 
 - Exit `0` → Paradigm Networks is configured and its checks are active. No
   further action needed.
-- Non-zero → share the error the script printed (timeout, denied, network
-  error, etc.) and offer to retry with a fresh run. If retrying, remind the
-  user they'll need to click through within the five-minute window.
+- Non-zero → quote the script's own `error:` line to the user. Don't
+  replace it with your own guess (e.g. "you didn't finish in the browser"
+  or "it timed out") unless that is what the script printed.
+- If the error says `could not reach`, `unexpected non-JSON response`, or
+  mentions the sandbox, the script had no network access. If you ran it
+  without `required_permissions: ["full_network"]`, run it once more with
+  it, as a fresh run (new URL). If it still fails that way, give the user
+  the exact command from step 4 to run in their own terminal, and stop.
+- Any other error (timeout, denied, state mismatch) → offer to retry with a
+  fresh run. If retrying, remind the user they'll need to click through the
+  new link within the five-minute window.

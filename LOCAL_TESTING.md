@@ -49,7 +49,7 @@ This is the single entry point (per `CONTRIBUTING.md`) and runs, in order:
 
 It prints a consolidated pass/fail summary and writes per-suite logs to `/tmp/{unit,integration,error}-test.log`.
 
-For the Windows side, there's no single local entry point script — mirror what CI does:
+`run-all-tests.sh` also runs the Pester suite (`test/pester/`) when `pwsh` with Pester 5+ is installed, and reports it as skipped otherwise. To run the Windows side on its own, mirror what CI does:
 ```powershell
 Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
 Get-ChildItem -Path ./scripts -Filter *.ps1 -Recurse | ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error }
@@ -58,7 +58,7 @@ Install-Module -Name Pester -Force -Scope CurrentUser -SkipPublisherCheck
 Invoke-Pester -Path test/pester -Output Detailed
 ```
 
-Note: `test/pester/` currently only covers `ConvertFrom-PnMessagesResponse` and `PnConfig` — much narrower than the four bash test files. Don't assume Pester passing means the same coverage as the bash suite.
+`test/pester/` covers the Windows login exemptions and login-wait allowances (`LoginDetection`), the plugins API client (`PluginsClient`, with the network mocked), the hook scripts end to end as separate processes (`WindowsHooks`, with an isolated home and no network), and `pn_config.ps1` (`PnConfig`). It still has no equivalent of the bash suite's mock-server tests for the logged-in allow/warn/block paths, so those remain covered on the bash side only — the two implementations send identical requests, but the Windows verdict handling is exercised against a live scanner only in a real Windows test.
 
 CI (`.github/workflows/ci.yml`) runs shellcheck, the bash test suite (against both a system-`jq` and a bundled-binary-`jq` matrix leg), PSScriptAnalyzer, Pester, JSON validity checks on the three JSON config files, and a SHA-256 provenance check of the bundled `jq` binaries — but **it currently only runs manually** (`workflow_dispatch`), not on push/PR, while the project is in active development (see the comment at the top of `ci.yml`). Running these locally before opening a PR is the only way they actually gate anything right now.
 
@@ -95,7 +95,7 @@ Follow the "Try it" section of `README.md`:
 1. Log in (see `skills/paradigmnetworks-login/SKILL.md`, or run `bash scripts/login.sh --base-url <your-org-url>` directly).
 2. Submit a prompt or file edit your org's policy should block — it should be denied with an explanation.
 3. Submit something that should be allowed — it should proceed normally.
-4. Debug logs land under `~/.paradigm-scanner/` (`check-prompt.log`, `check-write.log`, `audit.jsonl`) if something isn't behaving as expected — check these before assuming a hook silently failed.
+4. Debug logs land under `~/.paradigm-scanner/` (`check-prompt.log`, `check-tool-call.log`, `plugins-client.log`, `audit.jsonl`) if something isn't behaving as expected — check these before assuming a hook silently failed.
 
 ## "Packaging" a change for release
 
