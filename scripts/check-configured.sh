@@ -40,7 +40,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/pn_config.sh"
 
 main() {
-  # No usable jq (system or bundled) means pn_is_configured can't actually
+  # No jq installed means pn_is_configured can't actually
   # parse the credentials file -- report NOT_CONFIGURED rather than let a
   # bare empty-command error leak onto stdout/stderr. The env var pair is
   # still checked either way -- that path never touches jq.

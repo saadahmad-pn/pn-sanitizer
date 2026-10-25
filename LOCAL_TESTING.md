@@ -26,7 +26,7 @@ From `CONTRIBUTING.md` and `test/run-all-tests.sh`'s dependency check:
 | `curl` | Yes (macOS/Linux) | All backend HTTP calls |
 | `openssl` | Yes (macOS/Linux) | PKCE login flow (code verifier/challenge) |
 | `nc` (netcat) | Yes (macOS/Linux) | Local OAuth callback listener during login |
-| `jq` | Preferred, not required | Falls back to a bundled static binary in `scripts/bin/` for macOS/Linux, amd64/arm64 — see `scripts/bin/PROVENANCE.md`. No bundled Windows binary. |
+| `jq` | Yes (macOS/Linux) | Builds and parses the hooks' JSON. Not bundled: install it (`brew install jq` / `apt-get install jq`). The hooks show an install hint if it's missing. Not needed on Windows. |
 | `python3` | Optional | `login.sh`'s URL encode/decode falls back to a pure-Bash implementation if absent |
 | PowerShell 5.1+ | Yes (Windows) | The Windows scripts target the version that ships by default on every Windows machine (not PowerShell 7-only syntax); no extra installs needed — `ConvertTo-Json`/`ConvertFrom-Json`, `Invoke-RestMethod`, `System.Security.Cryptography`, and raw `System.Net.Sockets.TcpListener` replace jq/curl/openssl/nc |
 | Cursor | Yes | Team/Enterprise plan **only** needed for the marketplace-import install path below; not needed for local-plugin testing |
@@ -60,7 +60,7 @@ Invoke-Pester -Path test/pester -Output Detailed
 
 `test/pester/` covers the Windows login exemptions and login-wait allowances (`LoginDetection`), the plugins API client (`PluginsClient`, with the network mocked), the hook scripts end to end as separate processes (`WindowsHooks`, with an isolated home and no network), and `pn_config.ps1` (`PnConfig`). It still has no equivalent of the bash suite's mock-server tests for the logged-in allow/warn/block paths, so those remain covered on the bash side only — the two implementations send identical requests, but the Windows verdict handling is exercised against a live scanner only in a real Windows test.
 
-CI (`.github/workflows/ci.yml`) runs shellcheck, the bash test suite (against both a system-`jq` and a bundled-binary-`jq` matrix leg), PSScriptAnalyzer, Pester, JSON validity checks on the three JSON config files, and a SHA-256 provenance check of the bundled `jq` binaries — but **it currently only runs manually** (`workflow_dispatch`), not on push/PR, while the project is in active development (see the comment at the top of `ci.yml`). Running these locally before opening a PR is the only way they actually gate anything right now.
+CI (`.github/workflows/ci.yml`) runs shellcheck, the bash test suite, PSScriptAnalyzer, Pester, JSON validity checks on the three JSON config files — but **it currently only runs manually** (`workflow_dispatch`), not on push/PR, while the project is in active development (see the comment at the top of `ci.yml`). Running these locally before opening a PR is the only way they actually gate anything right now.
 
 ## Installing into Cursor for local testing
 

@@ -49,8 +49,10 @@ get it automatically:
 ### Requirements
 
 - macOS, Linux or Windows.
-- macOS/Linux: `bash`, `curl`, `openssl` and `nc` (preinstalled on most
-  systems). `jq` is bundled for common platforms.
+- macOS/Linux: `bash`, `curl`, `openssl`, `nc` and `jq`. Most systems have the
+  first four; install `jq` if you don't have it (`brew install jq` on macOS,
+  `sudo apt-get install jq` on Debian/Ubuntu). If `jq` is missing, the plugin
+  tells you and shows how to install it.
 - Windows: PowerShell (built in).
 - Your organization's Paradigm Networks service must be reachable from your
   machine.

@@ -385,7 +385,7 @@ normalize_base_url() {
 
 main() {
   if [[ -z "$JQ_BIN" ]]; then
-    echo "error: jq is required but not found, and no bundled copy is available for this platform. Install it (macOS: brew install jq; Linux: apt-get/dnf/pacman install jq), then try again." >&2
+    echo "error: jq is required but was not found. Install it (macOS: brew install jq; Linux: apt-get/dnf/pacman install jq), then try again." >&2
     return 1
   fi
   if ! command -v openssl &>/dev/null; then

@@ -63,22 +63,21 @@ write_session_metadata &
 
 # Fail open: any error just returns empty context
 main() {
-  # Check whether jq is available — a system install or the bundled fallback
-  # in scripts/bin/ (see JQ_BIN in lib/common.sh). Build this message by hand
-  # (no json_session_context) since that helper — and every jq_* helper —
-  # itself depends on jq.
+  # Check whether jq is installed (see JQ_BIN in lib/common.sh). Build this
+  # message by hand (no json_session_context) since that helper — and every
+  # jq_* helper — itself depends on jq.
   if [[ -z "$JQ_BIN" ]]; then
     local instructions
     read -r -d '' instructions <<'EOF' || true
-No usable jq was found on this machine, and no bundled copy is available for
-this platform. Please install jq:
+Paradigm Networks needs jq, which was not found on this machine, so prompts
+and tool calls cannot be scanned until it is installed. Please install jq:
 
 macOS:  brew install jq
 Linux:  sudo apt-get install jq  (Debian/Ubuntu)
         sudo dnf install jq      (Fedora/RHEL)
         sudo pacman -S jq        (Arch)
 
-After installation, restart your session.
+After installation, restart Cursor.
 EOF
     echo "{\"additional_context\": \"${instructions//$'\n'/\\n}\"}"
     return 0
