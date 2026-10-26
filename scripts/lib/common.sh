@@ -17,42 +17,21 @@ else
   NC=''
 fi
 
-# Resolve jq: prefer a system install (respects whatever version the user
-# already has), fall back to the binary bundled in scripts/bin/ so jq is
-# never a hard requirement. JQ_BIN is empty only if neither is available
-# (e.g. an unsupported platform/arch) — callers must check for that.
-resolve_jq() {
-  if command -v jq &>/dev/null; then
-    printf '%s' "jq"
-    return 0
-  fi
+# jq is a requirement for the macOS/Linux scripts (the Windows scripts use
+# PowerShell and don't need it). JQ_BIN is empty when jq isn't installed —
+# callers must check for that and tell the user how to install it.
+JQ_BIN=""
+if command -v jq &>/dev/null; then
+  JQ_BIN="jq"
+fi
 
-  local os arch bin_dir bundled
-  os="$(uname -s)"
-  arch="$(uname -m)"
-
-  case "$os" in
-    Darwin) os="macos" ;;
-    Linux) os="linux" ;;
-    *) return 1 ;;
-  esac
-  case "$arch" in
-    arm64|aarch64) arch="arm64" ;;
-    x86_64|amd64) arch="amd64" ;;
-    *) return 1 ;;
-  esac
-
-  bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd)"
-  bundled="${bin_dir}/jq-${os}-${arch}"
-  if [[ -n "$bin_dir" ]] && [[ -x "$bundled" ]]; then
-    printf '%s' "$bundled"
-    return 0
-  fi
-
-  return 1
-}
-
-JQ_BIN="$(resolve_jq)" || JQ_BIN=""
+# One-line install hint for the "jq is missing" messages. Several callers
+# splice this into hand-written JSON (every jq helper needs jq itself), so it
+# must never contain double quotes or backslashes.
+case "$(uname -s 2>/dev/null)" in
+  Darwin) JQ_INSTALL_HINT="Install it with: brew install jq. Then restart Cursor." ;;
+  *)      JQ_INSTALL_HINT="Install it with: sudo apt-get install jq (Debian/Ubuntu), sudo dnf install jq (Fedora/RHEL) or sudo pacman -S jq (Arch). Then restart Cursor." ;;
+esac
 
 # URL encoding helpers. Shared here (rather than living only in login.sh,
 # where this originated) because pn_config.sh's token refresh needs it too

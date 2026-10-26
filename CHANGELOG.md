@@ -4,6 +4,29 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-25 — jq is now a requirement, no longer bundled (PN-12433)
+
+Removed the bundled static `jq` binaries (`scripts/bin/`, about 5.6 MB) and
+the fallback that used them. `jq` is now a requirement on macOS and Linux and
+is resolved only from the user's `PATH` (`JQ_BIN` in `scripts/lib/common.sh`).
+Windows is unaffected: the PowerShell scripts never used `jq`.
+
+Why: Cursor's marketplace security page says plugins ship no binaries, and
+reviewers look for that. Recent macOS ships `jq`; most Linux systems need it
+installed.
+
+Missing `jq` was already detected everywhere (`JQ_BIN` empty); the messages
+are now actionable. Every one says that `jq` is required and how to install it
+(`brew install jq` on macOS; `apt-get`/`dnf`/`pacman` on Linux): the
+`sessionStart` notice, the prompt and tool-call hooks (still fail open for
+prompts and follow `FAILURE_MODE` for tool calls) and `login.sh`. The hand-built
+JSON messages use a shared `JQ_INSTALL_HINT`, which must never contain double
+quotes or backslashes because those callers can't use `jq` to escape it.
+
+Also removed: the `scripts/bin/jq-*` rule in `.gitattributes`, the bundled-jq
+matrix leg and the provenance job in `.github/workflows/ci.yml`, and the
+bundled-jq notes in `README.md`, `CONTRIBUTING.md` and `LOCAL_TESTING.md`.
+
 ## 2026-10-21 — Bring the Windows hooks back in line with macOS/Linux (PN-12431)
 
 The September hook consolidation (PN-11847) moved the bash scripts to the
