@@ -52,14 +52,13 @@ main() {
     payload=$(cat 2>/dev/null)
   fi
 
-  # jq is required for everything below (a system install or the bundled
-  # fallback in scripts/bin/ — see JQ_BIN in lib/common.sh). Always fail open
-  # here regardless of PROMPT_FAILURE_MODE — this could trip before the user
-  # has ever logged in, so it must stay unconditional for the same reason
-  # "not configured" does below. Uses a hand-written literal since the JSON
+  # jq is required for everything below (see JQ_BIN in lib/common.sh). Always
+  # fail open here regardless of PROMPT_FAILURE_MODE — this could trip before
+  # the user has ever logged in, so it must stay unconditional for the same
+  # reason "not configured" does below. Builds the JSON by hand since the JSON
   # helpers themselves depend on jq.
   if [[ -z "$JQ_BIN" ]]; then
-    echo '{"continue": true, "user_message": "No usable jq was found on this machine or bundled for this platform. Allowing prompt. Install jq to enable scanning (see the plugin README)."}'
+    printf '{"continue": true, "user_message": "jq is required but was not found, so this prompt was NOT scanned. %s"}\n' "$JQ_INSTALL_HINT"
     return 0
   fi
 

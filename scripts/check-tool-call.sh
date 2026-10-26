@@ -87,15 +87,15 @@ main() {
     payload=$(cat 2>/dev/null)
   fi
 
-  # jq is required for everything below (a system install or the bundled
-  # fallback in scripts/bin/ — see JQ_BIN in lib/common.sh); route through the
-  # same FAILURE_MODE decision as an unreachable scanner, using hand-written
-  # literals since the JSON helpers (and audit_log) themselves depend on jq.
+  # jq is required for everything below (see JQ_BIN in lib/common.sh); route
+  # through the same FAILURE_MODE decision as an unreachable scanner, building
+  # the JSON by hand since the JSON helpers (and audit_log) themselves depend
+  # on jq.
   if [[ -z "$JQ_BIN" ]]; then
     if [[ "$FAILURE_MODE" == "open" ]]; then
-      echo '{"permission": "allow", "user_message": "No usable jq was found on this machine or bundled for this platform. Allowed WITHOUT a security scan. Install jq to enable scanning (see the plugin README)."}'
+      printf '{"permission": "allow", "user_message": "jq is required but was not found. Allowed WITHOUT a security scan. %s"}\n' "$JQ_INSTALL_HINT"
     else
-      echo '{"permission": "deny", "user_message": "No usable jq was found on this machine or bundled for this platform. Blocked.", "agent_message": "No usable jq was found on this machine or bundled for this platform. Do not retry this action. Ask the user to install jq (see the plugin README), then try again."}'
+      printf '{"permission": "deny", "user_message": "jq is required but was not found, so this action was blocked. %s", "agent_message": "jq is required but was not found. Do not retry this action. Ask the user to install jq. %s"}\n' "$JQ_INSTALL_HINT" "$JQ_INSTALL_HINT"
     fi
     return 0
   fi
