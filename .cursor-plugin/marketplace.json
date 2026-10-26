@@ -8,7 +8,7 @@
   },
   "plugins": [
     {
-      "name": "paradigm-scanner",
+      "name": "paradigm-networks",
       "source": ".",
       "description": "Checks prompts, tool calls and git pushes in Cursor against your organization's Paradigm Networks security policy, and blocks risky actions like destructive commands or unsafe code. Requires a Paradigm Networks account.",
       "category": "security"

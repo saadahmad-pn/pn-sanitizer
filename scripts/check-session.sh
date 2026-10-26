@@ -33,9 +33,8 @@ fi
 # Writes this session's local metadata file (SessionId/Cwd/GitRepoUrl/
 # GitBranch) -- see lib/session-metadata.sh. Previously this recorded a
 # Code Chain session-start marker via the plugins API instead; that call
-# was removed (see this file's header note in git history and design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md — the marker had
-# no processing/governance/observability/reporting consumer). This write is
+# was removed (the marker had no processing/governance/observability/
+# reporting consumer). This write is
 # purely local -- no login/config needed, unlike the API call it replaces.
 # Never affects this hook's own JSON output/exit code (sessionStart is
 # fire-and-forget context injection regardless).

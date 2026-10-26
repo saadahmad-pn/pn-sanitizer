@@ -91,8 +91,7 @@ function Get-GitCurrentBranch {
 # Same as Get-GitRemoteUrl, but returns an empty string (not the "No
 # remote" placeholder) when there's no configured origin. Get-GitRemoteUrl's
 # fallback text is meant for human-readable <GIT>...</GIT> context injection
-# (check-repo-context.ps1); the detections API contract (design-ideas/
-# Cursor_PrePush_Governance_Enforcement_Plan.md 0.5.3) instead requires
+# (check-repo-context.ps1); the detections API contract instead requires
 # GitRepoUrl to be a genuinely empty field when RepoPath isn't a git repo or
 # has no remote.
 function Get-GitRemoteUrlOrEmpty {

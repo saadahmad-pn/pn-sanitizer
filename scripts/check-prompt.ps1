@@ -20,7 +20,7 @@ if ($env:PARADIGM_NETWORKS_TIMEOUT) {
     $TimeoutSeconds = $parsedTimeout
   }
 }
-$DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-prompt.log"
+$DebugLogPath = Join-Path $HOME ".paradigm-networks\check-prompt.log"
 
 # Start-PnRepoContextRefresh -Roots <workspace roots>
 # Windows equivalent of check-prompt.sh's backgrounded

@@ -362,7 +362,7 @@ function Write-AuditLog {
 # scan landing on "anomaly") needs a loud signal past a threshold instead
 # of staying invisible. Scoped narrowly to that classification, not
 # transport-level failures, same as the bash side.
-$Script:PnAnomalyStatePath = Join-Path $HOME ".paradigm-scanner\anomaly_state.json"
+$Script:PnAnomalyStatePath = Join-Path $HOME ".paradigm-networks\anomaly_state.json"
 $Script:PnAnomalyWarningThreshold = 3
 $Script:PnScanStalenessThresholdSeconds = 3600
 

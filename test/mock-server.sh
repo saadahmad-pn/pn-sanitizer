@@ -12,8 +12,7 @@
 # retired /api/v1/detections/evaluate endpoint no longer exists -- these now
 # stand in for either gating domain's before_* verdict shape, which is
 # identical across both (prompts, tool-calls -- the former shell-executions
-# domain is retired too, see design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md).
+# domain is retired too).
 #
 # The non-detections modes (allow/block/anomaly/timeout/error500/error401)
 # return the /v1/messages (Anthropic-compatible) response shape -- LEGACY,

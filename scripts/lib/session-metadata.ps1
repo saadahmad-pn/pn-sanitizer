@@ -4,11 +4,11 @@
 # session_end API calls it replaces were removed server-side). See
 # session-metadata.sh's header for the full rationale.
 #
-# One file per session: <HOME>\.paradigm-scanner\sessions\<session_id>.json
+# One file per session: <HOME>\.paradigm-networks\sessions\<session_id>.json
 
 Set-StrictMode -Version Latest
 
-$Script:SessionMetadataDir = Join-Path $HOME ".paradigm-scanner\sessions"
+$Script:SessionMetadataDir = Join-Path $HOME ".paradigm-networks\sessions"
 
 # Get-PnSessionMetadataPath -SessionId
 # Rejects a session id containing a path separator or a leading dot rather

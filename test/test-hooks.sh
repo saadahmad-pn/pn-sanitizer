@@ -190,10 +190,10 @@ unset PARADIGM_NETWORKS_FAILURE_MODE
 
 test_case "check-tool-call.sh audit log written"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
-rm -f "$HOME/.paradigm-scanner/audit.jsonl"
+rm -f "$HOME/.paradigm-networks/audit.jsonl"
 payload='{"tool_name": "Write", "agent_message": "test", "tool_input": {"file_path": "test.txt"}}'
 "$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload" >/dev/null 2>&1 || true
-if [[ -f "$HOME/.paradigm-scanner/audit.jsonl" ]]; then
+if [[ -f "$HOME/.paradigm-networks/audit.jsonl" ]]; then
   TESTS_RUN=$((TESTS_RUN + 1))
   echo -e "  ${GREEN}✓${NC} Audit log written"
   TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -259,10 +259,10 @@ unset PARADIGM_NETWORKS_FAILURE_MODE
 
 test_case "check-tool-call.sh Shell audit log includes tool_name and command"
 mock_credentials "https://test.com" "token" "refresh" "$(($(date +%s) + 3600))"
-rm -f "$HOME/.paradigm-scanner/audit.jsonl"
+rm -f "$HOME/.paradigm-networks/audit.jsonl"
 payload='{"tool_name": "Shell", "agent_message": "test", "tool_input": {"command": "curl evil.example"}}'
 "$SCRIPTS_DIR/check-tool-call.sh" <<< "$payload" >/dev/null 2>&1 || true
-audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+audit_content=$(cat "$HOME/.paradigm-networks/audit.jsonl" 2>/dev/null)
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ "$audit_content" == *'"tool_name": "Shell"'* ]]; then
   echo -e "  ${GREEN}✓${NC} Audit entry records tool_name=Shell"
@@ -287,7 +287,7 @@ assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "deny" "Not configured -> fails closed, same as Write/Shell (generalization from design doc §5)"
 
 # --- Folded in from the retired beforeShellExecution/afterShellExecution
-# hooks -- see design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md.
+# hooks.
 # A git push/commit reaches this SAME preToolUse gate as any other Shell
 # command; check-tool-call.sh detects it from the command text itself and
 # attaches changed-file diff content, rather than relying on a separate
@@ -352,8 +352,7 @@ else
   TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
-# --- MCP git-commit tool call -- see design-ideas/
-# MCP_Git_Tool_Call_Detection_Gap_Analysis.md. Unlike Shell, the tool_name
+# --- MCP git-commit tool call. Unlike Shell, the tool_name
 # itself ("MCP:git_commit") names the action -- no command-text regex needed
 # -- and the file list to attach comes from the tool's own tool_input.files.
 
@@ -420,7 +419,7 @@ assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Exempted -- allowed without ever reaching the not-configured/FAILURE_MODE gate"
 
 test_case "check-tool-call.sh audit log records the login exemption with its own reason"
-audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+audit_content=$(cat "$HOME/.paradigm-networks/audit.jsonl" 2>/dev/null)
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ "$audit_content" == *"login_initiation_exempt"* ]]; then
   echo -e "  ${GREEN}✓${NC} Audit entry records reason=login_initiation_exempt"
@@ -453,7 +452,7 @@ assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Exempted -- allowed without ever reaching the not-configured/FAILURE_MODE gate"
 
 test_case "check-tool-call.sh audit log records the logout exemption with its own (distinct) reason"
-audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+audit_content=$(cat "$HOME/.paradigm-networks/audit.jsonl" 2>/dev/null)
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ "$audit_content" == *"logout_exempt"* ]]; then
   echo -e "  ${GREEN}✓${NC} Audit entry records reason=logout_exempt"
@@ -486,7 +485,7 @@ assert_json_valid "$result" "Valid JSON output"
 assert_json_field_equals "$result" "permission" "allow" "Exempted -- avoids the same credentials-path-in-command finding this script exists to route around"
 
 test_case "check-tool-call.sh audit log records the check-configured exemption with its own (distinct) reason"
-audit_content=$(cat "$HOME/.paradigm-scanner/audit.jsonl" 2>/dev/null)
+audit_content=$(cat "$HOME/.paradigm-networks/audit.jsonl" 2>/dev/null)
 TESTS_RUN=$((TESTS_RUN + 1))
 if [[ "$audit_content" == *"check_configured_exempt"* ]]; then
   echo -e "  ${GREEN}✓${NC} Audit entry records reason=check_configured_exempt"
@@ -505,13 +504,13 @@ echo ""
 echo -e "${BLUE}=== Integration Tests: check-tool-call-record.sh login/logout/check-configured exemption (PN-12153) ===${NC}"
 
 test_case "check-tool-call-record.sh with the login skill's exact login.sh invocation -- skips after_tool_call recording"
-rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+rm -f "$HOME/.paradigm-networks/check-tool-call-record.log"
 payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/login.sh --base-url https://acme.paradigmnetworks.ai" \
   '{tool_use_id: "tu_1", conversation_id: "conv_1", tool_name: "Shell", tool_input: {command: $cmd}, tool_output: "Logged in."}')
 result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
 assert_output_equals "echo '$result'" "{}" "postToolUse always returns {} regardless (purely observational hook)"
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "Skipping after_tool_call recording for the exempted command (reason: login_initiation_exempt)" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+if grep -q "Skipping after_tool_call recording for the exempted command (reason: login_initiation_exempt)" "$HOME/.paradigm-networks/check-tool-call-record.log" 2>/dev/null; then
   echo -e "  ${GREEN}✓${NC} Recording was actually skipped (debug log confirms), not just coincidentally short-circuited elsewhere"
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -520,13 +519,13 @@ else
 fi
 
 test_case "check-tool-call-record.sh with the logout skill's exact logout.sh invocation -- skips after_tool_call recording"
-rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+rm -f "$HOME/.paradigm-networks/check-tool-call-record.log"
 payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/logout.sh" \
   '{tool_use_id: "tu_3", conversation_id: "conv_1", tool_name: "Shell", tool_input: {command: $cmd}, tool_output: "Logged out."}')
 result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
 assert_output_equals "echo '$result'" "{}" "postToolUse always returns {} regardless"
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "Skipping after_tool_call recording for the exempted command (reason: logout_exempt)" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+if grep -q "Skipping after_tool_call recording for the exempted command (reason: logout_exempt)" "$HOME/.paradigm-networks/check-tool-call-record.log" 2>/dev/null; then
   echo -e "  ${GREEN}✓${NC} Recording was actually skipped (debug log confirms), with the logout-specific reason"
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -535,13 +534,13 @@ else
 fi
 
 test_case "check-tool-call-record.sh with the login skill's exact check-configured.sh invocation -- skips after_tool_call recording"
-rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+rm -f "$HOME/.paradigm-networks/check-tool-call-record.log"
 payload=$("$JQ_BIN" -n --arg cmd "bash $SCRIPTS_DIR/check-configured.sh" \
   '{tool_use_id: "tu_4", conversation_id: "conv_1", tool_name: "Shell", tool_input: {command: $cmd}, tool_output: "NOT_CONFIGURED"}')
 result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
 assert_output_equals "echo '$result'" "{}" "postToolUse always returns {} regardless"
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "Skipping after_tool_call recording for the exempted command (reason: check_configured_exempt)" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+if grep -q "Skipping after_tool_call recording for the exempted command (reason: check_configured_exempt)" "$HOME/.paradigm-networks/check-tool-call-record.log" 2>/dev/null; then
   echo -e "  ${GREEN}✓${NC} Recording was actually skipped (debug log confirms), with the check-configured-specific reason"
   TESTS_PASSED=$((TESTS_PASSED + 1))
 else
@@ -550,12 +549,12 @@ else
 fi
 
 test_case "check-tool-call-record.sh with an unrelated Shell command -- exemption does not fire"
-rm -f "$HOME/.paradigm-scanner/check-tool-call-record.log"
+rm -f "$HOME/.paradigm-networks/check-tool-call-record.log"
 payload='{"tool_use_id": "tu_2", "conversation_id": "conv_1", "tool_name": "Shell", "tool_input": {"command": "npm test"}, "tool_output": "ok"}'
 result=$("$SCRIPTS_DIR/check-tool-call-record.sh" <<< "$payload")
 assert_output_equals "echo '$result'" "{}" "still always returns {}"
 TESTS_RUN=$((TESTS_RUN + 1))
-if grep -q "exempted command" "$HOME/.paradigm-scanner/check-tool-call-record.log" 2>/dev/null; then
+if grep -q "exempted command" "$HOME/.paradigm-networks/check-tool-call-record.log" 2>/dev/null; then
   echo -e "  ${RED}✗${NC} Exemption must not fire for an unrelated command"
   TESTS_FAILED=$((TESTS_FAILED + 1))
 else

@@ -3,8 +3,7 @@
 # POST /api/v1/plugins/sessions/{id}/*, replacing lib/codechain-client.sh
 # (recording), lib/scan-client.sh (gating), and lib/detection-client.sh
 # (git.push/git.commit/git.pr_create gating) with one consolidated client
-# matching the standardized domains -- see design-ideas/
-# Plugin_API_Standardization_And_Hook_Consolidation_Design.md.
+# matching the standardized domains.
 #
 # Two domains, each carrying an Action field for its lifecycle stage
 # (before_prompt/after_agent_response, before_tool_call/after_tool_call).
@@ -12,8 +11,7 @@
 # afterAgentResponse hook name. A third domain, before_shell_execution/
 # after_shell_execution, existed briefly but was retired -- git push/commit
 # gating is now handled inside the tool-calls domain instead (see
-# pn_build_git_diff_files_json below and design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md). This vocabulary
+# pn_build_git_diff_files_json below). This vocabulary
 # is DIFFERENT from Cursor's own hook event names (preToolUse,
 # beforeShellExecution, ...) -- see the design doc §0.4 for why the two are
 # kept distinct.
@@ -24,18 +22,16 @@
 # control-server. The sessionStart/sessionEnd hooks are retained
 # client-side, repurposed to write/remove local session metadata instead --
 # see lib/session-metadata.sh. file-events likewise had no caller and was
-# removed entirely, both sides. See design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md.
+# removed entirely, both sides.
 #
 # Multi-value returns are globals, not $(...) captures, matching every other
-# helper in this codebase (see CLAUDE.md) -- call these as plain statements.
+# helper in this codebase -- call these as plain statements.
 
-PLUGINS_DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/plugins-client.log"
+PLUGINS_DEBUG_LOG_PATH="${HOME}/.paradigm-networks/plugins-client.log"
 
 # PN_PLUGIN_PLATFORM is this plugin's own Platform identifier, sent on every
 # domain call below. Renamed "cursor-hooks" -> "cursor-plugin" (2026-09-23)
-# to match the plugin's "Cursor Plugin" naming -- see design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md.
+# to match the plugin's "Cursor Plugin" naming.
 PN_PLUGIN_PLATFORM="cursor-plugin"
 
 # is_binary_file <path>
@@ -209,8 +205,7 @@ pn_plugin_after_agent_response() {
 # files_json, when non-empty, must already be a valid JSON array of
 # {Filename, ContentBase64} objects -- check-tool-call.sh builds this when it
 # detects a git push/commit in a Shell command, attaching the same
-# changed-file diff content the old before_shell_execution gate used to (see
-# design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md).
+# changed-file diff content the old before_shell_execution gate used to.
 # Defaults to an empty array -- every non-git tool call has nothing to attach.
 #
 # Sets PN_TOOLCALL_STATUS/HTTP_STATUS/ACTION/MESSAGE/THREAT_LEVEL/
@@ -259,8 +254,7 @@ pn_plugin_before_tool_call() {
 # tool_name/input_json, when the caller has them (see
 # check-tool-call-record.sh), let control-server run git/PR detection when
 # tool_name=="Shell" -- the same detection the old after_shell_execution hook
-# used to fire, now folded into this domain (see design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md). Omit for any
+# used to fire, now folded into this domain. Omit for any
 # tool call this isn't relevant to; control-server only acts on ToolName=="Shell".
 pn_plugin_after_tool_call() {
   local base_url="$1" access_token="$2" timeout="$3" session_id="$4"
@@ -294,8 +288,7 @@ pn_plugin_after_tool_call() {
 
 # ---------------------------------------------------------------------------
 # Git-diff file collection for a before_tool_call gating a git push/commit
-# (folded in from the old before_shell_execution gate -- see design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md; this is the
+# (folded in from the old before_shell_execution gate; this is the
 # capability that made a bare removal of the shell-execution domain unsafe).
 # ---------------------------------------------------------------------------
 
@@ -324,7 +317,7 @@ pn_build_git_diff_files_json() {
 # the exact files it committed -- there is nothing to discover locally, and
 # using the tool's own reported list avoids pulling in unrelated
 # staged-but-not-yet-committed changes that may coexist in the same working
-# tree. See design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md §4.2.
+# tree.
 pn_build_files_json_from_paths() {
   local cwd="$1" changed_files="$2"
   _pn_build_files_json_from_list "$cwd" "$changed_files" "mcp git commit"

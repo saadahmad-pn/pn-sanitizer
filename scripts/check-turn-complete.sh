@@ -19,7 +19,6 @@
 # message (e.g. multiple tool-call round-trips before a final answer), this
 # could record more than one turn per user prompt. Not reproduced or ruled
 # out here; revisit if duplicate/fragmented turns show up in chatapi.
-# See design-ideas/Codechain_Plugin_Hooks_Design.md.
 
 set -o pipefail
 

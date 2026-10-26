@@ -30,7 +30,7 @@ Blocked actions are denied with a message explaining why.
 Search for **Paradigm Networks** in the Cursor Marketplace, or run:
 
 ```
-/add-plugin paradigm-scanner
+/add-plugin paradigm-networks
 ```
 
 ### For team admins
@@ -98,7 +98,7 @@ Your login is stored in `~/.pn/credentials.json` (readable only by you).
 
 What the plugin writes on your machine:
 
-- `~/.paradigm-scanner/`: debug logs, an audit log, session metadata and
+- `~/.paradigm-networks/`: debug logs, an audit log, session metadata and
   caches.
 - In each workspace, `.cursor/rules/paradigm-repo-context.mdc`, which lists the
   workspace's git remotes and branches so requests can be attributed to a

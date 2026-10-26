@@ -68,22 +68,22 @@ Only fall back to searching when neither the injected line, the notice nor
 a deny message gave you a path. Use whichever command matches the shell
 you're actually running in — a Windows machine without WSL/Git Bash can't
 run the bash `find` command, and vice versa. These patterns match both local
-installs (`~/.cursor/plugins/local/paradigm-scanner/scripts/`) and
+installs (`~/.cursor/plugins/local/paradigm-networks/scripts/`) and
 marketplace installs
-(`~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<version>/scripts/`):
+(`~/.cursor/plugins/cache/<marketplace>/paradigm-networks/<version>/scripts/`):
 
 macOS/Linux:
 
 ```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/check-configured.sh" 2>/dev/null
-find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/login.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-networks/*scripts/check-configured.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-networks/*scripts/login.sh" 2>/dev/null
 ```
 
 Windows (PowerShell):
 
 ```powershell
 Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\*scripts\check-configured.ps1" -or $_.FullName -like "*\paradigm-scanner\*scripts\login.ps1" } |
+  Where-Object { $_.FullName -like "*\paradigm-networks\*scripts\check-configured.ps1" -or $_.FullName -like "*\paradigm-networks\*scripts\login.ps1" } |
   Select-Object -ExpandProperty FullName
 ```
 

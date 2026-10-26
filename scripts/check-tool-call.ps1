@@ -36,8 +36,8 @@ if (-not $rawMode) { $rawMode = "block" }
 $rawMode = $rawMode.ToLowerInvariant()
 $FailureMode = if ($rawMode -eq "allow" -or $rawMode -eq "open") { "open" } else { "closed" }
 
-$AuditLogPath = Join-Path $HOME ".paradigm-scanner\audit.jsonl"
-$DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-tool-call.log"
+$AuditLogPath = Join-Path $HOME ".paradigm-networks\audit.jsonl"
+$DebugLogPath = Join-Path $HOME ".paradigm-networks\check-tool-call.log"
 
 # See build_stop_instruction in check-tool-call.sh for why the wording is
 # this specific ("relay ... in full, exactly as given").

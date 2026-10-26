@@ -4,8 +4,7 @@
 # and pn_plugin_before_tool_call (POST .../sessions/{id}/tool-calls,
 # Action=before_tool_call) -- which together replaced lib/scan-client.sh's
 # single pn_scan_text (the composite PromptGuard+PolicyEngine+CodeDefense
-# scan, now split across the standardized domain endpoints). See
-# design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md.
+# scan, now split across the standardized domain endpoints).
 
 set -o pipefail
 
@@ -91,7 +90,7 @@ assert_output_equals "echo \"\$PN_PROMPT_STATUS\"" "no_session" "status is no_se
 # pn_plugin_before_prompt -- a genuine subshell -- so a variable assignment
 # from inside this mock cannot cross back out to this script (same reason
 # this codebase's real multi-value returns use globals set by a
-# plain-statement call, never $(...): see CLAUDE.md). A file write survives
+# plain-statement call, never $(...)). A file write survives
 # the subshell boundary, unlike a variable assignment.
 test_case "pn_plugin_before_prompt: posts to the standardized prompts endpoint with Action/Text/Cwd/GitRepoUrl/GitBranch"
 captured_url_file="$TEST_TEMP_DIR/captured-prompt-url.txt"

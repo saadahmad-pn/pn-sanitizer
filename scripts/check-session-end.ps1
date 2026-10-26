@@ -4,8 +4,7 @@
 # contract; cannot affect session teardown.
 #
 # Previously this recorded a session-end marker with control-server; that
-# endpoint was removed (the marker had no consumer). See design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md.
+# endpoint was removed (the marker had no consumer).
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"

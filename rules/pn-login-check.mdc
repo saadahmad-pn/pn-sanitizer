@@ -54,17 +54,17 @@ Windows (PowerShell):
 
 Only if that line is not in your context (the `sessionStart` injection can
 race the first message), fall back to searching. These patterns match both
-local installs (`~/.cursor/plugins/local/paradigm-scanner/scripts/`) and
+local installs (`~/.cursor/plugins/local/paradigm-networks/scripts/`) and
 marketplace installs
-(`~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<version>/scripts/`):
+(`~/.cursor/plugins/cache/<marketplace>/paradigm-networks/<version>/scripts/`):
 
 ```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/check-configured.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-networks/*scripts/check-configured.sh" 2>/dev/null
 ```
 
 ```powershell
 Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\*scripts\check-configured.ps1" } |
+  Where-Object { $_.FullName -like "*\paradigm-networks\*scripts\check-configured.ps1" } |
   Select-Object -ExpandProperty FullName
 ```
 

@@ -3,19 +3,16 @@
 # pn_plugin_after_agent_response, pn_plugin_after_tool_call -- which
 # replaced lib/codechain-client.sh's pn_record_codechain_turn/
 # pn_record_codechain_shell_event. Also covers lib/common.sh's
-# get_current_turn_messages, unaffected by this round. See design-ideas/
-# Plugin_API_Standardization_And_Hook_Consolidation_Design.md.
+# get_current_turn_messages, unaffected by this round.
 #
 # pn_plugin_after_shell_execution (and the shell-executions domain generally)
-# is retired -- see design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md. Its git/PR
+# is retired. Its git/PR
 # detection now fires from pn_plugin_after_tool_call when ToolName=="Shell",
 # tested below.
 #
 # pn_register_plugin_session/pn_close_plugin_session (session-lifecycle API
 # calls) and pn_plugin_after_prompt (renamed to pn_plugin_after_agent_response)
-# are retired/renamed -- see design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md. Session-lifecycle
+# are retired/renamed. Session-lifecycle
 # coverage now lives in test-session-metadata.sh, for the local-file
 # mechanism that replaced the API calls.
 
@@ -39,7 +36,7 @@ test_case "pn_plugin_after_agent_response: posts Action/Cwd/GitRepoUrl/GitBranch
 # pn_plugin_after_agent_response -- a genuine subshell -- so a variable
 # assignment from inside this mock cannot cross back out to this script (the
 # same reason this codebase's real multi-value returns use globals set by a
-# plain-statement call, never $(...): see CLAUDE.md). A file write does
+# plain-statement call, never $(...)). A file write does
 # survive the subshell boundary, unlike a variable assignment, so the mock
 # captures the request body there instead.
 captured_body_file="$TEST_TEMP_DIR/captured-turn-body.json"
@@ -105,8 +102,7 @@ http_post_json() { echo "SHOULD_NOT_BE_CALLED"; }
 assert_success "pn_plugin_after_tool_call 'https://acme.example.com' 'token' 5 'session-1' '' '' '' '' 'out' 'false'" "nothing to correlate the result to"
 
 test_case "pn_plugin_after_tool_call: forwards ToolName/Input so control-server can detect a Shell git command"
-# Folded in from the retired pn_plugin_after_shell_execution -- see
-# design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md.
+# Folded in from the retired pn_plugin_after_shell_execution.
 captured_body_file4="$TEST_TEMP_DIR/captured-after-toolcall-shell-body.json"
 http_post_json() {
   echo -n "$2" > "$captured_body_file4"

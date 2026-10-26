@@ -4,19 +4,17 @@
 # calls visible in Code Chain. Pairs with check-tool-call.sh's preToolUse
 # gate: correlated by Cursor's own stable .tool_use_id, present on both hook
 # payloads, so no relay between the two separate hook-process invocations is
-# needed -- see design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md §5.
+# needed.
 #
 # Also now fires git/PR detection for Shell tool calls -- folded in from the
-# retired afterShellExecution hook (see design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md): forwards
+# retired afterShellExecution hook: forwards
 # tool_name + tool_input so control-server can run the same detection
 # pipeline when tool_name=="Shell", regardless of whether the command was a
 # git command or not (control-server decides that from the command text).
 #
 # Also now feeds tool_output into control-server's own composite policy
 # scan (PromptGuard+PolicyEngine+CodeDefense) -- server-side only, no
-# client change needed for the scan itself; see design-ideas/
-# Tool_Call_Policy_Enforcement_Assessment.md.
+# client change needed for the scan itself.
 #
 # Purely observational: postToolUse has no blocking "permission" field to
 # honor, so this always returns {}, and this script does not read the scan
@@ -44,7 +42,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # 60s (was 10s) -- control-server's after_tool_call now runs the same
 # PromptGuard+PolicyEngine+CodeDefense composite scan before_tool_call
-# does (see design-ideas/Tool_Call_Policy_Enforcement_Assessment.md),
+# does,
 # which can take up to ~65s worst case (30s CDS + 30s PromptGuard + 5s
 # PolicyEngine, sequential) -- matches check-tool-call.sh's own
 # TIMEOUT_SECONDS default for the same reason. hooks/hooks.json's
@@ -52,7 +50,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 # own HTTP client timeout, which must also be raised or it would cut the
 # call off long before that budget is ever reached.
 CODECHAIN_TIMEOUT_SECONDS="${PARADIGM_NETWORKS_CODECHAIN_TIMEOUT:-60}"
-DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-tool-call-record.log"
+DEBUG_LOG_PATH="${HOME}/.paradigm-networks/check-tool-call-record.log"
 
 main() {
   local payload=""

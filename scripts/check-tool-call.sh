@@ -3,8 +3,7 @@
 # from an earlier version scoped to only Write and Shell (Cursor has no
 # separate "Edit" tool_name; all file modifications use "Write"). Now covers
 # every tool type, including MCP tools (e.g. a Jira-update workflow), via
-# Cursor's generic preToolUse hook (matcher "", catch-all) -- see
-# design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md §5.
+# Cursor's generic preToolUse hook (matcher "", catch-all).
 # Returns {permission: "allow"/"deny", user_message: "...", agent_message: "..."}
 #
 # Paired with check-tool-call-record.sh (postToolUse), which records this
@@ -16,15 +15,13 @@
 # (retired, along with afterShellExecution): a git push/commit is detected
 # from a Shell tool call's own command text (see the git_event_type block
 # below) and its changed-file diff content is collected and attached the same
-# way before_shell_execution used to -- see design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md for why that
-# domain couldn't simply be deleted (this file/check-tool-call-record.sh are
+# way before_shell_execution used to. That domain couldn't simply be deleted
+# (this file/check-tool-call-record.sh are
 # what replace it).
 #
 # A git MCP server's own commit tool (tool_name "MCP:git_commit") is detected
 # the same way and gets the same file-attachment treatment, sourced from the
-# tool's own tool_input.files rather than local git-plumbing discovery -- see
-# design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md.
+# tool's own tool_input.files rather than local git-plumbing discovery.
 
 set -o pipefail
 
@@ -61,8 +58,8 @@ case "$RAW_FAILURE_MODE" in
   *)          FAILURE_MODE="closed" ;;
 esac
 
-AUDIT_LOG_PATH="${HOME}/.paradigm-scanner/audit.jsonl"
-DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-tool-call.log"
+AUDIT_LOG_PATH="${HOME}/.paradigm-networks/audit.jsonl"
+DEBUG_LOG_PATH="${HOME}/.paradigm-networks/check-tool-call.log"
 
 # "relay ... in full, exactly as given" is deliberate, not just "report
 # the violation": confirmed directly that a vaguer instruction lets the
@@ -165,8 +162,7 @@ main() {
   esac
 
   # Detect a git push/commit inside a Shell command -- folded in from the old
-  # beforeShellExecution hook (retired; see design-ideas/
-  # Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md). Unanchored,
+  # beforeShellExecution hook (retired). Unanchored,
   # whitespace-bounded rather than \b (not universally supported by bash's
   # regex engine across BSD/GNU) -- matches "git push", "cd repo && git
   # commit -m x", etc., mirroring Cursor's own former (also unanchored)
@@ -175,8 +171,7 @@ main() {
   # and needs no file attachment.
   #
   # An MCP git server's own commit tool names the action directly via
-  # tool_name -- no command-string regex needed the way Shell requires (see
-  # design-ideas/MCP_Git_Tool_Call_Detection_Gap_Analysis.md). No MCP push
+  # tool_name -- no command-string regex needed the way Shell requires. No MCP push
   # equivalent is handled here: unlike commit, push never attaches file
   # content in either path (nothing new to scan -- a push moves
   # already-committed content). control-server's after_tool_call handles MCP
