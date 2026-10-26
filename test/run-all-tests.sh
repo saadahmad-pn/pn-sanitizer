@@ -68,8 +68,7 @@ echo ""
 
 # Test Suite 2b: Git Utils Tests (lib/git-utils.sh resolvers,
 # lib/plugins-client.sh's pn_build_git_diff_files_json -- the changed-file
-# collection folded into check-tool-call.sh's before_tool_call gate; see
-# design-ideas/Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md)
+# collection folded into check-tool-call.sh's before_tool_call gate)
 echo -e "${BLUE}[3/10]${NC} Running Git Utils Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-git-utils.sh" > /tmp/git-utils-test.log 2>&1
@@ -110,8 +109,7 @@ echo ""
 
 # Test Suite 4c: Session Metadata Tests (lib/session-metadata.sh -- the
 # local, purely-client-side session-lifecycle mechanism that replaced the
-# session-start/session-end plugins API calls; see design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md)
+# session-start/session-end plugins API calls)
 echo -e "${BLUE}[5/10]${NC} Running Session Metadata Tests..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$TEST_DIR/test-session-metadata.sh" > /tmp/session-metadata-test.log 2>&1

@@ -6,8 +6,7 @@
 #
 # Previously this recorded a session-end marker with control-server via the
 # plugins API; that call was removed -- the marker had no processing/
-# governance/observability/reporting consumer. See design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md.
+# governance/observability/reporting consumer.
 
 set -o pipefail
 

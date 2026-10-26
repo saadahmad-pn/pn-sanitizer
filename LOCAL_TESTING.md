@@ -10,7 +10,7 @@ conventions.
 
 There is **no compiled build artifact**. This repo *is* the plugin: a Cursor
 Plugin Marketplace (`.cursor-plugin/marketplace.json` + `.cursor-plugin/plugin.json`)
-wrapping a single plugin (`paradigm-scanner`) whose entire implementation is
+wrapping a single plugin (`paradigm-networks`) whose entire implementation is
 a set of plain Bash scripts (macOS/Linux) with hand-mirrored PowerShell
 twins (Windows), wired to Cursor's hook events via `hooks/hooks.json`. There
 is no compile, transpile, bundle, or package-manager install step for the
@@ -84,10 +84,10 @@ This repo's own skill docs (`skills/*/SKILL.md`) reference `~/.cursor/plugins/lo
 2. Symlink (preferred, so edits take effect immediately) or copy this directory into Cursor's local plugin directory:
    ```bash
    mkdir -p ~/.cursor/plugins/local
-   ln -s "$(pwd)" ~/.cursor/plugins/local/paradigm-scanner
+   ln -s "$(pwd)" ~/.cursor/plugins/local/paradigm-networks
    ```
 3. Restart Cursor (or use its "reload window"/extension-host-restart command if available) so it picks up the new local plugin. Cursor's own plugin-loading UI and exact refresh behavior aren't documented in this repo — if hooks don't seem to fire after a restart, check **Cursor Settings → Hooks** and the **Hooks output channel**, per the Limitations section of `README.md`, to confirm the plugin was actually detected and its hooks registered.
-4. Confirm both install-path variants aren't active at once for the same plugin name (`paradigm-scanner`) — a stale marketplace import can otherwise coexist with a local install and cause confusing double-firing or the wrong version running.
+4. Confirm both install-path variants aren't active at once for the same plugin name (`paradigm-networks`) — a stale marketplace import can otherwise coexist with a local install and cause confusing double-firing or the wrong version running.
 
 ### Verifying it's working
 
@@ -95,7 +95,7 @@ Follow the "Try it" section of `README.md`:
 1. Log in (see `skills/paradigmnetworks-login/SKILL.md`, or run `bash scripts/login.sh --base-url <your-org-url>` directly).
 2. Submit a prompt or file edit your org's policy should block — it should be denied with an explanation.
 3. Submit something that should be allowed — it should proceed normally.
-4. Debug logs land under `~/.paradigm-scanner/` (`check-prompt.log`, `check-tool-call.log`, `plugins-client.log`, `audit.jsonl`) if something isn't behaving as expected — check these before assuming a hook silently failed.
+4. Debug logs land under `~/.paradigm-networks/` (`check-prompt.log`, `check-tool-call.log`, `plugins-client.log`, `audit.jsonl`) if something isn't behaving as expected — check these before assuming a hook silently failed.
 
 ## "Packaging" a change for release
 

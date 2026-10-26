@@ -2,8 +2,7 @@
 # Unit tests for lib/session-metadata.sh -- the local, purely-client-side
 # session-lifecycle mechanism that replaced the session-start/session-end
 # plugins API calls (pn_register_plugin_session/pn_close_plugin_session,
-# both removed). See design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md.
+# both removed).
 #
 # Also covers check-session.sh/check-session-end.sh's integration with
 # these functions -- see test-hooks.sh for the full hook-level integration

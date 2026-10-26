@@ -27,7 +27,7 @@ source "$SCRIPT_DIR/pn_config.sh"
 
 # Configuration from environment
 TIMEOUT_SECONDS="${PARADIGM_NETWORKS_TIMEOUT:-60}"
-DEBUG_LOG_PATH="${HOME}/.paradigm-scanner/check-prompt.log"
+DEBUG_LOG_PATH="${HOME}/.paradigm-networks/check-prompt.log"
 
 # PARADIGM_NETWORKS_PROMPT_FAILURE_MODE (manual env var override:
 # block/allow — no Cursor Settings UI for this, must be set directly in
@@ -81,9 +81,8 @@ main() {
   prompt=$(echo "$payload" | "$JQ_BIN" -r '.prompt // ""')
 
   # Repo/branch context injection (formerly the separate check-repo-context.sh
-  # hook, now folded into this single beforeSubmitPrompt entry -- see
-  # design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md
-  # §5). Backgrounded: it never gates (writes a rule file only, nothing here
+  # hook, now folded into this single beforeSubmitPrompt entry). Backgrounded:
+  # it never gates (writes a rule file only, nothing here
   # calls Paradigm Networks) and must never delay this hook's actual gate.
   local workspace_roots
   workspace_roots=$(echo "$payload" | "$JQ_BIN" -r '.workspace_roots[]? // empty')

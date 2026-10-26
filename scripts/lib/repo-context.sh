@@ -8,8 +8,7 @@
 # Extracted from the former standalone check-repo-context.sh script so it
 # can be called as a function from check-prompt.sh's single beforeSubmitPrompt
 # hook entry instead of running as its own separate hooks.json registration
-# -- see design-ideas/Plugin_API_Standardization_And_Hook_Consolidation_Design.md
-# §5 (beforeSubmitPrompt collapses to one hook). This function never talks to
+# (beforeSubmitPrompt collapses to one hook). This function never talks to
 # control-server -- nothing here calls Paradigm Networks directly, and it has
 # nothing to gate, so it's safe to run in the background from the caller.
 #
@@ -23,7 +22,7 @@
 # downstream consumer only reads the first <GIT> tag in the file, so a
 # momentarily stale later entry has no effect in practice.
 
-REPO_CONTEXT_CACHE_DIR="${HOME}/.paradigm-scanner/repo-context-cache"
+REPO_CONTEXT_CACHE_DIR="${HOME}/.paradigm-networks/repo-context-cache"
 
 # is_safe_workspace_root <root>
 # Defense-in-depth: guards against ever writing a rule file or appending to
@@ -54,7 +53,7 @@ ensure_gitignored() {
 
   {
     echo ""
-    echo "# Added by paradigm-scanner — generated, workspace-local agent context"
+    echo "# Added by Paradigm Networks — generated, workspace-local agent context"
     echo "$rel_path"
   } >> "$gitignore"
 }

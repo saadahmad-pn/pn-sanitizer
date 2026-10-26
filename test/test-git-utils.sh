@@ -2,9 +2,7 @@
 # Unit tests for lib/git-utils.sh's resolvers and lib/plugins-client.sh's
 # pn_build_git_diff_files_json (the changed-file collection a before_tool_call
 # gating a detected git push/commit attaches -- folded in from the retired
-# check-git-event.sh; see design-ideas/
-# Shell_Execution_vs_Tool_Call_Hook_Coverage_Validation.md and design-ideas/
-# Plugin_API_Standardization_And_Hook_Consolidation_Design.md §2.1).
+# check-git-event.sh).
 #
 # The git-command detection itself (regex matching in check-tool-call.sh) and
 # the end-to-end gating behavior (FAILURE_MODE, not-configured, etc.) are

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Checks how the sessionStart hook learns its own plugin root, for every
-# installed copy of paradigm-scanner (dev repo, ~/.cursor/plugins/local,
-# ~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<hash>).
+# installed copy of paradigm-networks (dev repo, ~/.cursor/plugins/local,
+# ~/.cursor/plugins/cache/<marketplace>/paradigm-networks/<hash>).
 #
 # For each copy it runs the real `scripts/run-hook.cmd check-session` with a
 # Cursor-shaped sessionStart payload and a throwaway HOME (so nothing is
@@ -43,9 +43,9 @@ bad() { echo "  FAIL  $*"; fail=$((fail + 1)); }
 copies=("$DEV_ROOT")
 while IFS= read -r d; do
   copies+=("$(cd "$d/.." && pwd)")
-done < <(find "$PLUGINS_DIR" -type f -path "*paradigm-scanner*/scripts/check-session.sh" 2>/dev/null | xargs -n1 dirname 2>/dev/null)
+done < <(find "$PLUGINS_DIR" -type f -path "*paradigm-networks*/scripts/check-session.sh" 2>/dev/null | xargs -n1 dirname 2>/dev/null)
 
-echo "== Installed copies of paradigm-scanner =="
+echo "== Installed copies of paradigm-networks =="
 for c in "${copies[@]}"; do echo "  $c"; done
 echo
 
@@ -103,10 +103,10 @@ for c in "${copies[@]}"; do
 done
 
 echo "== What the skills' find patterns match =="
-echo "Current pattern  */paradigm-scanner/scripts/login.sh:"
-find "$PLUGINS_DIR" -path "*/paradigm-scanner/scripts/login.sh" 2>/dev/null | sed 's/^/  /'
-echo "Lead's pattern   */paradigm-scanner/*scripts/login.sh:"
-find "$PLUGINS_DIR" -path "*/paradigm-scanner/*scripts/login.sh" 2>/dev/null | sed 's/^/  /'
+echo "Current pattern  */paradigm-networks/scripts/login.sh:"
+find "$PLUGINS_DIR" -path "*/paradigm-networks/scripts/login.sh" 2>/dev/null | sed 's/^/  /'
+echo "Lead's pattern   */paradigm-networks/*scripts/login.sh:"
+find "$PLUGINS_DIR" -path "*/paradigm-networks/*scripts/login.sh" 2>/dev/null | sed 's/^/  /'
 echo
 
 echo "Result: $pass passed, $fail failed, $skipped copies skipped (older builds)"

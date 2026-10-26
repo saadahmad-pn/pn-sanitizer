@@ -298,7 +298,7 @@ audit_log() {
 # scoped narrowly to that classification, not to transport-level failures
 # (timeouts, non-2xx, invalid JSON) which already have their own,
 # well-understood handling and aren't part of what this tracks.
-PN_ANOMALY_STATE_PATH="${HOME}/.paradigm-scanner/anomaly_state.json"
+PN_ANOMALY_STATE_PATH="${HOME}/.paradigm-networks/anomaly_state.json"
 PN_ANOMALY_WARNING_THRESHOLD=3
 PN_SCAN_STALENESS_THRESHOLD_SECONDS=3600
 

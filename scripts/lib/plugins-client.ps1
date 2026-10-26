@@ -14,7 +14,7 @@
 
 Set-StrictMode -Version Latest
 
-$Script:PluginsDebugLogPath = Join-Path $HOME ".paradigm-scanner\plugins-client.log"
+$Script:PluginsDebugLogPath = Join-Path $HOME ".paradigm-networks\plugins-client.log"
 
 # Same Platform identifier as plugins-client.sh's PN_PLUGIN_PLATFORM.
 $Script:PnPluginPlatform = "cursor-plugin"

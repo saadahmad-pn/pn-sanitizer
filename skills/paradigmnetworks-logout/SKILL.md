@@ -63,21 +63,21 @@ Only if that line is not in your context, fall back to searching. Use
 whichever command matches the shell you're actually running in — a Windows
 machine without WSL/Git Bash can't run the bash `find` command, and vice
 versa. These patterns match both local installs
-(`~/.cursor/plugins/local/paradigm-scanner/scripts/`) and marketplace
+(`~/.cursor/plugins/local/paradigm-networks/scripts/`) and marketplace
 installs
-(`~/.cursor/plugins/cache/<marketplace>/paradigm-scanner/<version>/scripts/`):
+(`~/.cursor/plugins/cache/<marketplace>/paradigm-networks/<version>/scripts/`):
 
 macOS/Linux:
 
 ```bash
-find ~/.cursor/plugins -path "*/paradigm-scanner/*scripts/logout.sh" 2>/dev/null
+find ~/.cursor/plugins -path "*/paradigm-networks/*scripts/logout.sh" 2>/dev/null
 ```
 
 Windows (PowerShell):
 
 ```powershell
 Get-ChildItem -Path "$HOME\.cursor\plugins" -Recurse -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.FullName -like "*\paradigm-scanner\*scripts\logout.ps1" } |
+  Where-Object { $_.FullName -like "*\paradigm-networks\*scripts\logout.ps1" } |
   Select-Object -ExpandProperty FullName
 ```
 

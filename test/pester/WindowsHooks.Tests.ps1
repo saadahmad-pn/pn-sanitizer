@@ -106,7 +106,7 @@ Describe "check-session.ps1" {
 
   It "carries only the scripts directory when logged in with a recent scan" {
     Set-LoggedIn "https://acme.paradigmnetworks.ai"
-    $stateDir = Join-Path $Script:TestHome ".paradigm-scanner"
+    $stateDir = Join-Path $Script:TestHome ".paradigm-networks"
     New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     [System.IO.File]::WriteAllText((Join-Path $stateDir "anomaly_state.json"), "{`"consecutive_anomaly_count`": 0, `"last_successful_scan`": $now}")
@@ -117,7 +117,7 @@ Describe "check-session.ps1" {
   It "writes the local session file, and check-session-end.ps1 removes it" {
     $payload = New-Payload @{ conversation_id = "sess-meta" }
     Invoke-Hook -Name "check-session" -Payload $payload | Out-Null
-    $file = Join-Path $Script:TestHome ".paradigm-scanner/sessions/sess-meta.json"
+    $file = Join-Path $Script:TestHome ".paradigm-networks/sessions/sess-meta.json"
     Test-Path $file | Should -BeTrue
     ((Get-Content $file -Raw) | ConvertFrom-Json).SessionId | Should -Be "sess-meta"
 
@@ -127,7 +127,7 @@ Describe "check-session.ps1" {
 
   It "refuses a session id that would escape the sessions folder" {
     Invoke-Hook -Name "check-session" -Payload (New-Payload @{ conversation_id = "../escape" }) | Out-Null
-    Test-Path (Join-Path $Script:TestHome ".paradigm-scanner/escape.json") | Should -BeFalse
+    Test-Path (Join-Path $Script:TestHome ".paradigm-networks/escape.json") | Should -BeFalse
   }
 }
 
@@ -187,7 +187,7 @@ Describe "check-tool-call.ps1 while logged out" {
 
   It "records each decision in the audit log" {
     Invoke-Hook -Name "check-tool-call" -Payload (New-Payload @{ tool_name = "AwaitShell"; tool_input = @{ shellId = "9" } }) | Out-Null
-    $last = Get-Content (Join-Path $Script:TestHome ".paradigm-scanner/audit.jsonl") | Select-Object -Last 1 | ConvertFrom-Json
+    $last = Get-Content (Join-Path $Script:TestHome ".paradigm-networks/audit.jsonl") | Select-Object -Last 1 | ConvertFrom-Json
     $last.reason | Should -Be "login_wait_unconfigured"
   }
 }

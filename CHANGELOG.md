@@ -4,6 +4,29 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-26 — Plugin identifier renamed to `paradigm-networks` (PN-12427)
+
+The plugin's `name` in `plugin.json` and the marketplace entry changed from
+`paradigm-scanner` to `paradigm-networks`, matching the "Paradigm Networks"
+display name. Users now install with `/add-plugin paradigm-networks`. The
+`find` lookups in the login/logout skills and the `pn-login-check` rule, the
+README and the docs use the new name. The `.gitignore` comment the plugin adds
+to a workspace now reads "Added by Paradigm Networks".
+
+The local state folder moved from `~/.paradigm-scanner/` to
+`~/.paradigm-networks/` (logs, audit log, session metadata, caches) in both
+the bash and PowerShell scripts, tests and docs. Nothing is migrated: files
+under the old folder stay where they are and the hooks start fresh in the new
+one. Login credentials are unaffected (`~/.pn/credentials.json`).
+
+Anyone with the old plugin installed should uninstall `paradigm-scanner` when
+the renamed plugin arrives, so the hooks don't fire twice.
+
+Also removed internal design-doc pointers (`design-ideas/...md`, `CLAUDE.md`)
+from code comments in the shipped scripts and tests (PN-12433). Comments only;
+no behavior change. The docs themselves are internal and never shipped, so
+those references were dead links in the public repo.
+
 ## 2026-10-25 — jq is now a requirement, no longer bundled (PN-12433)
 
 Removed the bundled static `jq` binaries (`scripts/bin/`, about 5.6 MB) and

@@ -32,7 +32,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "lib\git-utils.ps1")
 
-$CacheDir = Join-Path $HOME ".paradigm-scanner\repo-context-cache"
+$CacheDir = Join-Path $HOME ".paradigm-networks\repo-context-cache"
 
 # Windows equivalent of the bash version's is_safe_workspace_root: refuses
 # to write a rule file or touch .gitignore inside a system directory, or
@@ -66,7 +66,7 @@ function Confirm-Gitignored {
   # elsewhere in this plugin) must not turn into a terminating error that
   # escapes this function and aborts the whole workspace_roots loop in
   # check-repo-context.ps1, skipping every remaining root.
-  Add-Content -Path $gitignorePath -Value "`n# Added by paradigm-scanner -- generated, workspace-local agent context`n$RelativePath" -Encoding UTF8 -ErrorAction SilentlyContinue
+  Add-Content -Path $gitignorePath -Value "`n# Added by Paradigm Networks -- generated, workspace-local agent context`n$RelativePath" -Encoding UTF8 -ErrorAction SilentlyContinue
 }
 
 # A cheap "has anything changed" signal: the root's own last-write time

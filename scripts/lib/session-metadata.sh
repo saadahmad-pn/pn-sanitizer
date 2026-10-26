@@ -4,11 +4,10 @@
 # check-session.sh/check-session-end.sh's own headers for why the
 # session-lifecycle API calls that used to live here were removed --
 # session_start/session_end markers had no processing/governance/
-# observability/reporting consumer). See design-ideas/
-# Session_Lifecycle_Simplification_And_Contract_Updates.md.
+# observability/reporting consumer).
 #
 # One file per session, keyed by SessionId, under
-# ~/.paradigm-scanner/sessions/<session_id>.json -- SessionId is Cursor's own
+# ~/.paradigm-networks/sessions/<session_id>.json -- SessionId is Cursor's own
 # conversation_id, which is already filesystem-safe (no path separators
 # observed in practice), but is still not trusted blind: see
 # _pn_session_metadata_path's sanitization.
@@ -22,7 +21,7 @@
 # to read from) -- pn_read_session_metadata below exists for that purpose,
 # not called anywhere yet.
 
-SESSION_METADATA_DIR="${HOME}/.paradigm-scanner/sessions"
+SESSION_METADATA_DIR="${HOME}/.paradigm-networks/sessions"
 
 # _pn_session_metadata_path <session_id>
 # Rejects a session id containing a path separator or leading dot rather

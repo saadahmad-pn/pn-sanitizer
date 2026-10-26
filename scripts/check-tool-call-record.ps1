@@ -22,7 +22,7 @@ if ($env:PARADIGM_NETWORKS_CODECHAIN_TIMEOUT) {
     $CodechainTimeoutSec = $parsedTimeout
   }
 }
-$DebugLogPath = Join-Path $HOME ".paradigm-scanner\check-tool-call-record.log"
+$DebugLogPath = Join-Path $HOME ".paradigm-networks\check-tool-call-record.log"
 
 try {
   $stdinText = Get-StdinText

@@ -91,8 +91,7 @@ get_current_branch() {
 # Same as get_remote_url, but returns an empty string (not the "No remote"
 # placeholder) when there's no configured origin. get_remote_url's fallback
 # text is meant for human-readable <GIT>...</GIT> context injection
-# (check-repo-context.sh); the detections API contract (design-ideas/
-# Cursor_PrePush_Governance_Enforcement_Plan.md §0.5.3) instead requires
+# (check-repo-context.sh); the detections API contract instead requires
 # GitRepoUrl to be a genuinely empty field when Cwd isn't a git repo or has
 # no remote, so a placeholder string would misrepresent that case to the
 # backend.
