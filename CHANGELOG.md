@@ -4,6 +4,37 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-27 — Allowlist git remote URLs and branch names (PN-14673, security)
+
+Fixes a prompt injection reported in independent validation (PN-12293). The
+`alwaysApply` repo-context rule embeds each workspace repo's
+`remote.origin.url` and branch name in `<GIT>url|branch</GIT>`, and Cursor
+adds that rule to every request's system prompt. `sanitize_git_value` /
+`ConvertTo-SanitizedGitValue` only stripped credentials and control
+characters, so a value with spaces and `<` `>` could close the tag and append
+instructions for an agent that has shell access. Reproduced two ways: a remote
+URL set in a repo's own `.git/config` (e.g. a repo shipped as a zip), and a
+default branch name chosen by the repo owner, which works with a plain
+`git clone`.
+
+Remote URLs and branch names are now checked against an allowlist after the
+existing cleanup (`is_valid_git_remote_url` / `is_valid_git_branch` in bash,
+`Test-GitRemoteUrl` / `Test-GitBranchName` in PowerShell). A value that doesn't
+match becomes `unrecognized remote` / `unrecognized branch` in the rule and an
+empty string in API payloads, never a "cleaned" version of the input.
+Accepted URL forms: `scheme://...` (https, http, ssh, git, file), scp-style
+`user@host:path`, and absolute local paths; excluded are whitespace,
+`< > " ' \` |` and backslash. A Windows local-path remote (`C:\...`) now shows
+as `unrecognized remote`.
+
+Tests: new bash cases in `test/test-unit.sh` (both payloads, normal URLs and
+branches, credential stripping, and the generated rule) and new Pester tests
+in `test/pester/GitUtils.Tests.ps1` (not run locally: no PowerShell on the dev
+machine).
+
+Follow-up, separate repo: control-server's `GitContext.go` should apply the
+same grammar when it reads the `<GIT>` tag.
+
 ## 2026-10-26 — Plugin identifier renamed to `paradigm-networks` (PN-12427)
 
 The plugin's `name` in `plugin.json` and the marketplace entry changed from
