@@ -100,7 +100,7 @@ Describe "check-session.ps1" {
     $ctx = (Invoke-Hook -Name "check-session" -Payload (New-Payload @{}) | ConvertFrom-Json).additional_context
     $ctx | Should -Match ([regex]::Escape('-File "' + (Join-Path $Script:ScriptsDir "login.ps1") + '" -BaseUrl <their-base-url>'))
     $ctx | Should -Not -Match '--base-url'
-    $ctx | Should -Match 'full_network'
+    $ctx | Should -Match 'required_permissions \["all"\]'
     $ctx | Should -Match ([regex]::Escape("Paradigm Networks plugin scripts directory: $($Script:ScriptsDir)"))
   }
 
@@ -167,7 +167,7 @@ Describe "check-tool-call.ps1 while logged out" {
     $r = Invoke-Hook -Name "check-tool-call" -Payload (New-Payload @{ tool_name = "Write"; tool_input = @{ file_path = "a.txt"; contents = "x" } }) | ConvertFrom-Json
     $r.permission | Should -Be "deny"
     $r.agent_message | Should -Match ([regex]::Escape('-File "' + (Join-Path $Script:ScriptsDir "login.ps1") + '" -BaseUrl <their-base-url>'))
-    $r.agent_message | Should -Match 'full_network'
+    $r.agent_message | Should -Match 'required_permissions \["all"\]'
   }
 
   It "blocks a chained sleep and a read of any other file" {

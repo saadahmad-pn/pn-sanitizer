@@ -184,13 +184,16 @@ scanning recognize it as the login step and skip scanning it (it carries no
 user-authored content, only the base URL); anything else about the command
 line falls back to being scanned like any other tool call.
 
-**Run it with network access.** In Cursor's Shell tool, pass
-`required_permissions: ["full_network"]` on this call. After the browser
-step, the script itself must reach the Paradigm Networks server to collect
-the login token. Cursor's agent sandbox blocks network access by default,
-so without this the browser sign-in succeeds but the script then fails with
-`could not reach <base-url>` or `unexpected non-JSON response`, and the
-user is never logged in. This only changes how Cursor runs the command, not
+**Run it outside the sandbox.** In Cursor's Shell tool, pass
+`required_permissions: ["all"]` on this call. The script must do two things
+Cursor's agent sandbox blocks by default: reach the Paradigm Networks server
+to collect the login token, and save that login to `~/.pn/` in the user's
+home folder (outside the workspace). `["full_network"]` is not enough: it
+allows the network but still blocks the save, so the browser sign-in
+succeeds and the script then fails with `failed to save credentials`.
+Without any permission it fails earlier, with `could not reach <base-url>`
+or `unexpected non-JSON response`. Either way the user is never logged in.
+This only changes how Cursor runs the command, not
 the command text, so the shape rule above still holds.
 
 Run it in the background rather than blocking the turn on it — it can take
@@ -245,11 +248,13 @@ then fails.
 - Non-zero → quote the script's own `error:` line to the user. Don't
   replace it with your own guess (e.g. "you didn't finish in the browser"
   or "it timed out") unless that is what the script printed.
-- If the error says `could not reach`, `unexpected non-JSON response`, or
-  mentions the sandbox, the script had no network access. If you ran it
-  without `required_permissions: ["full_network"]`, run it once more with
-  it, as a fresh run (new URL). If it still fails that way, give the user
-  the exact command from step 4 to run in their own terminal, and stop.
+- If the error says `could not reach`, `unexpected non-JSON response`,
+  `failed to save credentials`, or mentions the sandbox, the sandbox
+  blocked it. If you ran it without `required_permissions: ["all"]`, run
+  it once more with it, as a fresh run (new URL). Don't try to fix it
+  yourself (e.g. by creating `~/.pn` by hand): that hits the same sandbox.
+  If it still fails that way, give the user the exact command from step 4
+  to run in their own terminal, and stop.
 - Any other error (timeout, denied, state mismatch) → offer to retry with a
   fresh run. If retrying, remind the user they'll need to click through the
   new link within the five-minute window.

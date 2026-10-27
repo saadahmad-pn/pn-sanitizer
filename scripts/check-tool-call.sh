@@ -306,7 +306,7 @@ main() {
       # agent's only feedback once a session's injected context is gone
       # (compaction, a session that started configured), and it cannot look
       # the path up -- see check-session.sh.
-      local recovery="Paradigm Networks is not logged in, so ${action_desc} was blocked. Ask the user for their Paradigm Networks base URL, then run EXACTLY: bash $SCRIPT_DIR/login.sh --base-url <their-base-url> -- verbatim, with nothing chained onto it, and with network access (required_permissions [\"full_network\"]): it must reach the Paradigm Networks server. Do not retry ${action_desc}, and do not search for the script: every other tool call stays blocked until login completes."
+      local recovery="Paradigm Networks is not logged in, so ${action_desc} was blocked. Ask the user for their Paradigm Networks base URL, then run EXACTLY: bash $SCRIPT_DIR/login.sh --base-url <their-base-url> -- verbatim, with nothing chained onto it, and outside the sandbox (required_permissions [\"all\"]): it must reach the Paradigm Networks server and save the login in the home folder. Do not retry ${action_desc}, and do not search for the script: every other tool call stays blocked until login completes."
       json_permission_deny "The scanning service is unavailable ($reason). ${action_noun} blocked. $signup_note" "$recovery"
     fi
     return 0

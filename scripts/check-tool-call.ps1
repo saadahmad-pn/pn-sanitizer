@@ -200,7 +200,7 @@ try {
       # side. Same shape as check-session.ps1's notice and the login skill.
       $loginScript = Join-Path $ScriptDir "login.ps1"
       $loginCommand = '& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "' + $loginScript + '" -BaseUrl <their-base-url>'
-      $recovery = "Paradigm Networks is not logged in, so $actionDesc was blocked. Ask the user for their Paradigm Networks base URL, then run EXACTLY: $loginCommand -- verbatim, with nothing chained onto it, and with network access (required_permissions [`"full_network`"]): it must reach the Paradigm Networks server. Do not retry $actionDesc, and do not search for the script: every other tool call stays blocked until login completes."
+      $recovery = "Paradigm Networks is not logged in, so $actionDesc was blocked. Ask the user for their Paradigm Networks base URL, then run EXACTLY: $loginCommand -- verbatim, with nothing chained onto it, and outside the sandbox (required_permissions [`"all`"]): it must reach the Paradigm Networks server and save the login in the home folder. Do not retry $actionDesc, and do not search for the script: every other tool call stays blocked until login completes."
       Write-JsonPermissionDeny -UserMessage "The scanning service is unavailable ($reason). $actionNoun blocked. $signupNote" -AgentMessage $recovery
     }
     return

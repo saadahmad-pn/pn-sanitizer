@@ -4,6 +4,25 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-28 — Login failed with "failed to save credentials" on a fresh machine
+
+On a machine that had never logged in before (no `~/.pn` folder yet),
+`/paradigmnetworks-login` finished the browser sign-in and then failed with
+`mktemp: mkstemp failed on ~/.pn/credentials.json.XXXXXX: No such file or
+directory` / `error: failed to save credentials`. The login skill and the
+hooks told the agent to run `login.sh` with `required_permissions
+["full_network"]`. That lets Cursor's agent sandbox reach the network, but
+it still blocks writes outside the workspace, so `mkdir -p ~/.pn` failed
+silently and the save failed after it. Retrying hit the same wall, and so
+did the agent's own attempt to create the folder.
+
+The login skill, the logout skill, the not-logged-in messages from
+`check-session` and `check-tool-call` (`.sh` and `.ps1`) and `login`'s own
+sandbox hint now ask for `required_permissions ["all"]` (run outside the
+sandbox). A failed save now names the credentials path and points at the
+sandbox, instead of only saying "failed to save credentials". 501/501
+passing.
+
 ## 2026-10-27 — Windows login check always said "not logged in" (PN-14659)
 
 On Windows, `check-configured.ps1` printed `NOT_CONFIGURED` for every

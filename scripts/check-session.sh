@@ -112,7 +112,7 @@ EOF
     read -r -d '' message <<EOF || true
 Paradigm Networks is not configured for this workspace, so tool calls are currently blocked until login completes.
 
-To fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in, with network access (required_permissions ["full_network"]) since it must reach the Paradigm Networks server:
+To fix this: ask the user for their Paradigm Networks base URL (e.g. https://<org>.paradigmnetworks.ai; if they don't have one yet, they can sign up at https://signup.claude-demo.paradigmnetworks.ai/signup), then run EXACTLY this via the Shell tool with their URL substituted in, outside the sandbox (required_permissions ["all"]) since it must reach the Paradigm Networks server and save the login in the home folder:
 
 bash $SCRIPT_DIR/login.sh --base-url <their-base-url>
 

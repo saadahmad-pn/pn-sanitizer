@@ -101,6 +101,14 @@ Windows:
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "<scripts-dir>\logout.ps1"
 ```
 
+**Run it outside the sandbox.** In Cursor's Shell tool, pass
+`required_permissions: ["all"]` on this call. The script must reach the
+Paradigm Networks server to revoke the login, and remove
+`~/.pn/credentials.json` from the user's home folder (outside the
+workspace). Cursor's agent sandbox blocks both by default. This only
+changes how Cursor runs the command, not the command text, so the shape
+rule below still holds.
+
 Run this command **exactly as shown above and nothing else** — don't combine
 it with `cd`, `&&`, `;`, or any other command, and don't add any flags. This
 precise, standalone shape (with no arguments) is what lets Paradigm

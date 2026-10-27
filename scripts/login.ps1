@@ -230,7 +230,7 @@ function Invoke-CodeExchange {
 
   # Same hint as login.sh's exchange_code: inside Cursor's agent sandbox,
   # outbound network is blocked unless the command was granted it.
-  $sandboxHint = "If this ran inside Cursor's agent sandbox, its network access is blocked: re-run this exact command with network access (required_permissions [`"full_network`"]), or run it yourself in a terminal."
+  $sandboxHint = "If this ran inside Cursor's agent sandbox, it cannot reach the network or save the login: re-run this exact command outside the sandbox (required_permissions [`"all`"]), or run it yourself in a terminal."
 
   if ($result.TimedOut) {
     [Console]::Error.WriteLine("error: timed out reaching $BaseUrl. $sandboxHint")
@@ -364,7 +364,7 @@ function Invoke-Main {
   $saved = Save-PnCredentials -BaseUrl $normalizedBaseUrl -AccessToken $accessToken `
     -RefreshToken $refreshToken -ExpiresAt $expiresAt
   if (-not $saved) {
-    [Console]::Error.WriteLine("error: failed to save credentials")
+    [Console]::Error.WriteLine("error: failed to save credentials to $($Script:PnCredPath). If this ran inside Cursor's agent sandbox, it cannot write outside the workspace: re-run this exact command outside the sandbox (required_permissions [`"all`"]), or run it yourself in a terminal.")
     exit 1
   }
 

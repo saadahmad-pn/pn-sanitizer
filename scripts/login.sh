@@ -301,7 +301,7 @@ exchange_code() {
   # command was granted it -- curl then gets nothing at all (HTTPS), or the
   # sandbox proxy's own non-JSON reply (plain HTTP). Both look like a server
   # problem without this hint, and the browser step has already succeeded.
-  local sandbox_hint="If this ran inside Cursor's agent sandbox, its network access is blocked: re-run this exact command with network access (required_permissions [\"full_network\"]), or run it yourself in a terminal."
+  local sandbox_hint="If this ran inside Cursor's agent sandbox, it cannot reach the network or save the login: re-run this exact command outside the sandbox (required_permissions [\"all\"]), or run it yourself in a terminal."
 
   if [[ -z "$response" ]]; then
     echo "error: could not reach $base_url. $sandbox_hint" >&2
@@ -531,7 +531,7 @@ main() {
 
   # Save credentials
   pn_save_credentials "$base_url" "$access_token" "$refresh_token" "$expires_at" || {
-    echo "error: failed to save credentials" >&2
+    echo "error: failed to save credentials to $CRED_PATH. If this ran inside Cursor's agent sandbox, it cannot write outside the workspace: re-run this exact command outside the sandbox (required_permissions [\"all\"]), or run it yourself in a terminal." >&2
     return 1
   }
 

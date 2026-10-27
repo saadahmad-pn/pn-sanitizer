@@ -454,7 +454,7 @@ test_case "exchange_code: no response at all points at the sandbox"
 curl() { :; }
 out=$(exchange_code "https://acme.paradigmnetworks.ai" "c" "v" "http://127.0.0.1:8000/callback" 2>&1 >/dev/null)
 assert_output_contains "echo \"\$out\"" "could not reach https://acme.paradigmnetworks.ai" "Says the server was not reached"
-assert_output_contains "echo \"\$out\"" "full_network" "Says how to fix it (network access)"
+assert_output_contains "echo \"\$out\"" "required_permissions [\"all\"]" "Says how to fix it (run outside the sandbox)"
 
 test_case "exchange_code: non-JSON response is shown, not an empty reason"
 curl() { echo "<html>Blocked by proxy</html>"; }
