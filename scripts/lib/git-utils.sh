@@ -27,6 +27,53 @@ sanitize_git_value() {
   printf '%s' "$value"
 }
 
+# Allowlists for a remote URL / branch name before it reaches agent-facing
+# context (the alwaysApply rule's <GIT>url|branch</GIT> tag) or the plugins
+# API. sanitize_git_value alone isn't enough: it keeps spaces, < > and text,
+# so a crafted value can close the tag and append instructions to every
+# request's system prompt. A remote URL arrives with whatever .git/config a
+# repo ships with, and a cloned repo's default branch name is chosen by its
+# owner, so both are attacker-controllable. A value that doesn't match is
+# replaced with a placeholder, never cleaned up into something "close".
+# Deliberately excluded: whitespace, < > " ' ` | (the tag's url|branch
+# separator) and backslash.
+#   URL: scheme://...   (https, http, ssh, git, file)
+#        user@host:path (scp-style, e.g. git@github.com:org/repo.git)
+#        /absolute/local/path
+GIT_REMOTE_URL_PATTERN='^((https?|ssh|git|file)://[A-Za-z0-9._~@:/%+-]+|[A-Za-z0-9._~-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/%+-]+|/[A-Za-z0-9._~/%+-]+)$'
+GIT_BRANCH_PATTERN='^[A-Za-z0-9._/+-]+$'
+
+# is_valid_git_remote_url <value> / is_valid_git_branch <value>
+# LC_ALL=C so the [A-Za-z] ranges mean plain ASCII in every locale.
+is_valid_git_remote_url() {
+  local LC_ALL=C
+  [[ "$1" =~ $GIT_REMOTE_URL_PATTERN ]]
+}
+
+is_valid_git_branch() {
+  local LC_ALL=C
+  [[ "$1" =~ $GIT_BRANCH_PATTERN ]]
+}
+
+# safe_git_remote_url <raw_url> <placeholder>
+# safe_git_branch <raw_branch> <placeholder>
+# sanitize_git_value, then the allowlist. A value that was truncated for
+# length also fails (its "...<truncated>" suffix contains < >), so an
+# oversized value becomes the placeholder too.
+safe_git_remote_url() {
+  local value
+  value=$(sanitize_git_value "$1")
+  is_valid_git_remote_url "$value" || value="$2"
+  printf '%s' "$value"
+}
+
+safe_git_branch() {
+  local value
+  value=$(sanitize_git_value "$1")
+  is_valid_git_branch "$value" || value="$2"
+  printf '%s' "$value"
+}
+
 # find_git_repos <start_path>
 # Prints one absolute repo path per line: a depth-capped recursive walk that
 # stops descending once it finds a .git directory, skipping known-noisy
@@ -76,7 +123,11 @@ get_remote_url() {
   local repo_path="$1"
   local url
   url=$(git -C "$repo_path" config --get remote.origin.url 2>/dev/null)
-  sanitize_git_value "${url:-No remote}"
+  if [[ -z "$url" ]]; then
+    printf '%s' "No remote"
+    return 0
+  fi
+  safe_git_remote_url "$url" "unrecognized remote"
 }
 
 # get_current_branch <repo_path>
@@ -84,7 +135,11 @@ get_current_branch() {
   local repo_path="$1"
   local branch
   branch=$(git -C "$repo_path" branch --show-current 2>/dev/null)
-  sanitize_git_value "${branch:-detached}"
+  if [[ -z "$branch" ]]; then
+    printf '%s' "detached"
+    return 0
+  fi
+  safe_git_branch "$branch" "unrecognized branch"
 }
 
 # get_remote_url_or_empty <repo_path>
@@ -100,7 +155,7 @@ get_remote_url_or_empty() {
   local url
   url=$(git -C "$repo_path" config --get remote.origin.url 2>/dev/null)
   [[ -z "$url" ]] && return 0
-  sanitize_git_value "$url"
+  safe_git_remote_url "$url" ""
 }
 
 # get_current_branch_or_empty <repo_path>
@@ -110,7 +165,7 @@ get_current_branch_or_empty() {
   local branch
   branch=$(git -C "$repo_path" branch --show-current 2>/dev/null)
   [[ -z "$branch" ]] && return 0
-  sanitize_git_value "$branch"
+  safe_git_branch "$branch" ""
 }
 
 # resolve_unpushed_changed_files <repo_path>
