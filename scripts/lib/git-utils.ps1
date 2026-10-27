@@ -35,6 +35,47 @@ function ConvertTo-SanitizedGitValue {
   return $sanitized
 }
 
+# Allowlists for a remote URL / branch name before it reaches agent-facing
+# context (the alwaysApply rule's <GIT>url|branch</GIT> tag) or the plugins
+# API. Mirrors GIT_REMOTE_URL_PATTERN / GIT_BRANCH_PATTERN in git-utils.sh --
+# see the reasoning there. A value that doesn't match is replaced with a
+# placeholder, never cleaned up. \z (not $) because .NET's $ also matches
+# before a trailing newline.
+$Script:GitRemoteUrlPattern = '^((https?|ssh|git|file)://[A-Za-z0-9._~@:/%+-]+|[A-Za-z0-9._~-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/%+-]+|/[A-Za-z0-9._~/%+-]+)\z'
+$Script:GitBranchPattern = '^[A-Za-z0-9._/+-]+\z'
+
+function Test-GitRemoteUrl {
+  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+  return ($Value -cmatch $Script:GitRemoteUrlPattern)
+}
+
+function Test-GitBranchName {
+  param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+  return ($Value -cmatch $Script:GitBranchPattern)
+}
+
+# ConvertTo-SanitizedGitValue, then the allowlist. A value truncated for
+# length also fails (its "...<truncated>" suffix contains < >).
+function ConvertTo-SafeGitRemoteUrl {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Placeholder
+  )
+  $sanitized = ConvertTo-SanitizedGitValue -Value $Value
+  if (Test-GitRemoteUrl -Value $sanitized) { return $sanitized }
+  return $Placeholder
+}
+
+function ConvertTo-SafeGitBranch {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Placeholder
+  )
+  $sanitized = ConvertTo-SanitizedGitValue -Value $Value
+  if (Test-GitBranchName -Value $sanitized) { return $sanitized }
+  return $Placeholder
+}
+
 # Depth-capped recursive walk that stops descending once it finds a .git
 # directory, skips known-noisy directories, and never follows a symlink or
 # junction (a reparse point planted anywhere under the scan root could
@@ -77,15 +118,15 @@ function Find-GitReposInternal {
 function Get-GitRemoteUrl {
   param([Parameter(Mandatory = $true)][string]$RepoPath)
   $url = (git -C $RepoPath config --get remote.origin.url 2>$null)
-  if (-not $url) { $url = "No remote" }
-  return (ConvertTo-SanitizedGitValue -Value $url)
+  if (-not $url) { return "No remote" }
+  return (ConvertTo-SafeGitRemoteUrl -Value $url -Placeholder "unrecognized remote")
 }
 
 function Get-GitCurrentBranch {
   param([Parameter(Mandatory = $true)][string]$RepoPath)
   $branch = (git -C $RepoPath branch --show-current 2>$null)
-  if (-not $branch) { $branch = "detached" }
-  return (ConvertTo-SanitizedGitValue -Value $branch)
+  if (-not $branch) { return "detached" }
+  return (ConvertTo-SafeGitBranch -Value $branch -Placeholder "unrecognized branch")
 }
 
 # Same as Get-GitRemoteUrl, but returns an empty string (not the "No
@@ -98,7 +139,7 @@ function Get-GitRemoteUrlOrEmpty {
   param([Parameter(Mandatory = $true)][string]$RepoPath)
   $url = (git -C $RepoPath config --get remote.origin.url 2>$null)
   if (-not $url) { return "" }
-  return (ConvertTo-SanitizedGitValue -Value $url)
+  return (ConvertTo-SafeGitRemoteUrl -Value $url -Placeholder "")
 }
 
 # Same rationale as Get-GitRemoteUrlOrEmpty above, for GitBranch.
@@ -106,7 +147,7 @@ function Get-GitCurrentBranchOrEmpty {
   param([Parameter(Mandatory = $true)][string]$RepoPath)
   $branch = (git -C $RepoPath branch --show-current 2>$null)
   if (-not $branch) { return "" }
-  return (ConvertTo-SanitizedGitValue -Value $branch)
+  return (ConvertTo-SafeGitBranch -Value $branch -Placeholder "")
 }
 
 # Returns repo-relative paths (string array) of every file touched by a
