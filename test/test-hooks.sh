@@ -610,6 +610,68 @@ assert_json_valid "$result" "Valid JSON output"
 rm -rf "$REPO_CTX_WORKSPACE"
 
 echo ""
+echo -e "${BLUE}=== Integration Tests: logout.sh server-side revoke (PN-14676) ===${NC}"
+
+# A fake curl first on PATH: records its arguments and prints the HTTP status
+# given in FAKE_CURL_STATUS (logout.sh asks curl for the status code only),
+# exiting with FAKE_CURL_EXIT. No real server needed.
+FAKE_BIN="$TEST_TEMP_DIR/fake-bin"
+FAKE_CURL_ARGS="$TEST_TEMP_DIR/fake-curl-args"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/curl" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$FAKE_CURL_ARGS"
+printf '%s' "${FAKE_CURL_STATUS:-200}"
+exit "${FAKE_CURL_EXIT:-0}"
+EOF
+chmod +x "$FAKE_BIN/curl"
+export FAKE_CURL_ARGS
+
+run_logout() {
+  PATH="$FAKE_BIN:$PATH" FAKE_CURL_STATUS="$1" FAKE_CURL_EXIT="${2:-0}" bash "$SCRIPTS_DIR/logout.sh" 2>&1
+}
+
+test_case "logout.sh revokes the refresh token on the server, then removes the local login"
+rm -f "$FAKE_CURL_ARGS"
+mock_credentials "https://acme.paradigmnetworks.ai/" "access-1" "refresh+abc/123=" "$(($(date +%s) + 3600))"
+result=$(run_logout 200)
+assert_output_contains "echo \"\$result\"" "Signed out on the server: the login was revoked." "reports the server-side revoke"
+assert_file_not_exists "$HOME/.pn/credentials.json" "local credentials removed"
+assert_output_contains "cat '$FAKE_CURL_ARGS'" "https://acme.paradigmnetworks.ai/api/v1/plugin/revoke" "calls the revoke endpoint (no double slash)"
+assert_output_contains "cat '$FAKE_CURL_ARGS'" "token=refresh%2Babc/123%3D&token_type_hint=refresh_token&client_id=cursor-plugin" "sends the URL-encoded refresh token with RFC 7009 fields (+ encoded, as for the token refresh)"
+
+test_case "logout.sh when the server doesn't support revoke yet (404)"
+mock_credentials "https://acme.paradigmnetworks.ai" "access-1" "refresh-1" "$(($(date +%s) + 3600))"
+result=$(run_logout 404)
+assert_output_contains "echo \"\$result\"" "doesn't support revoking plugin logins yet" "says revoke isn't supported yet"
+assert_file_not_exists "$HOME/.pn/credentials.json" "local credentials still removed"
+
+test_case "logout.sh when the server is unreachable"
+mock_credentials "https://acme.paradigmnetworks.ai" "access-1" "refresh-1" "$(($(date +%s) + 3600))"
+result=$(run_logout 000 7)
+assert_output_contains "echo \"\$result\"" "Could not reach the server to revoke the login" "says the server couldn't be reached"
+assert_file_not_exists "$HOME/.pn/credentials.json" "local credentials still removed"
+
+test_case "logout.sh when the server returns an unexpected error"
+mock_credentials "https://acme.paradigmnetworks.ai" "access-1" "refresh-1" "$(($(date +%s) + 3600))"
+result=$(run_logout 500)
+assert_output_contains "echo \"\$result\"" "did not confirm the revoke (HTTP 500)" "reports the status code"
+assert_file_not_exists "$HOME/.pn/credentials.json" "local credentials still removed"
+
+test_case "logout.sh with a corrupted credentials file skips the revoke and still logs out"
+rm -f "$FAKE_CURL_ARGS"
+mkdir -p "$HOME/.pn" && printf 'not json' > "$HOME/.pn/credentials.json"
+result=$(run_logout 200)
+assert_output_contains "echo \"\$result\"" "incomplete or unreadable" "says why the revoke was skipped"
+assert_file_not_exists "$HOME/.pn/credentials.json" "local credentials removed"
+assert_file_not_exists "$FAKE_CURL_ARGS" "no request sent"
+
+test_case "logout.sh when not logged in"
+rm -f "$HOME/.pn/credentials.json"
+result=$(run_logout 200)
+assert_output_contains "echo \"\$result\"" "Not logged in" "reports nothing to log out of"
+
+echo ""
 echo ""
 test_summary
 FINAL_RESULT=$?
