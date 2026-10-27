@@ -1,6 +1,6 @@
 ---
 name: paradigmnetworks-logout
-description: Log this workspace out of Paradigm Networks by removing the locally stored credentials. Use when the user explicitly asks to log out of Paradigm Networks, disconnect it, remove their login, or switch which Paradigm Networks org/account this workspace uses (log out first, then run the paradigmnetworks-login skill to log in again).
+description: Log this workspace out of Paradigm Networks by revoking its login on the server and removing the locally stored credentials. Use when the user explicitly asks to log out of Paradigm Networks, disconnect it, remove their login, or switch which Paradigm Networks org/account this workspace uses (log out first, then run the paradigmnetworks-login skill to log in again).
 ---
 
 # Paradigm Networks logout
@@ -29,19 +29,21 @@ territory instead.
   `rm`/`Remove-Item`) — always go through `logout.sh`/`logout.ps1` (step
   2), the same reasoning as the models skill's rule about never
   hand-editing that file directly.
-- There is no server-side session or token to revoke here — Paradigm
-  Networks' login flow never issues anything like that, so don't imply to
-  the user that this contacts a server or invalidates anything remotely.
-  This only clears the local credentials file.
+- **Don't claim the login was revoked on the server unless the script says
+  so.** The script first asks the server to revoke this login, then always
+  removes the local credentials file. The server step can fail (server
+  unreachable, or a server version that doesn't support revoking yet), and
+  the script's second output line says which happened.
 
 ## Workflow
 
 ### 1. Confirm with the user
 
-Ask a plain, direct confirmation before proceeding (e.g. "This will remove
-your locally stored Paradigm Networks login for this workspace — you'll
-need to log in again afterward to use Paradigm Networks-gated prompts and
-writes. Proceed?"). Only continue on a clear yes.
+Ask a plain, direct confirmation before proceeding (e.g. "This will sign
+you out of Paradigm Networks: it revokes this login on the server and
+removes it from this machine — you'll need to log in again afterward to use
+Paradigm Networks-gated prompts and writes. Proceed?"). Only continue on a
+clear yes.
 
 ### 2. Locate the logout script
 
@@ -110,9 +112,13 @@ scanned like any other tool call.
 
 Relay what the script printed verbatim — don't paraphrase or summarize it.
 It always exits `0` (there's nothing that can meaningfully fail here
-short of a filesystem error), and covers three cases on its own:
+short of a filesystem error), and covers these cases on its own:
 
-- Credentials removed — logout succeeded.
+- Credentials removed — logged out on this machine. A second line reports
+  the server side: either the login was revoked there, or it couldn't be
+  (server unreachable, revoke not supported yet, or no usable credentials),
+  in which case the old login stays valid on the server until it expires.
+  Don't retry the logout to "fix" that; just make sure the user saw it.
 - No credentials file found — the workspace wasn't logged in to begin with.
 - Removed, but `PARADIGM_NETWORKS_URL`/`PARADIGM_NETWORKS_TOKEN` are still
   set in the environment — those env vars take precedence over the file
