@@ -4,6 +4,77 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-27 — Windows login check always said "not logged in" (PN-14659)
+
+On Windows, `check-configured.ps1` printed `NOT_CONFIGURED` for every
+logged-in user. It loaded `pn_config.ps1` but not `lib\common.ps1`, and
+`Get-PnCredentials` needs `Get-Utf8FileText`/`Get-JsonProperty` from it; the
+resulting "not recognized" error was swallowed by `Get-PnCredentials`' own
+try/catch and reported as "no login". Seen as: `/paradigmnetworks-logout` in
+a new Agent session says the workspace isn't logged in and skips logout
+(the agent runs the check first); the same check also misled the
+first-message login rule and the login skill's "already logged in" step.
+macOS/Linux were unaffected.
+
+`check-configured.ps1` now loads `lib\common.ps1` first; `logout.ps1` does
+too (it worked, but only because it happened not to call those functions).
+New Pester tests: `check-configured.ps1` reports `CONFIGURED`/`NOT_CONFIGURED`
+correctly, and every script that loads `pn_config.ps1` loads `common.ps1`
+before it. 441/441 passing.
+## 2026-10-27 — Allowlist git remote URLs and branch names (PN-14673, security)
+
+Fixes a prompt injection reported in independent validation (PN-12293). The
+`alwaysApply` repo-context rule embeds each workspace repo's
+`remote.origin.url` and branch name in `<GIT>url|branch</GIT>`, and Cursor
+adds that rule to every request's system prompt. `sanitize_git_value` /
+`ConvertTo-SanitizedGitValue` only stripped credentials and control
+characters, so a value with spaces and `<` `>` could close the tag and append
+instructions for an agent that has shell access. Reproduced two ways: a remote
+URL set in a repo's own `.git/config` (e.g. a repo shipped as a zip), and a
+default branch name chosen by the repo owner, which works with a plain
+`git clone`.
+
+Remote URLs and branch names are now checked against an allowlist after the
+existing cleanup (`is_valid_git_remote_url` / `is_valid_git_branch` in bash,
+`Test-GitRemoteUrl` / `Test-GitBranchName` in PowerShell). A value that doesn't
+match becomes `unrecognized remote` / `unrecognized branch` in the rule and an
+empty string in API payloads, never a "cleaned" version of the input.
+Accepted URL forms: `scheme://...` (https, http, ssh, git, file), scp-style
+`user@host:path`, and absolute local paths; excluded are whitespace,
+`< > " ' \` |` and backslash. A Windows local-path remote (`C:\...`) now shows
+as `unrecognized remote`.
+
+Tests: new bash cases in `test/test-unit.sh` (both payloads, normal URLs and
+branches, credential stripping, and the generated rule) and new Pester tests
+in `test/pester/GitUtils.Tests.ps1` (not run locally: no PowerShell on the dev
+machine).
+
+Follow-up, separate repo: control-server's `GitContext.go` should apply the
+same grammar when it reads the `<GIT>` tag.
+
+## 2026-10-27 — Logout revokes the login on the server (PN-14676, security)
+
+Reported in independent validation (PN-12293): logging out only deleted
+`~/.pn/credentials.json`, so a copied refresh token kept minting new tokens
+afterwards. `logout.sh` / `logout.ps1` now first call
+`POST <base_url>/api/v1/plugin/revoke` with the stored refresh token (RFC 7009
+form fields: `token`, `token_type_hint=refresh_token`, `client_id`), with a
+10-second timeout, and then always remove the local file.
+
+The second output line reports the server side: revoked (2xx), not supported
+yet (404/405/501), unreachable, another HTTP status, or skipped because the
+credentials file is unreadable or `jq` is missing. Logout never fails because
+of the server. The logout skill and README describe the new behavior, and the
+skill no longer tells the agent there is nothing to revoke on the server.
+
+Depends on control-server adding the revoke endpoint (PN-14675). Until then,
+logout reports that the server doesn't support revoking yet.
+
+Tests: new `logout.sh` cases in `test/test-hooks.sh` (fake `curl` on `PATH`:
+2xx, 404, unreachable, 500, corrupted file, not logged in, request URL and
+encoding). `logout.ps1` has no automated test for the revoke step; check it
+manually on Windows.
+
 ## 2026-10-26 — Plugin identifier renamed to `paradigm-networks` (PN-12427)
 
 The plugin's `name` in `plugin.json` and the marketplace entry changed from

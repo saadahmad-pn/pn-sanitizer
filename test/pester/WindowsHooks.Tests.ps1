@@ -233,3 +233,42 @@ Describe "check-prompt.ps1 while logged out" {
     $r.user_message | Should -Match "not configured"
   }
 }
+
+# PN-14659: check-configured.ps1 never loaded lib\common.ps1, so reading the
+# credentials file failed (Get-Utf8FileText not found) inside a try/catch and
+# was reported as "no login" -- NOT_CONFIGURED for every logged-in user.
+Describe "check-configured.ps1" {
+  AfterEach { Set-LoggedOut }
+
+  It "says CONFIGURED when a login is saved" {
+    Set-LoggedIn "https://acme.paradigmnetworks.ai"
+    Invoke-Hook -Name "check-configured" -Payload "" | Should -Be "CONFIGURED"
+  }
+
+  It "says NOT_CONFIGURED when no login is saved" {
+    Set-LoggedOut
+    Invoke-Hook -Name "check-configured" -Payload "" | Should -Be "NOT_CONFIGURED"
+  }
+
+  It "says CONFIGURED from the PARADIGM_NETWORKS_URL/TOKEN pair alone" {
+    Set-LoggedOut
+    Invoke-Hook -Name "check-configured" -Payload "" -ExtraEnv @{ PARADIGM_NETWORKS_URL = "https://acme.paradigmnetworks.ai"; PARADIGM_NETWORKS_TOKEN = "tok" } | Should -Be "CONFIGURED"
+  }
+}
+
+# Guard against the PN-14659 class of bug in any script: pn_config.ps1 relies
+# on functions from lib\common.ps1 but does not load it itself, so every
+# script that loads pn_config.ps1 must load common.ps1 first.
+Describe "Scripts that load pn_config.ps1" {
+  It "<Name> loads lib\common.ps1 before pn_config.ps1" -ForEach @(
+    Get-ChildItem -Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "scripts") -Filter *.ps1 |
+      Where-Object { (Get-Content -Raw $_.FullName) -match '\.\s*\(Join-Path \$ScriptDir "pn_config\.ps1"\)' } |
+      ForEach-Object { @{ Name = $_.Name; Path = $_.FullName } }
+  ) {
+    $text = Get-Content -Raw $Path
+    $commonAt = $text.IndexOf('. (Join-Path $ScriptDir "lib\common.ps1")')
+    $configAt = $text.IndexOf('. (Join-Path $ScriptDir "pn_config.ps1")')
+    $commonAt | Should -BeGreaterOrEqual 0 -Because "pn_config.ps1 calls functions defined in lib\common.ps1"
+    $commonAt | Should -BeLessThan $configAt
+  }
+}

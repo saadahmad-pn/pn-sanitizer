@@ -12,6 +12,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# common.ps1 must be loaded before pn_config.ps1: Get-PnCredentials calls
+# Get-Utf8FileText/Get-JsonProperty from it. Without it, reading the
+# credentials file fails inside Get-PnCredentials' try/catch and is reported
+# as "no login", so this printed NOT_CONFIGURED for every logged-in user
+# (PN-14659).
+. (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 # Writes directly to the console's stdout stream rather than PowerShell's
