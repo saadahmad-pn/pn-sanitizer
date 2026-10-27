@@ -64,8 +64,11 @@ organization's Paradigm Networks URL. Confirm, and your browser opens to sign
 you in. Nothing to copy or paste. Cursor remembers the login on this machine.
 
 To switch organizations, ask the agent to log in again. It replaces the old
-login. To remove your login from this machine, ask the agent to log out (the
-**paradigmnetworks-logout** skill handles it).
+login. To sign out, ask the agent to log out (the **paradigmnetworks-logout**
+skill handles it). Logging out revokes the login on your Paradigm Networks
+server and removes it from this machine. If the server can't be reached, the
+login is still removed locally, and the agent tells you it couldn't be revoked
+on the server.
 
 ## What's in the plugin
 
@@ -73,7 +76,7 @@ login. To remove your login from this machine, ask the agent to log out (the
 | --- | --- |
 | `hooks/hooks.json` | Hooks for session start/end, prompt submit, tool calls and agent responses. These do the checking and recording. |
 | `skills/paradigmnetworks-login` | Logs this machine in to your Paradigm Networks deployment. |
-| `skills/paradigmnetworks-logout` | Removes the stored login from this machine. |
+| `skills/paradigmnetworks-logout` | Revokes the login on the server and removes it from this machine. |
 | `rules/pn-login-check.mdc` | Makes the agent confirm you're logged in on the first message of a session. |
 | `scripts/` | The scripts the hooks run (Bash for macOS/Linux, PowerShell for Windows). |
 

@@ -4,6 +4,29 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-27 — Logout revokes the login on the server (PN-14676, security)
+
+Reported in independent validation (PN-12293): logging out only deleted
+`~/.pn/credentials.json`, so a copied refresh token kept minting new tokens
+afterwards. `logout.sh` / `logout.ps1` now first call
+`POST <base_url>/api/v1/plugin/revoke` with the stored refresh token (RFC 7009
+form fields: `token`, `token_type_hint=refresh_token`, `client_id`), with a
+10-second timeout, and then always remove the local file.
+
+The second output line reports the server side: revoked (2xx), not supported
+yet (404/405/501), unreachable, another HTTP status, or skipped because the
+credentials file is unreadable or `jq` is missing. Logout never fails because
+of the server. The logout skill and README describe the new behavior, and the
+skill no longer tells the agent there is nothing to revoke on the server.
+
+Depends on control-server adding the revoke endpoint (PN-14675). Until then,
+logout reports that the server doesn't support revoking yet.
+
+Tests: new `logout.sh` cases in `test/test-hooks.sh` (fake `curl` on `PATH`:
+2xx, 404, unreachable, 500, corrupted file, not logged in, request URL and
+encoding). `logout.ps1` has no automated test for the revoke step; check it
+manually on Windows.
+
 ## 2026-10-26 — Plugin identifier renamed to `paradigm-networks` (PN-12427)
 
 The plugin's `name` in `plugin.json` and the marketplace entry changed from
