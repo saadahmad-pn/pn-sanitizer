@@ -10,6 +10,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# common.ps1 before pn_config.ps1, which depends on it -- see
+# check-configured.ps1 (PN-14659).
 # common.ps1 for Invoke-HttpPostRaw (same load order as login.ps1).
 . (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")

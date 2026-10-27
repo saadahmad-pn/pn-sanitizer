@@ -4,6 +4,23 @@ All notable changes to Paradigm Networks (formerly pn-sanitizer) are recorded
 here. This project hasn't had a public release yet — entries below are dated
 by when the work happened, not by version tag.
 
+## 2026-10-27 — Windows login check always said "not logged in" (PN-14659)
+
+On Windows, `check-configured.ps1` printed `NOT_CONFIGURED` for every
+logged-in user. It loaded `pn_config.ps1` but not `lib\common.ps1`, and
+`Get-PnCredentials` needs `Get-Utf8FileText`/`Get-JsonProperty` from it; the
+resulting "not recognized" error was swallowed by `Get-PnCredentials`' own
+try/catch and reported as "no login". Seen as: `/paradigmnetworks-logout` in
+a new Agent session says the workspace isn't logged in and skips logout
+(the agent runs the check first); the same check also misled the
+first-message login rule and the login skill's "already logged in" step.
+macOS/Linux were unaffected.
+
+`check-configured.ps1` now loads `lib\common.ps1` first; `logout.ps1` does
+too (it worked, but only because it happened not to call those functions).
+New Pester tests: `check-configured.ps1` reports `CONFIGURED`/`NOT_CONFIGURED`
+correctly, and every script that loads `pn_config.ps1` loads `common.ps1`
+before it. 441/441 passing.
 ## 2026-10-27 — Allowlist git remote URLs and branch names (PN-14673, security)
 
 Fixes a prompt injection reported in independent validation (PN-12293). The
