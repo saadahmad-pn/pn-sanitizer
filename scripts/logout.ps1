@@ -9,6 +9,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# common.ps1 before pn_config.ps1, which depends on it -- see
+# check-configured.ps1 (PN-14659).
+. (Join-Path $ScriptDir "lib\common.ps1")
 . (Join-Path $ScriptDir "pn_config.ps1")
 
 # Writes directly to the console's stdout stream rather than PowerShell's
